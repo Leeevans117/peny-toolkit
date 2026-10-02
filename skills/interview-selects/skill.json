@@ -1,7 +1,7 @@
 {
   "id": "interview-selects",
   "name": "Interviews",
-  "description": "Transcribes the active interview sequence on this Mac (whisper), finds each answer with the local AI model (Ollama, no internet) and adds one marker per answer to a safe copy: the marker name is the topic, the comment a short outline, and it spans the answer. Takes about 15 minutes for an hour of interview.",
+  "description": "Transcribes the active interview sequence on this Mac (whisper), finds each answer with the local AI model (Ollama, no internet) and adds one marker per answer to a safe copy: the marker name is the topic, the comment a short outline, and it spans the answer. Takes about 15 minutes for an hour of interview. Then Cut & raise answers cuts the clips at each answer marker and moves the answers up one track, on the copy only.",
   "order": 6,
   "icon": "icon.svg",
   "tint": [
@@ -28,6 +28,12 @@
       "label": "Find answers and add markers",
       "style": "primary",
       "confirm": "Transcribe this sequence and find the answers on this Mac? It takes about 15 minutes for an hour of interview. A safe copy of the sequence is made and the markers go on the copy; the original is not changed."
+    },
+    {
+      "id": "cutraise",
+      "label": "Cut & raise answers",
+      "style": "secondary",
+      "confirm": "Cut the clips at the start and end of every answer marker on this TOOLKIT COPY and move each answer up one track? Cuts keep video and audio linked. Only a TOOLKIT COPY is changed; nothing is deleted or saved."
     },
     {
       "id": "cancel",

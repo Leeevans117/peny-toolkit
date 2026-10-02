@@ -15,6 +15,8 @@
     if (action === "scan") return scan(seq, params);
     if (action === "copy") return copy(seq);
     if (action === "mark") return mark(seq, params);
+    if (action === "probe") return probe(seq, params);
+    if (action === "cutraise") return T.fail("Cut & raise is not written yet.");
     return T.fail("Unknown action: " + action);
   };
 
@@ -94,6 +96,38 @@
     if (!r.details.copyIsActive) return T.fail("The copy \"" + r.details.copyName + "\" was made but is not the active sequence, so no markers were added. Open it and run again.", r.details);
     r.details.made = true;
     return r;
+  }
+
+  // Read-only look at what Premiere 26.5.2 offers for moving a timeline piece to another
+  // track: method names (and argument lists where ExtendScript reflection has them) of a
+  // DOM TrackItem, a QE track item and a QE track. Changes nothing.
+  function probe(seq, params) {
+    function methods(o) {
+      var out = [];
+      try {
+        var ms = o.reflect.methods;
+        for (var i = 0; i < ms.length; i++) {
+          var args = [];
+          try { for (var j = 0; j < ms[i].arguments.length; j++) args.push(String(ms[i].arguments[j].name) + ":" + String(ms[i].arguments[j].dataType)); } catch (eA) {}
+          out.push(String(ms[i].name) + "(" + args.join(",") + ")");
+        }
+      } catch (e) { out.push("reflect failed: " + e); }
+      return out;
+    }
+    var d = { sequence: String(seq.name) };
+    var it = seq.videoTracks[0].clips.numItems ? seq.videoTracks[0].clips[0] : null;
+    if (it) d.domTrackItem = methods(it);
+    d.domTrack = methods(seq.videoTracks[0]);
+    app.enableQE();
+    var q = qe.project.getActiveSequence();
+    d.qeSequence = methods(q);
+    var qt = q.getVideoTrackAt(0);
+    d.qeTrack = methods(qt);
+    for (var k = 0; k < qt.numItems; k++) {
+      var qi = qt.getItemAt(k);
+      if (qi && String(qi.type) === "Clip") { d.qeItem = methods(qi); break; }
+    }
+    return T.ok("Probe done.", d);
   }
 
   function markerList(seq) {

@@ -235,5 +235,15 @@ module.exports = function (api) {
     return Promise.resolve({ ok: true, summary: "Cancel requested; the run stops after the current step." });
   }
 
-  return { actions: { find: find, cancel: cancel } };
+  // Cut & raise: all in Premiere (premiere.jsx "cutraise"). params.jsxAction lets the test
+  // hook call another premiere.jsx action (e.g. "probe") without reopening the panel.
+  function cutraise(params) {
+    var p = {};
+    for (var k in params) if (params.hasOwnProperty(k)) p[k] = params[k];
+    p.action = params.jsxAction || "cutraise";
+    api.status(p.action === "cutraise" ? "Cutting and raising the answers…" : "Running " + p.action + "…");
+    return api.evalSkill(p).then(function (r) { api.status(r.ok ? r.summary : r.error); return r; });
+  }
+
+  return { actions: { find: find, cutraise: cutraise, cancel: cancel } };
 };
