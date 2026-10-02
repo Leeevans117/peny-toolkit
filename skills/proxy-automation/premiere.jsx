@@ -35,6 +35,22 @@
   P.hasProxy = hasProxy;
   P.proxyPath = proxyPath;
 
+  // Finds a project item by nodeId: from the last listing if cached, else by walking the project.
+  function itemById(id) {
+    id = String(id);
+    if (P.items[id]) return P.items[id];
+    var stack = [app.project.rootItem];
+    while (stack.length) {
+      var bin = stack.pop();
+      for (var c = 0; c < bin.children.numItems; c++) {
+        var ch = bin.children[c];
+        if (String(ch.nodeId) === id) { P.items[id] = ch; return ch; }
+        if (ch.type == ProjectItemType.BIN) stack.push(ch);
+      }
+    }
+    return null;
+  }
+
   function findBin(path) {
     var parts = String(path).split("/"), bin = app.project.rootItem;
     for (var i = 0; i < parts.length; i++) {
@@ -104,8 +120,8 @@
   function attach(params) {
     var pairs = params.pairs || [], ok = [], failed = [];
     for (var i = 0; i < pairs.length; i++) {
-      var p = pairs[i], it = P.items[String(p.nodeId)];
-      if (!it) { failed.push({ nodeId: p.nodeId, reason: "item not in the last scope listing" }); continue; }
+      var p = pairs[i], it = itemById(p.nodeId);
+      if (!it) { failed.push({ nodeId: p.nodeId, reason: "item not found in the project" }); continue; }
       if (!new File(p.path).exists) { failed.push({ nodeId: p.nodeId, name: String(it.name), reason: "proxy file not found: " + p.path }); continue; }
       var ret = null;
       try { ret = it.attachProxy(p.path, 0); } catch (e) { ret = "error: " + e; }
@@ -123,8 +139,8 @@
   function detach(params) {
     var ids = params.nodeIds || [], ok = [], already = [], failed = [];
     for (var i = 0; i < ids.length; i++) {
-      var it = P.items[String(ids[i])];
-      if (!it) { failed.push({ nodeId: ids[i], reason: "item not in the last scope listing" }); continue; }
+      var it = itemById(ids[i]);
+      if (!it) { failed.push({ nodeId: ids[i], reason: "item not found in the project" }); continue; }
       if (!hasProxy(it)) { already.push({ nodeId: ids[i], name: String(it.name) }); continue; }
       var was = proxyPath(it);
       try { it.detachProxy(); } catch (e) {}

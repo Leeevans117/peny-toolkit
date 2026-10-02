@@ -92,4 +92,4 @@ code as the button and writes `/tmp/peny-toolkit/result.json` and `result-<id>.j
 |---|---|---|
 | Make safe copy | Duplicates the active sequence as "<name> TOOLKIT COPY", checks the original is unchanged, opens the copy | Tested 2 Oct 2026 (TEST project) |
 | Link external audio | Links each camera clip to its camera audio and the external wav under it; verifies each link; refuses non-copies | Tested 2 Oct 2026 on 3 groups (TEST project) |
-| Proxies | Renders ProRes Proxy files (ffmpeg / REDline) into a folder tree mirroring the bins, attaches/detaches them; Pause/Resume/Cancel | Port of Proxy Automation; see git log for test status |
+| Proxies | Renders ProRes Proxy files (ffmpeg / REDline) into a folder tree mirroring the bins, attaches/detaches them; Pause/Resume/Cancel. Never deletes or overwrites a proxy; R3D wins a name clash; same media in two bins renders once | Port of Proxy Automation. Tested 2 Oct 2026 on a 2-clip scratch bin (Canon + R3D) in the TEST project: render, attach, detach, pause/resume, cancel. Not yet tested at scale |

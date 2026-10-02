@@ -3,7 +3,11 @@
 // MCP bridge), so everything lives under the single global PenyToolkit and no
 // global such as JSON is touched.
 
-var PenyToolkit = (typeof PenyToolkit !== "undefined" && PenyToolkit) ? PenyToolkit : {};
+// The panel loads this file with $.evalFile inside a function, which scopes a plain
+// var to that call; pin the object to $.global so state (e.g. the proxy item cache)
+// survives from one call to the next.
+$.global.PenyToolkit = $.global.PenyToolkit || {};
+var PenyToolkit = $.global.PenyToolkit;
 
 (function (T) {
   T.TICKS_PER_SECOND = 254016000000;
