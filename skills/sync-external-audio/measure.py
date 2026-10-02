@@ -4,17 +4,22 @@
 Method from the saved skill "premiere-sync-external-audio-by-waveform" (La Thuile,
 5 wavs, 120 Canon clips): GCC-PHAT cross-correlation of the camera's scratch audio
 against the recorder wavs.
-  1. Coarse: the clip's first <=60 s (2 kHz, camera stream a:0) against every wav in
+  Every camera audio channel is tried on its own (Lee, 2 Oct 2026: the Canon has two
+  inputs, so a clip one channel cannot place may sync on the other). Channels that are
+  exact copies of another (Canon a:1 = a:0, a:3 = a:2) are dropped, so two "agreeing"
+  channels are always two different signals.
+  1. Coarse: the clip's first <=120 s (2 kHz, each channel) against every wav in
      overlapping 10-minute windows (FFTs made once, reused for every clip). Against a
      whole 1 h wav at once the true peak drowned (tested 2 Oct 2026: ratio 1.0 whole,
      27 in a 300 s window). Best peak/second-peak ratio wins.
-  2. Fine: 8 kHz, a +-3 s window of that wav, camera streams a:0 and a:2.
-     Accepted only if a:0 and a:2 agree within 50 ms (ratio >= 2), or a:0 agrees with
-     the coarse lag within 50 ms with ratio >= 3. A weak peak is never accepted.
+  2. Fine: 8 kHz, a +-3 s window of that wav around the best coarse hit (then the next
+     best channel's hit if that fails), every channel. Accepted only if two different
+     channels agree within 50 ms (ratios >= 2), or a channel agrees with its coarse lag
+     within 50 ms with ratio >= 3. A weak peak is never accepted.
   3. Clips that are too short or fail: if another clip in the same recording was synced,
      the camera filename clock (HHMMSS) predicts the lag to about +-1.3 s; a narrow
-     search there is accepted only on a strict rule: a:0 and a:2 agree with ratio >= 4, or
-     a:0 alone with ratio >= 8 inside that +-3 s window (Lee's 2.9 s D072 clip: a:0 ratio
+     search there is accepted only on a strict rule: two channels agree with ratio >= 4, or
+     one channel alone with ratio >= 8 inside that +-3 s window (Lee's 2.9 s D072 clip: a:0 ratio
      24 at 217.912 s vs 217.891 s placed by hand; a:2 was noise).
 Input: JSON on stdin {ffmpeg, cacheDir, clips:[{id, path, inPoint, duration, name}],
 wavs:[{path, duration}]}. Output: JSON on stdout {results:[...]}. Progress lines on stderr.
@@ -72,14 +77,27 @@ def peak_ratio(lags_idx_vals, sr):
     return lag, float(peak / second) if second > 0 else 99.0
 
 
-def fine(ffmpeg, wav, clip, approx, sr=FINE_SR, pad=FINE_PAD):
-    """Fine lag (seconds into the wav for the clip's in-point) for streams a:0 and a:2."""
+def channels(ffmpeg, clip, length):
+    """Camera audio channels as {stream index: 2 kHz signal}, exact copies dropped."""
+    out = {}
+    for s in range(8):
+        c = decode(ffmpeg, clip["path"], COARSE_SR, clip["inPoint"], length, s)
+        if c is None: break
+        if len(c) < MIN_SECONDS * COARSE_SR or np.abs(c).max() == 0: continue
+        cn = c / (np.linalg.norm(c) or 1)
+        if any(abs(float(np.dot(cn, o[1]))) > 0.999 for o in out.values() if len(o[1]) == len(cn)): continue
+        out[s] = (c, cn)
+    return {k: v[0] for k, v in out.items()}
+
+
+def fine(ffmpeg, wav, clip, approx, streams, sr=FINE_SR, pad=FINE_PAD):
+    """Fine lag (seconds into the wav for the clip's in-point) for each channel."""
     length = min(clip["duration"], CLIP_SECONDS)
     w0 = max(0.0, approx - pad)
     wseg = decode(ffmpeg, wav["path"], sr, w0, length + 2 * pad)
     out = {}
     if wseg is None or len(wseg) < sr: return out
-    for s in (0, 2):
+    for s in streams:
         c = decode(ffmpeg, clip["path"], sr, clip["inPoint"], length, s)
         if c is None or len(c) < MIN_SECONDS * sr or np.abs(c).max() == 0: continue
         n = 1 << int(np.ceil(np.log2(len(wseg) + len(c))))
@@ -96,13 +114,18 @@ def clock(name):
 
 
 def accept(f, coarse=None, strict=False):
-    a0, a2 = f.get(0), f.get(2)
-    if a0 and a2 and abs(a0[0] - a2[0]) <= AGREE and min(a0[1], a2[1]) >= (4 if strict else 2):
-        return a0[0], "a:0 and a:2 agree (%.0f ms apart, ratios %.1f/%.1f)" % (abs(a0[0] - a2[0]) * 1000, a0[1], a2[1])
-    if not strict and a0 and coarse is not None and abs(a0[0] - coarse) <= AGREE and a0[1] >= 3:
-        return a0[0], "coarse and fine agree on a:0 (ratio %.1f)" % a0[1]
-    if strict and a0 and a0[1] >= 8:
-        return a0[0], "a:0 strong peak near the camera-clock estimate (ratio %.1f)" % a0[1]
+    """f: {channel: (seconds, ratio)}; coarse: {channel: seconds}."""
+    ks = sorted(f, key=lambda k: -f[k][1])
+    for i in range(len(ks)):
+        for j in range(i + 1, len(ks)):
+            a, b = f[ks[i]], f[ks[j]]
+            if abs(a[0] - b[0]) <= AGREE and min(a[1], b[1]) >= (4 if strict else 2):
+                return a[0], "a:%d and a:%d agree (%.0f ms apart, ratios %.1f/%.1f)" % (ks[i], ks[j], abs(a[0] - b[0]) * 1000, a[1], b[1])
+    for k in ks:
+        if not strict and coarse and k in coarse and abs(f[k][0] - coarse[k]) <= AGREE and f[k][1] >= 3:
+            return f[k][0], "coarse and fine agree on a:%d (ratio %.1f)" % (k, f[k][1])
+        if strict and f[k][1] >= 8:
+            return f[k][0], "a:%d strong peak near the camera-clock estimate (ratio %.1f)" % (k, f[k][1])
     return None, "no confident match (" + ", ".join("a:%d %.3f s ratio %.1f" % (k, v[0], v[1]) for k, v in sorted(f.items())) + ")"
 
 
@@ -138,22 +161,31 @@ def main():
         results.append(r)
         length = min(clip["duration"], CLIP_SECONDS)
         if length < MIN_SECONDS: r["reason"] = "clip too short to measure"; continue
-        c = decode(ffmpeg, clip["path"], COARSE_SR, clip["inPoint"], length, 0)
-        if c is None or len(c) < MIN_SECONDS * COARSE_SR or np.abs(c).max() == 0:
-            r["reason"] = "no camera audio to measure"; continue
-        best = None
-        for wi, w0, spec, n, wl in specs:
-            lag, ratio = peak_ratio(gcc_peak(spec, n, c, -len(c) + 1, wl), COARSE_SR)
-            if lag is not None and (best is None or ratio > best[2]): best = (wi, w0 + lag / COARSE_SR, ratio)
-        if best is None: r["reason"] = "no match in any wav"; continue
-        wi, coarse, cratio = best
-        r["coarse"] = {"wav": os.path.basename(wavs[wi]["path"]), "seconds": round(coarse, 4), "ratio": round(cratio, 2)}
-        f = fine(ffmpeg, wavs[wi], clip, coarse)
-        t, why = accept(f, coarse)
-        r["why"] = why
-        if t is not None:
-            r.update(synced=True, wav=wavs[wi]["path"], wavTime=round(t, 4), recording=wavs[wi]["recording"],
-                     recTime=wavs[wi]["recStart"] + t)
+        chans = channels(ffmpeg, clip, length)
+        clip["streams"] = sorted(chans)
+        if not chans: r["reason"] = "no camera audio to measure"; continue
+        hits = []  # best coarse hit per channel: (ratio, channel, wav index, seconds)
+        for ch, c in chans.items():
+            best = None
+            for wi, w0, spec, n, wl in specs:
+                lag, ratio = peak_ratio(gcc_peak(spec, n, c, -len(c) + 1, wl), COARSE_SR)
+                if lag is not None and (best is None or ratio > best[0]): best = (ratio, ch, wi, w0 + lag / COARSE_SR)
+            if best: hits.append(best)
+        if not hits: r["reason"] = "no match in any wav"; continue
+        hits.sort(reverse=True)
+        r["coarse"] = [{"channel": h[1], "wav": os.path.basename(wavs[h[2]]["path"]), "seconds": round(h[3], 4), "ratio": round(h[0], 2)} for h in hits]
+        tried = []
+        for ratio, ch, wi, sec in hits:
+            if any(wj == wi and abs(sj - sec) < FINE_PAD for wj, sj in tried): continue
+            tried.append((wi, sec))
+            f = fine(ffmpeg, wavs[wi], clip, sec, clip["streams"])
+            coarse = {h[1]: h[3] for h in hits if h[2] == wi}
+            t, why = accept(f, coarse)
+            r["why"] = why
+            if t is not None:
+                r.update(synced=True, wav=wavs[wi]["path"], wavTime=round(t, 4), recording=wavs[wi]["recording"],
+                         recTime=wavs[wi]["recStart"] + t)
+                break
     # Second pass: predict failed clips from a synced clip's camera clock.
     anchors = [(r, c) for r, c in zip(results, job["clips"]) if r["synced"] and clock(c["name"]) is not None]
     for r, clip in zip(results, job["clips"]):
@@ -163,7 +195,8 @@ def main():
         cands = [w for w in wavs if w["recording"] == ar["recording"] and w["recStart"] <= rt < w["recStart"] + w["duration"]]
         if not cands: continue
         w = cands[0]
-        f = fine(ffmpeg, w, clip, rt - w["recStart"], pad=FINE_PAD)
+        streams = clip.get("streams") or sorted(channels(ffmpeg, clip, min(clip["duration"], CLIP_SECONDS)))
+        f = fine(ffmpeg, w, clip, rt - w["recStart"], streams, pad=FINE_PAD)
         t, why = accept(f, strict=True)
         r["why"] = "camera clock from " + ac["name"] + "; " + why
         if t is not None:
