@@ -184,7 +184,11 @@ module.exports = function (api) {
       answers = r.answers; stats = r.stats;
       if (!answers.length) throw { stop: "The model found no answers. Transcript: " + path.join(dir, "transcript.srt") };
       api.status("Grouping the " + answers.length + " answers by question…");
-      return pipeline.group(pipeline.readTranscript(path.join(dir, "transcript.json")), answers, { who: (params.name || "").trim() }).then(function (g) {
+      var g0 = Date.now();
+      return pipeline.group(pipeline.readTranscript(path.join(dir, "transcript.json")), answers, { who: (params.name || "").trim() }, function (i, n) {
+        if (cancelled) throw { stop: "Cancelled." };
+        api.status("Finding the interviewer's questions: part " + (i + 1) + " of " + n + " (" + Math.round((Date.now() - g0) / 1000) + " s so far)…");
+      }).then(function (g) {
         questions = g.questions; stats.groupTokens = g.tokens;
         r.questions = questions;
         fs.writeFileSync(path.join(dir, "answers.json"), JSON.stringify(r, null, 1));
@@ -229,7 +233,9 @@ module.exports = function (api) {
       api.status("Grouping the answers by question…");
       grouped = startOllama(ollama).then(function (child) {
         server = child;
-        return pipeline.group(pipeline.readTranscript(path.join(path.dirname(file), "transcript.json")), answers, { who: (params.name || "").trim() });
+        return pipeline.group(pipeline.readTranscript(path.join(path.dirname(file), "transcript.json")), answers, { who: (params.name || "").trim() }, function (i, n) {
+          api.status("Finding the interviewer's questions: part " + (i + 1) + " of " + n + "…");
+        });
       }).then(function (g) {
         questions = g.questions; saved.questions = questions;
         fs.writeFileSync(file, JSON.stringify(saved, null, 1));
