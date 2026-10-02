@@ -6,11 +6,12 @@
   <style>
     /* Dark "Liquid Glass" look: navy/slate backdrop, frosted translucent cards, pill buttons. */
     :root {
-      --bg-top: #1f2840; --bg-mid: #1c2333; --bg-bottom: #121722;
-      --glass: rgba(255, 255, 255, 0.07); --glass-strong: rgba(255, 255, 255, 0.11);
-      --glass-line: rgba(255, 255, 255, 0.14);
-      --text: #f2f4f8; --dim: rgba(235, 240, 250, 0.58); --faint: rgba(235, 240, 250, 0.36);
-      --blue: #0a60ff; --blue-hi: #3d82ff; --red: #ff453a; --green: #30d158; --orange: #ff9f0a;
+      /* Black and white, like the Peny logo. Red is kept only for Cancel/Detach. */
+      --bg-mid: #000;
+      --glass: rgba(255, 255, 255, 0.06); --glass-strong: rgba(255, 255, 255, 0.12);
+      --glass-line: rgba(255, 255, 255, 0.18);
+      --text: #ffffff; --dim: rgba(255, 255, 255, 0.66); --faint: rgba(255, 255, 255, 0.42);
+      --blue: #ffffff; --blue-hi: #ffffff; --red: #ff453a; --green: #ffffff; --orange: #ff9f0a;
       --radius: 24px;
       --shadow: 0 10px 30px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08);
     }
@@ -18,13 +19,11 @@
     html, body { height: 100%; }
     body {
       margin: 0; color: var(--text); overflow: hidden;
-      background: radial-gradient(120% 60% at 15% 0%, rgba(80, 110, 200, 0.28), transparent 60%),
-                  radial-gradient(90% 50% at 100% 100%, rgba(120, 70, 190, 0.18), transparent 60%),
-                  linear-gradient(180deg, var(--bg-top) 0%, var(--bg-mid) 45%, var(--bg-bottom) 100%);
-      background-color: var(--bg-mid);
+      /* Mostly black, fading to white at the bottom. */
+      background: linear-gradient(180deg, #000 0%, #000 58%, #161616 74%, #5a5a5a 90%, #bdbdbd 100%);
+      background-color: #000; background-attachment: fixed;
       /* Rounded type to match the Peny logo (SF Pro Rounded is in /Library/Fonts on this Mac). */
-      font: 13px/1.4 "SF Pro Rounded", "Avenir Next", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
-      -webkit-font-smoothing: antialiased;
+      font: 13.5px/1.4 "SF Pro Rounded", "Avenir Next", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
     }
     .view { position: absolute; top: 0; right: 0; bottom: 0; left: 0; overflow-y: auto; padding: 14px 14px 16px; }
     .hidden { display: none !important; }
@@ -38,20 +37,20 @@
     /* Home */
     .home-head { padding: 6px 4px 14px; }
     .home-head h1 { margin: 0; display: flex; align-items: center; gap: 10px; font-size: 28px; font-weight: 700; letter-spacing: -0.01em; }
-    .home-head h1 img { height: 44px; width: auto; display: block; }
+    .home-head h1 img { display: block; }
     #status { color: var(--dim); font-size: 12px; margin-top: 2px; }
     #tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); gap: 16px 10px; padding: 18px 10px; }
     .tile { display: flex; flex-direction: column; align-items: center; gap: 7px; background: none; border: 0; padding: 0;
             color: var(--text); cursor: pointer; font: inherit; position: relative; }
     .tile .icon { width: 62px; height: 62px; border-radius: 16px; display: flex; align-items: center; justify-content: center;
-                  box-shadow: 0 6px 16px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.35), inset 0 -1px 0 rgba(0,0,0,0.15);
+                  border: 1px solid rgba(255,255,255,0.22); box-shadow: 0 6px 16px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.12);
                   transition: transform 0.12s ease; }
     .tile:hover .icon { transform: scale(1.05); }
     .tile:active .icon { transform: scale(0.94); }
-    .tile .icon svg { width: 34px; height: 34px; }
-    .tile .name { font-size: 11.5px; text-align: center; line-height: 1.2; max-width: 92px; }
+    .tile .icon svg { width: 44px; height: 44px; }
+    .tile .name { font-size: 12.5px; font-weight: 500; text-align: center; line-height: 1.2; max-width: 92px; }
     .tile .badge { position: absolute; top: -3px; right: calc(50% - 37px); width: 14px; height: 14px; border-radius: 7px;
-                   background: var(--green); border: 2px solid var(--bg-mid); animation: pulse 1.4s ease-in-out infinite; }
+                   background: #fff; border: 2px solid #000; animation: pulse 1.4s ease-in-out infinite; }
     @keyframes pulse { 50% { opacity: 0.45; } }
 
     /* App view */
@@ -62,18 +61,18 @@
     .back:hover { background: var(--glass-strong); }
     .back svg { width: 16px; height: 16px; }
     .nav-icon { width: 28px; height: 28px; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
-    .nav-icon svg { width: 17px; height: 17px; }
+    .nav-icon { border: 1px solid rgba(255,255,255,0.22); } .nav-icon svg { width: 22px; height: 22px; }
     .nav-title { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
 
     .card { padding: 14px 16px; margin-bottom: 12px; }
-    .card p.desc { margin: 0 0 12px; color: var(--dim); font-size: 12px; }
+    .card p.desc { margin: 0 0 12px; color: var(--dim); font-size: 13px; }
     .field { margin-bottom: 12px; }
-    .field > .flabel { display: block; color: var(--dim); font-size: 11px; margin: 0 0 5px 4px; }
+    .field > .flabel { display: block; color: var(--dim); font-size: 12px; margin: 0 0 5px 4px; }
     .row { display: flex; gap: 6px; align-items: center; }
     .row input[type=text] { flex: 1; min-width: 0; }
     input[type=text] { width: 100%; padding: 8px 12px; color: var(--text); font: inherit; font-size: 12px;
             background: rgba(0, 0, 0, 0.22); border: 1px solid var(--glass-line); border-radius: 12px; outline: none; }
-    input[type=text]:focus { border-color: var(--blue-hi); box-shadow: 0 0 0 3px rgba(10, 96, 255, 0.25); }
+    input[type=text]:focus { border-color: #fff; box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.18); }
     input::placeholder { color: var(--faint); }
 
     /* iOS toggle (checkbox inputs) */
@@ -81,62 +80,63 @@
     .toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0;
               border-top: 1px solid rgba(255,255,255,0.07); cursor: pointer; }
     .toggle:first-child { border-top: 0; }
-    .toggle .tlabel { font-size: 12.5px; }
+    .toggle .tlabel { font-size: 13px; }
     .switch { position: relative; flex: 0 0 auto; width: 54px; height: 28px; }
     .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; z-index: 1; }
     .switch .track { position: absolute; top: 0; right: 0; bottom: 0; left: 0; border-radius: 14px; background: rgba(120, 120, 128, 0.36); transition: background 0.2s; }
     .switch .knob { position: absolute; top: 2px; left: 2px; width: 32px; height: 24px; border-radius: 12px; background: #fff;
                     box-shadow: 0 2px 5px rgba(0,0,0,0.3); transition: transform 0.2s; }
-    .switch input:checked ~ .track { background: var(--green); }
+    .switch input:checked ~ .track { background: #fff; }
+    .switch input:checked ~ .knob { background: #000; }
     .switch input:checked ~ .knob { transform: translateX(18px); }
-    .switch input:checked ~ .track { box-shadow: 0 0 12px rgba(48, 209, 88, 0.35); }
+    .switch input:checked ~ .track { box-shadow: 0 0 12px rgba(255, 255, 255, 0.3); }
 
     /* Segmented control */
     .segmented { display: flex; padding: 2px; background: rgba(0, 0, 0, 0.25); border: 1px solid var(--glass-line); border-radius: 12px; }
-    .segmented button { flex: 1; background: none; border: 0; color: var(--dim); font: inherit; font-size: 11.5px; padding: 6px 4px;
+    .segmented button { flex: 1; background: none; border: 0; color: var(--dim); font: inherit; font-size: 12.5px; padding: 6px 4px;
                         border-radius: 10px; cursor: pointer; white-space: nowrap; }
-    .segmented button.on { background: rgba(255, 255, 255, 0.16); color: var(--text); box-shadow: 0 2px 6px rgba(0,0,0,0.25); }
+    .segmented button.on { background: #fff; color: #000; box-shadow: 0 2px 6px rgba(0,0,0,0.25); }
     .segmented + input { margin-top: 6px; }
 
     /* Pill buttons: blue primary, red destructive, grey glass secondary */
     .buttons { display: flex; gap: 8px; flex-wrap: wrap; }
-    .pill { border: 1px solid transparent; border-radius: 999px; padding: 8px 16px; font: inherit; font-size: 12.5px; font-weight: 600;
+    .pill { border: 1px solid transparent; border-radius: 999px; padding: 8px 16px; font: inherit; font-size: 13px; font-weight: 600;
             cursor: pointer; color: #fff; transition: filter 0.12s, transform 0.08s; }
     .pill:active:not(:disabled) { transform: scale(0.97); }
     .pill:hover:not(:disabled) { filter: brightness(1.12); }
-    .pill.primary { background: var(--blue); box-shadow: 0 4px 14px rgba(10, 96, 255, 0.35); }
+    .pill.primary { background: #fff; color: #000; box-shadow: 0 4px 14px rgba(255, 255, 255, 0.18); }
     .pill.danger { background: var(--red); box-shadow: 0 4px 14px rgba(255, 69, 58, 0.28); }
     .pill.secondary { background: var(--glass-strong); border-color: var(--glass-line); }
     .pill.small { padding: 7px 12px; font-size: 12px; }
     .pill:disabled { opacity: 0.38; cursor: default; box-shadow: none; }
-    .controls-label { color: var(--faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; margin: 14px 0 6px 4px; }
-    .status { margin-top: 10px; color: var(--dim); font-size: 11.5px; white-space: pre-wrap; }
+    .controls-label { color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin: 14px 0 6px 4px; }
+    .status { margin-top: 10px; color: var(--dim); font-size: 12.5px; white-space: pre-wrap; }
     .status:empty { display: none; }
 
     /* Overall proxy progress (directly above the log) */
     #progress { padding: 12px 16px; margin-bottom: 10px; border-radius: 20px; }
     #progress .ptop { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }
-    #progress .ptitle { font-size: 12px; font-weight: 600; }
-    #progress .pcount { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+    #progress .ptitle { font-size: 13px; font-weight: 600; }
+    #progress .pcount { font-size: 13px; color: var(--dim); font-variant-numeric: tabular-nums; }
     #progress .pcount b { color: var(--text); font-weight: 600; }
     .bar { height: 8px; border-radius: 4px; background: rgba(0, 0, 0, 0.3); overflow: hidden; }
-    .bar .fill { height: 100%; width: 0; border-radius: 4px; background: linear-gradient(90deg, var(--blue), #5aa0ff);
+    .bar .fill { height: 100%; width: 0; border-radius: 4px; background: linear-gradient(90deg, #9a9a9a, #fff);
                  transition: width 0.35s ease; }
-    #progress.complete .fill { background: linear-gradient(90deg, #22b04b, var(--green)); }
+    #progress.complete .fill { background: #fff; }
     #progress.failed .fill { background: linear-gradient(90deg, var(--orange), var(--red)); }
-    #progress .psub { margin-top: 6px; font-size: 11px; color: var(--faint); }
+    #progress .psub { margin-top: 6px; font-size: 12px; color: var(--faint); }
     #progress .psub:empty { display: none; }
 
     #log { padding: 10px 12px; height: 190px; overflow-y: auto; border-radius: 18px; background: rgba(0, 0, 0, 0.28);
-           border: 1px solid rgba(255,255,255,0.08); font: 11px/1.45 "SF Pro Rounded", "Avenir Next", sans-serif; font-variant-numeric: tabular-nums; white-space: pre-wrap;
+           border: 1px solid rgba(255,255,255,0.08); background: rgba(0, 0, 0, 0.55); font: 12px/1.45 "SF Pro Rounded", "Avenir Next", sans-serif; font-variant-numeric: tabular-nums; white-space: pre-wrap;
            color: rgba(235, 240, 250, 0.75); }
-    .ok { color: var(--green) !important; } .err { color: #ff6961 !important; } .warn { color: #ffcc66 !important; }
+    .ok { color: #ffffff !important; } .err { color: #ff6961 !important; } .warn { color: rgba(255, 255, 255, 0.55) !important; }
 
     /* Sheet (replaces window.confirm) */
     #sheet { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: rgba(5, 8, 15, 0.55); display: flex;
              align-items: center; justify-content: center; padding: 18px; z-index: 10;
              -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
-    #sheet .glass { width: 100%; max-width: 380px; padding: 18px; background: rgba(40, 48, 68, 0.82); border-radius: 26px; }
+    #sheet .glass { width: 100%; max-width: 380px; padding: 18px; background: rgba(22, 22, 22, 0.92); border-radius: 26px; }
     #sheet h3 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
     #sheet .stext { color: var(--dim); font-size: 12.5px; white-space: pre-wrap; margin-bottom: 16px; }
     #sheet .buttons { justify-content: flex-end; }
@@ -145,7 +145,7 @@
 <body>
   <section id="home" class="view">
     <div class="home-head">
-      <h1><img src="assets/peny-logo.png" alt="Peny"><span>Toolkit</span></h1>
+      <h1><img src="assets/peny-logo@1x.png" srcset="assets/peny-logo@1x.png 1x, assets/peny-logo@2x.png 2x, assets/peny-logo@3x.png 3x" width="49" height="44" alt="Peny"><span>Toolkit</span></h1>
       <div id="status">Loading…</div>
     </div>
     <div id="tiles" class="glass"></div>

@@ -5,8 +5,8 @@
   "order": 2,
   "icon": "icon.svg",
   "tint": [
-    "#2f8bff",
-    "#0a60ff"
+    "#1c1c1e",
+    "#000000"
   ],
   "entry": "premiere.jsx",
   "panel": "panel.js",

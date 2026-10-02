@@ -5,8 +5,8 @@
   "order": 1,
   "icon": "icon.svg",
   "tint": [
-    "#7d5cff",
-    "#4a3aff"
+    "#1c1c1e",
+    "#000000"
   ],
   "progress": true,
   "panel": "panel.js",

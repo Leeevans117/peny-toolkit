@@ -5,9 +5,10 @@
   "order": 4,
   "icon": "icon.svg",
   "tint": [
-    "#3ddc84",
-    "#1fa855"
+    "#1c1c1e",
+    "#000000"
   ],
   "entry": "premiere.jsx",
-  "inputs": []
+  "inputs": [],
+  "hidden": true
 }

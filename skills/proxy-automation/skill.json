@@ -5,8 +5,8 @@
   "order": 3,
   "icon": "icon.svg",
   "tint": [
-    "#ffb340",
-    "#ff8a00"
+    "#1c1c1e",
+    "#000000"
   ],
   "progress": true,
   "entry": "premiere.jsx",

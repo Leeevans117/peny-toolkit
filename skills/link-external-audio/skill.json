@@ -1,12 +1,12 @@
 {
   "id": "link-external-audio",
   "name": "Link External Audio",
-  "description": "Links each camera clip to its camera audio and the external-audio piece under it. Only runs on a sequence whose name ends \"TOOLKIT COPY\". Every link is checked afterwards.",
+  "description": "Step 1 makes a safe copy of the active sequence (\"<name> TOOLKIT COPY\") and opens it. Step 2 links each camera clip to its camera audio and the external-audio piece under it, on that copy only. The external audio must already be synced and sitting under each camera clip. Every link is checked afterwards.",
   "order": 5,
   "icon": "icon.svg",
   "tint": [
-    "#ff6b9a",
-    "#ff2d55"
+    "#1c1c1e",
+    "#000000"
   ],
   "entry": "premiere.jsx",
   "inputs": [
@@ -19,6 +19,19 @@
       "id": "end",
       "label": "To (optional)",
       "placeholder": "h:mm:ss, h:mm:ss:ff or seconds"
+    }
+  ],
+  "actions": [
+    {
+      "id": "safecopy",
+      "label": "1  Make safe copy",
+      "skill": "make-safe-copy",
+      "style": "secondary"
+    },
+    {
+      "id": "run",
+      "label": "2  Link external audio",
+      "style": "primary"
     }
   ]
 }

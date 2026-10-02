@@ -128,6 +128,30 @@ PenyToolkit.skills["link-external-audio"] = function (params) {
   };
   var summary = cams.length + " camera clips: " + linked.length + " linked and verified, " + already.length +
     " already linked, " + failed.length + " failed, " + skipped.length + " skipped.";
+
+  // Seen 2 Oct 2026: the wavs sat on A5 after the camera clips (not synced), so every clip
+  // was skipped with "no external audio". Say where the external audio is instead.
+  var noExt = 0;
+  for (k = 0; k < skipped.length; k++) if (skipped[k].reason === "no external audio under this clip") noExt++;
+  if (noExt) {
+    var camNames = {};
+    for (k = 0; k < cams.length; k++) camNames[String(cams[k].item.name)] = true;
+    var ext = null;
+    for (t = 0; t < seq.audioTracks.numTracks; t++) {
+      var ac = seq.audioTracks[t].clips;
+      for (c = 0; c < ac.numItems; c++) {
+        if (camNames[String(ac[c].name)]) continue;
+        var st = T.sec(ac[c].start.ticks);
+        if (!ext || st < ext.start) ext = { name: String(ac[c].name), track: T.trackLabel("audio", t), start: st };
+      }
+    }
+    var hint = ext
+      ? " External audio is on the timeline (first: \"" + ext.name + "\" on " + ext.track + " at " + T.fmt(ext.start) +
+        ") but none of it sits under " + (noExt === cams.length ? "any camera clip" : noExt + " of the camera clips") + ". Sync it under the clips first, then run Link again."
+      : " No external audio found on any audio track of this sequence.";
+    summary += hint;
+    details.hint = hint;
+  }
   if (failed.length) return { ok: false, error: summary, summary: summary, details: details };
   return T.ok(summary, details);
 };

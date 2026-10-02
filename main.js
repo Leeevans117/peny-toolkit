@@ -97,7 +97,7 @@ function evalSkill(skill, params) {
 function findSkill(id) { for (var i = 0; i < skills.length; i++) if (skills[i].id === id) return skills[i]; return null; }
 function findAction(skill, id) {
   var list = skill.actions || [{ id: "run", label: skill.name }];
-  if (!id) return list[0];
+  if (!id) id = list.some(function (a) { return a.id === "run"; }) ? "run" : list[0].id;
   for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
   return null;
 }
@@ -117,7 +117,12 @@ function runAction(skillId, actionId, params, source) {
 
   var p;
   try {
-    if (skill.module) {
+    if (action.skill) {
+      // An action that runs another (Premiere-only) skill, e.g. Link External Audio's
+      // "Make safe copy" step, which runs the make-safe-copy skill.
+      var other = findSkill(action.skill);
+      p = other ? evalSkill(other, params) : Promise.resolve({ ok: false, error: "Unknown skill: " + action.skill });
+    } else if (skill.module) {
       var fn = skill.module.actions[action.id];
       p = fn ? fn(params || {}) : Promise.resolve({ ok: false, error: "Action not implemented: " + action.id });
     } else {
@@ -337,6 +342,7 @@ function loadSkills() {
 function drawSkills() {
   var tiles = document.getElementById("tiles"), apps = document.getElementById("apps");
   skills.forEach(function (s) {
+    if (s.hidden) return; // runs only from another app's button (e.g. make-safe-copy)
     // Home tile
     var tile = document.createElement("button");
     tile.className = "tile";
@@ -523,7 +529,7 @@ function writeHookResult(result, id) {
     try { fs.mkdirSync(HOOK_INBOX, { recursive: true }); } catch (e) {}
     fs.writeFileSync(INSTANCE_FILE, INSTANCE_ID, "utf-8");
     hookTimer = setInterval(pollHook, HOOK_POLL_MS);
-    document.getElementById("status").textContent = skills.length + " skills loaded.";
+    document.getElementById("status").textContent = skills.filter(function (s) { return !s.hidden; }).length + " apps";
     log("Panel open (instance " + INSTANCE_ID + "), " + skills.length + " skills: " + skills.map(function (s) { return s.id; }).join(", "));
   } catch (e) {
     document.getElementById("status").textContent = "Error: " + e.message;
