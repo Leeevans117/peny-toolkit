@@ -113,11 +113,13 @@ module.exports = function (api) {
     }).then(function (o) {
       var d = o.placed.details || {};
       var clocks = o.synced.filter(function (s) { return s.wavStartClock !== undefined; }).map(function (s) { return s.wavStartClock; });
+      var byHand = (d.placed || []).filter(function (x) { return x.note; }).map(function (x) { return x.clip; });
       var spread = clocks.length > 1 ? (Math.max.apply(null, clocks) - Math.min.apply(null, clocks)) : null;
       var summary = o.synced.length + " of " + (o.synced.length + o.unsynced.length) + " camera clips synced by waveform; " +
         (d.placed || []).length + " wav piece(s) placed and checked, " + (d.failed || []).length + " failed; " +
         o.unsynced.length + " left for you to sync by hand." +
         (spread !== null ? " Camera clocks agree to " + spread.toFixed(1) + " s." : "") +
+        (byHand.length ? " " + byHand.length + " clip(s) cross two wav files and had no empty audio track for the second piece; link those by hand or add an empty audio track and sync a new copy." : "") +
         (o.unsynced.length || (d.failed || []).length ? "" : " Now run step 3, Link.");
       api.status(summary);
       return { ok: o.placed.ok !== false, summary: summary, error: summary, details: {

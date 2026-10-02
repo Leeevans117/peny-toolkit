@@ -53,31 +53,58 @@
     return null;
   }
 
+  // A clip whose sound runs across two wav files gets two pieces. Premiere will not link
+  // two clips on one track to a camera clip (tested 2 Oct 2026: getLinkedItems 0), so the
+  // second piece goes on another audio track that is empty there; with none free it stays
+  // on the wavs' track and the clip has to be linked by hand.
+  function chooseTrack(seq, main, used, a, b) {
+    if (!used[main] && !busy(seq.audioTracks[main], a, b)) return main;
+    for (var t = 0; t < seq.audioTracks.numTracks; t++) {
+      if (t === main || used[t]) continue;
+      if (!busy(seq.audioTracks[t], a, b)) return t;
+    }
+    return used[main] && !busy(seq.audioTracks[main], a, b) ? -2 : -1; // -2: only the shared track
+  }
+
   function place(seq, params) {
-    var trk = seq.audioTracks[params.track];
-    if (!trk) return T.fail("Audio track A" + (params.track + 1) + " does not exist.");
+    if (!seq.audioTracks[params.track]) return T.fail("Audio track A" + (params.track + 1) + " does not exist.");
     var fps = T.sequenceFps(seq) || 25, frame = 1 / fps;
-    var placed = [], failed = [];
+    var placed = [], failed = [], usedBy = {};
     for (var i = 0; i < params.pieces.length; i++) {
       var p = params.pieces[i], item = S.items[p.path];
       var rec = { clip: p.clip, wav: p.path.replace(/.*\//, ""), start: T.fmt(p.start), "in": p["in"], out: p.out };
       if (!item) { rec.reason = "wav not found in the project (run Sync again)"; failed.push(rec); continue; }
       var len = p.out - p["in"];
-      var clash = busy(trk, p.start, p.start + len);
-      if (clash) { rec.reason = "A" + (params.track + 1) + " is not empty there (" + clash + ")"; failed.push(rec); continue; }
+      var used = usedBy[p.clip] || (usedBy[p.clip] = {});
+      var ti = chooseTrack(seq, params.track, used, p.start, p.start + len);
+      if (ti === -1) { rec.reason = "A" + (params.track + 1) + " is not empty there (" + busy(seq.audioTracks[params.track], p.start, p.start + len) + ")"; failed.push(rec); continue; }
+      if (ti === -2) { ti = params.track; rec.note = "second piece on the same track (no empty audio track free): link this clip by hand, or add an empty audio track and sync a new copy"; }
+      var trk = seq.audioTracks[ti];
+      rec.track = "A" + (ti + 1);
+      // ProjectItem.setInPoint/setOutPoint take ticks (a seconds value was ignored on 26.5.2:
+      // pieces landed 1 frame long from 0). Read back before placing.
       var oldIn = null, oldOut = null;
-      try { oldIn = item.getInPoint(4).seconds; oldOut = item.getOutPoint(4).seconds; } catch (e0) {}
-      item.setInPoint(String(p["in"]), 4);
-      item.setOutPoint(String(p.out), 4);
+      try { oldIn = item.getInPoint(4).ticks; oldOut = item.getOutPoint(4).ticks; } catch (e0) {}
+      item.setInPoint(String(T.ticks(p["in"])), 4);
+      item.setOutPoint(String(T.ticks(p.out)), 4);
+      var setIn = NaN, setOut = NaN;
+      try { setIn = T.sec(item.getInPoint(4).ticks); setOut = T.sec(item.getOutPoint(4).ticks); } catch (e2) {}
+      // Premiere rounds in/out to whole frames (3534.094 -> 3534.08 at 25 fps), so allow a frame.
+      if (!(Math.abs(setIn - p["in"]) <= frame + 0.001 && Math.abs(setOut - p.out) <= frame + 0.001)) {
+        rec.reason = "Premiere did not take the wav in/out (in " + setIn + ", out " + setOut + ")";
+        if (oldIn !== null) { try { item.setInPoint(oldIn, 4); item.setOutPoint(oldOut, 4); } catch (e3) {} }
+        failed.push(rec);
+        continue;
+      }
       trk.overwriteClip(item, p.start);
-      if (oldIn !== null) { try { item.setInPoint(String(oldIn), 4); item.setOutPoint(String(oldOut), 4); } catch (e1) {} }
+      if (oldIn !== null) { try { item.setInPoint(oldIn, 4); item.setOutPoint(oldOut, 4); } catch (e1) {} }
       // Read back: the piece must start on this clip's frame with the asked in-point.
       var got = null;
       for (var c = 0; c < trk.clips.numItems; c++) {
         var it = trk.clips[c];
         if (Math.abs(T.sec(it.start.ticks) - p.start) < frame / 2 + 0.001 && mediaPath(it.projectItem) === p.path) got = it;
       }
-      if (!got) { rec.reason = "piece not found on A" + (params.track + 1) + " after placing"; failed.push(rec); continue; }
+      if (!got) { rec.reason = "piece not found on " + rec.track + " after placing"; failed.push(rec); continue; }
       rec.gotIn = T.sec(got.inPoint.ticks);
       rec.gotLength = T.sec(got.end.ticks) - T.sec(got.start.ticks);
       if (Math.abs(rec.gotIn - p["in"]) > frame || Math.abs(rec.gotLength - len) > frame + 0.001) {
@@ -85,6 +112,7 @@
         failed.push(rec);
         continue;
       }
+      used[ti] = true;
       placed.push(rec);
     }
     var summary = placed.length + " wav piece(s) placed and checked, " + failed.length + " failed.";
