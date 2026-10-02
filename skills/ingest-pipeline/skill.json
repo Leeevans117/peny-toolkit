@@ -1,15 +1,41 @@
 {
   "id": "ingest-pipeline",
   "name": "Ingest + proxies",
-  "description": "One button, three steps: imports a footage folder (Import footage), renders proxies for everything in its bins (Proxies), then attaches them. Asks for the footage folder, then straight away for the proxy folder. Each step is checked before the next starts.",
+  "description": "One button, three stages: imports a footage folder (Import footage), renders proxies for everything in its bins (Proxies), then attaches them. You are asked for two folders, one after the other: first the FOOTAGE folder to import, then the folder where the PROXIES should be saved. Each stage must pass before the next starts.",
   "panel": "panel.js",
   "inputs": [],
   "actions": [
-    { "id": "run", "label": "Ingest + proxies", "prompts": [
-      { "id": "folder", "title": "Choose the footage folder to import" },
-      { "id": "dest", "title": "Choose where the proxies should go" } ] },
-    { "id": "pause", "label": "Pause", "control": true },
-    { "id": "resume", "label": "Resume", "control": true },
-    { "id": "cancel", "label": "Cancel", "control": true, "confirm": "Cancel the proxy renders? Running ffmpeg/REDline jobs are killed; partial files stay on disk. Attach will not run." }
+    {
+      "id": "run",
+      "label": "Ingest + proxies",
+      "prompts": [
+        {
+          "id": "folder",
+          "title": "Step 1 of 2: choose the FOOTAGE folder to import",
+          "explain": "Step 1 of 2: FOOTAGE\n\nA folder window will open. Choose the folder of camera footage to bring into the open Premiere project, e.g. a shoot-day folder that holds the camera card folders.\n\nIts folder tree becomes bins in the project. Files already in the project are skipped."
+        },
+        {
+          "id": "dest",
+          "title": "Step 2 of 2: choose where the PROXIES should be saved",
+          "explain": "Step 2 of 2: PROXIES\n\nA second folder window will open. Choose the folder where the proxy files should be saved, e.g. this project's Proxies folder.\n\nA folder tree matching the bins is created inside it. Existing proxy files are never overwritten or deleted.\n\nAfter this, import, proxy rendering and attaching run on their own."
+        }
+      ]
+    },
+    {
+      "id": "pause",
+      "label": "Pause",
+      "control": true
+    },
+    {
+      "id": "resume",
+      "label": "Resume",
+      "control": true
+    },
+    {
+      "id": "cancel",
+      "label": "Cancel",
+      "control": true,
+      "confirm": "Cancel the proxy renders? Running ffmpeg/REDline jobs are killed; partial files stay on disk. Attach will not run."
+    }
   ]
 }

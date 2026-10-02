@@ -109,6 +109,7 @@ function runAction(skillId, actionId, params, source) {
   if (!action.control && running) {
     return Promise.resolve({ ok: false, skill: skillId, error: running + " is still running." });
   }
+  if (params) for (var pk in params) if (params.hasOwnProperty(pk) && typeof params[pk] === "string") params[pk] = fileUrlToPath(params[pk]);
   var label = skill.name + (skill.actions ? " > " + action.label : "");
   if (!action.control) { running = label; setButtons(); }
   log("Run " + label + " (" + source + ") " + JSON.stringify(params || {}), "warn");
@@ -159,10 +160,20 @@ function storeKey(skill, input) { return "penytoolkit." + skill.id + "." + input
 function remember(skill, input, value) { try { localStorage.setItem(storeKey(skill, input), value); } catch (e) {} }
 function recall(skill, input) { try { return localStorage.getItem(storeKey(skill, input)) || ""; } catch (e) { return ""; } }
 
+// The CEP folder picker returns a file:// URL with %-escapes
+// ("file:///Volumes/G-SPEED%20Shuttle/..."); turn it into a plain path.
+function fileUrlToPath(v) {
+  var s = String(v || "");
+  if (s.indexOf("file://") !== 0) return s;
+  s = s.replace(/^file:\/\/(localhost)?/, "");
+  try { s = decodeURIComponent(s); } catch (e) {}
+  return s.replace(/\/+$/, "") || "/";
+}
+
 function chooseFolder(title, start) {
   try {
     var r = window.cep.fs.showOpenDialog(false, true, title, start || "");
-    if (r && r.data && r.data.length) return r.data[0];
+    if (r && r.data && r.data.length) return fileUrlToPath(r.data[0]);
   } catch (e) { log("Folder dialog failed: " + e.message, "err"); }
   return null;
 }
@@ -263,6 +274,11 @@ function drawSkills() {
         // "prompts": folders asked for one after another when the button is pressed.
         var prompts = a.prompts || [];
         for (var k = 0; k < prompts.length; k++) {
+          // Say what the next window is for before it opens; Cancel stops here.
+          if (prompts[k].explain && !window.confirm(prompts[k].explain + "\n\nClick OK to open the folder window, or Cancel to stop.")) {
+            log(s.name + ": cancelled before " + prompts[k].title, "warn");
+            return;
+          }
           var picked = chooseFolder(prompts[k].title, "");
           if (!picked) { log(s.name + ": cancelled (" + prompts[k].title + ")", "warn"); return; }
           params[prompts[k].id] = picked;
