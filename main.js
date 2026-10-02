@@ -191,6 +191,12 @@ function loadSkills() {
           jobs: jobs,
           log: log,
           status: function (text) { setStatus(s, text); },
+          // Run another skill's action directly (used by multi-step skills).
+          skillAction: function (skillId, actionId, params) {
+            var other = findSkill(skillId);
+            if (!other || !other.module || !other.module.actions[actionId]) return Promise.resolve({ ok: false, error: "No action " + skillId + "/" + actionId });
+            return Promise.resolve(other.module.actions[actionId](params || {}));
+          },
           skillDir: s.dir
         });
       }
@@ -254,6 +260,13 @@ function drawSkills() {
         var params = {};
         var ins = card.querySelectorAll("input[data-input]");
         for (var i = 0; i < ins.length; i++) params[ins[i].getAttribute("data-input")] = ins[i].type === "checkbox" ? ins[i].checked : ins[i].value;
+        // "prompts": folders asked for one after another when the button is pressed.
+        var prompts = a.prompts || [];
+        for (var k = 0; k < prompts.length; k++) {
+          var picked = chooseFolder(prompts[k].title, "");
+          if (!picked) { log(s.name + ": cancelled (" + prompts[k].title + ")", "warn"); return; }
+          params[prompts[k].id] = picked;
+        }
         runAction(s.id, a.id, params, "button");
       });
       buttons.appendChild(b);

@@ -67,6 +67,21 @@
   }
 
   function scopeRoots(params) {
+    // A bin can also be given by nodeId (used by Ingest + proxies; bin names such as
+    // "Korea / Seoul" contain "/" and cannot be written as a path).
+    if (params.binNodeId) {
+      var st = [app.project.rootItem];
+      while (st.length) {
+        var pb = st.pop();
+        for (var q = 0; q < pb.children.numItems; q++) {
+          var qc = pb.children[q];
+          if (qc.type != ProjectItemType.BIN) continue;
+          if (String(qc.nodeId) === String(params.binNodeId)) return { roots: [{ bin: qc, path: qc.name }] };
+          st.push(qc);
+        }
+      }
+      return { error: "Bin not found (nodeId " + params.binNodeId + ")." };
+    }
     var b = params.bin ? String(params.bin).replace(/^\s+|\s+$/g, "") : "";
     if (b === "ALL") return { roots: [{ bin: app.project.rootItem, path: "" }] };
     if (b !== "") {

@@ -236,6 +236,21 @@
     return failed.length ? { ok: false, error: s, summary: s, details: d } : T.ok(s, d);
   }
 
+  // The bin an import of folder <name> lands in, found the same way resolveChain finds
+  // it (one bin of that name anywhere in the project, else a root bin of that name),
+  // without creating anything.
+  function rootBin(params) {
+    index();
+    var name = String(params.name), matches = I.binsByName[name] || [], bin = null;
+    if (matches.length === 1) bin = matches[0];
+    else {
+      var r = app.project.rootItem;
+      for (var i = 0; i < r.children.numItems; i++) if (r.children[i].type == ProjectItemType.BIN && r.children[i].name === name) { bin = r.children[i]; break; }
+    }
+    if (!bin) return T.fail("No bin named \"" + name + "\".");
+    return T.ok("Root bin: " + bin.name, { nodeId: String(bin.nodeId), name: String(bin.name), treePath: String(bin.treePath) });
+  }
+
   T.skills["import-footage"] = function (params) {
     if (!app.project) return T.fail("No project open.");
     if (params.bootPrefixes) I.bootPrefixes = params.bootPrefixes;
@@ -243,6 +258,7 @@
     if (params.action === "exists") return exists(params);
     if (params.action === "import") return doImport(params);
     if (params.action === "sync") return sync(params);
+    if (params.action === "rootbin") return rootBin(params);
     return T.fail("Unknown import action: " + params.action);
   };
 }(PenyToolkit));

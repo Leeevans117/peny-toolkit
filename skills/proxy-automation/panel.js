@@ -99,7 +99,7 @@ module.exports = function (api) {
   }
 
   function listScope(params) {
-    return api.evalSkill({ action: "list", bin: params.bin || "" });
+    return api.evalSkill({ action: "list", bin: params.bin || "", binNodeId: params.binNodeId || "" });
   }
 
   // Works out what to render without touching anything.
