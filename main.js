@@ -121,7 +121,9 @@ function runAction(skillId, actionId, params, source) {
       // An action that runs another (Premiere-only) skill, e.g. Link External Audio's
       // "Make safe copy" step, which runs the make-safe-copy skill.
       var other = findSkill(action.skill);
-      p = other ? evalSkill(other, params) : Promise.resolve({ ok: false, error: "Unknown skill: " + action.skill });
+      if (!other) p = Promise.resolve({ ok: false, error: "Unknown skill: " + action.skill });
+      else if (other.module) p = other.module.actions[action.action || "run"](params || {});
+      else p = evalSkill(other, params);
     } else if (skill.module) {
       var fn = skill.module.actions[action.id];
       p = fn ? fn(params || {}) : Promise.resolve({ ok: false, error: "Action not implemented: " + action.id });

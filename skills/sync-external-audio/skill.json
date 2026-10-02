@@ -1,0 +1,9 @@
+{
+  "id": "sync-external-audio",
+  "name": "Sync external audio",
+  "description": "Lines up external-recorder wavs under each camera clip by matching waveforms. Runs from Link External Audio (step 2).",
+  "hidden": true,
+  "entry": "premiere.jsx",
+  "panel": "panel.js",
+  "actions": [ { "id": "sync", "label": "Sync external audio" } ]
+}

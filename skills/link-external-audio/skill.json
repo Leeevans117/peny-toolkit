@@ -1,7 +1,7 @@
 {
   "id": "link-external-audio",
   "name": "Link External Audio",
-  "description": "Step 1 makes a safe copy of the active sequence (\"<name> TOOLKIT COPY\") and opens it. Step 2 links each camera clip to its camera audio and the external-audio piece under it, on that copy only. The external audio must already be synced and sitting under each camera clip. Every link is checked afterwards.",
+  "description": "Step 1 makes a safe copy of the active sequence (\"<name> TOOLKIT COPY\") and opens it. Step 2 syncs: put the external wav files anywhere on an audio track of the copy (e.g. after the clips) and it lines a wav piece up under each camera clip by matching waveforms; clips it is not sure about are listed for you to sync by hand. Step 3 links each camera clip to its camera audio and the wav piece under it. Every link is checked afterwards.",
   "order": 5,
   "icon": "icon.svg",
   "tint": [
@@ -29,8 +29,16 @@
       "style": "secondary"
     },
     {
+      "id": "sync",
+      "label": "2  Sync external audio",
+      "skill": "sync-external-audio",
+      "action": "sync",
+      "style": "secondary",
+      "confirm": "Sync the external wavs to the camera clips on this TOOLKIT COPY? It measures each clip against the wavs by waveform (can take a minute or two) and places a wav piece under each clip it is sure about, on the track the wavs are on. Nothing is deleted or moved."
+    },
+    {
       "id": "run",
-      "label": "2  Link external audio",
+      "label": "3  Link external audio",
       "style": "primary"
     }
   ]
