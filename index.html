@@ -14,11 +14,18 @@
     .skill { background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 8px; margin-bottom: 8px; }
     .skill p { margin: 4px 0 6px; color: var(--dim); }
     .inputs { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
-    .inputs label { flex: 1 1 120px; color: var(--dim); font-size: 11px; }
+    .inputs label { flex: 1 1 140px; color: var(--dim); font-size: 11px; }
     .inputs input { width: 100%; margin-top: 2px; padding: 4px; background: #1b1b1b; color: var(--text);
                     border: 1px solid var(--line); border-radius: 3px; }
     button { background: var(--accent); color: #fff; border: 0; border-radius: 3px; padding: 6px 10px; cursor: pointer; }
     button:disabled { background: #555; cursor: default; }
+    .skill h2 { font-size: 12px; margin: 0; font-weight: 600; }
+    .row { display: flex; gap: 4px; margin-top: 2px; }
+    .row input { flex: 1; margin-top: 0; }
+    .buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+    button.small { padding: 4px 8px; background: #444; }
+    button.control { background: #444; }
+    .skill .status { margin-top: 6px; color: var(--dim); font-size: 11px; white-space: pre-wrap; }
     #log { background: #1b1b1b; border: 1px solid var(--line); border-radius: 4px; padding: 6px; height: 180px;
            overflow-y: auto; font: 11px Menlo, monospace; white-space: pre-wrap; }
     .ok { color: var(--ok); } .err { color: var(--err); } .warn { color: var(--warn); }
