@@ -1,19 +1,79 @@
 {
   "id": "proxy-automation",
   "name": "Proxies",
-  "description": "Renders 1280x720 ProRes Proxy files for a bin (ffmpeg, REDline for R3D) into a folder tree that mirrors the bins, then attaches them. Never deletes or overwrites a proxy. Leave Bin empty to use the bins selected in the Project panel.",
+  "description": "Renders 1280x720 ProRes Proxy files for a bin (ffmpeg, REDline for R3D) into a folder tree that mirrors the bins, then attaches them. Never deletes or overwrites a proxy. Clips: the bins selected in the Project panel, one named bin, or the whole project.",
+  "order": 3,
+  "icon": "icon.svg",
+  "tint": [
+    "#ffb340",
+    "#ff8a00"
+  ],
+  "progress": true,
   "entry": "premiere.jsx",
   "panel": "panel.js",
   "inputs": [
-    { "id": "bin", "label": "Bin (optional)", "placeholder": "e.g. Footage/Day 1, or ALL" },
-    { "id": "dest", "label": "Proxy folder", "type": "folder", "placeholder": "choose the proxy root folder" }
+    {
+      "id": "bin",
+      "label": "Clips",
+      "type": "segment",
+      "options": [
+        {
+          "label": "Selected bins",
+          "value": ""
+        },
+        {
+          "label": "Bin",
+          "text": true,
+          "placeholder": "e.g. Footage/Day 1"
+        },
+        {
+          "label": "Whole project",
+          "value": "ALL"
+        }
+      ]
+    },
+    {
+      "id": "dest",
+      "label": "Proxy folder",
+      "type": "folder",
+      "placeholder": "choose the proxy root folder"
+    }
   ],
   "actions": [
-    { "id": "render", "label": "Render proxies" },
-    { "id": "attach", "label": "Attach proxies" },
-    { "id": "detach", "label": "Detach proxies", "confirm": "Detach the proxies of every clip in this bin scope? (No files are deleted.)" },
-    { "id": "pause", "label": "Pause", "control": true },
-    { "id": "resume", "label": "Resume", "control": true },
-    { "id": "cancel", "label": "Cancel", "control": true, "confirm": "Cancel the render? Running ffmpeg/REDline jobs are killed; partial files stay on disk." }
+    {
+      "id": "render",
+      "label": "Render proxies",
+      "style": "primary"
+    },
+    {
+      "id": "attach",
+      "label": "Attach proxies",
+      "style": "secondary"
+    },
+    {
+      "id": "detach",
+      "label": "Detach proxies",
+      "confirm": "Detach the proxies of every clip in this bin scope? (No files are deleted.)",
+      "style": "danger"
+    },
+    {
+      "id": "pause",
+      "label": "Pause",
+      "control": true,
+      "style": "secondary"
+    },
+    {
+      "id": "resume",
+      "label": "Resume",
+      "control": true,
+      "style": "secondary"
+    },
+    {
+      "id": "cancel",
+      "label": "Cancel",
+      "control": true,
+      "confirm": "Cancel the render? Running ffmpeg/REDline jobs are killed; partial files stay on disk.",
+      "style": "danger"
+    }
   ]
 }

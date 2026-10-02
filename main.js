@@ -1,4 +1,5 @@
-/* Peny Toolkit panel. Reads skills/<id>/skill.json at open and draws a card per skill.
+/* Peny Toolkit panel. Reads skills/<id>/skill.json at open and draws a home screen with
+ * one app tile per skill (name, icon.svg, "tint", "order"); each tile opens the skill's view.
  *
  * Two kinds of skill:
  *  - Premiere-only: skill.json has "entry" (premiere.jsx). Its button evaluates
@@ -111,7 +112,7 @@ function runAction(skillId, actionId, params, source) {
   }
   if (params) for (var pk in params) if (params.hasOwnProperty(pk) && typeof params[pk] === "string") params[pk] = fileUrlToPath(params[pk]);
   var label = skill.name + (skill.actions ? " > " + action.label : "");
-  if (!action.control) { running = label; setButtons(); }
+  if (!action.control) { running = label; runningSkill = skill.id; setButtons(); }
   log("Run " + label + " (" + source + ") " + JSON.stringify(params || {}), "warn");
 
   var p;
@@ -131,7 +132,7 @@ function runAction(skillId, actionId, params, source) {
     result = result || { ok: false, error: "No result" };
     result.skill = skill.id;
     result.action = action.id;
-    if (!action.control) { running = null; setButtons(); }
+    if (!action.control) { running = null; runningSkill = null; setButtons(); }
     log((result.ok ? "OK  " : "FAIL ") + label + ": " + (result.ok ? result.summary : result.error), result.ok ? "ok" : "err");
     var d = result.details || {};
     ["failed", "skipped"].forEach(function (k) {
@@ -165,19 +166,107 @@ function showProgress(p) {
   } else {
     log(line);
   }
-  if (typeof drawProgress === "function") drawProgress(p);
+  drawProgress(p);
 }
 
 // ---- UI ----
+// Home screen: one app tile per skill (icon.svg on its "tint" colours, in "order").
+// Tapping a tile opens that skill's view; < goes back. Views are built once at start so
+// inputs, statuses and running state survive switching. One log and one proxy progress
+// bar sit under every view; the bar shows in views whose skill.json has "progress": true.
+var currentView = null; // skill id, or null on the home screen
+var runningSkill = null;
+var lastProgress = null;
+
 function setButtons() {
   var bs = document.querySelectorAll("button[data-action]");
   for (var i = 0; i < bs.length; i++) {
     if (bs[i].getAttribute("data-control") !== "1") bs[i].disabled = !!running;
   }
+  var tiles = document.querySelectorAll(".tile[data-skill]");
+  for (var t = 0; t < tiles.length; t++) {
+    var badge = tiles[t].querySelector(".badge");
+    if (badge) badge.classList.toggle("hidden", tiles[t].getAttribute("data-skill") !== runningSkill);
+  }
 }
 function setStatus(skill, text) {
   var el = document.querySelector('.status[data-skill="' + skill.id + '"]');
   if (el) el.textContent = text || "";
+}
+
+function drawProgress(p) {
+  if (p) lastProgress = p;
+  p = lastProgress;
+  var box = document.getElementById("progress");
+  var count = document.getElementById("pcount"), fill = document.getElementById("pfill"), sub = document.getElementById("psub");
+  if (!p) {
+    count.textContent = "No proxy run yet";
+    fill.style.width = "0%";
+    sub.textContent = "";
+    box.className = "glass";
+  } else {
+    var pct = p.percent.toFixed(p.percent % 1 ? 1 : 0);
+    count.innerHTML = p.event === "none" ? "Nothing to render" :
+      "<b>" + p.finished + "</b> of <b>" + p.total + "</b> · <b>" + pct + "%</b>";
+    fill.style.width = (p.fraction * 100) + "%";
+    var bits = [];
+    if (p.running) bits.push(p.running + " rendering");
+    if (p.queued) bits.push(p.queued + " queued");
+    if (p.failed) bits.push(p.failed + " failed");
+    if (p.paused) bits.push("paused");
+    if (p.cancelled) bits.push("cancelled");
+    if (p.already) bits.push(p.already + " already had proxies");
+    sub.textContent = bits.join(" · ");
+    box.className = "glass" + (p.failed || p.cancelled ? " failed" : p.fraction >= 1 ? " complete" : "");
+  }
+  var skill = currentView ? findSkill(currentView) : null;
+  if (!(skill && skill.progress)) box.classList.add("hidden");
+}
+
+function iconBox(skill, cls) {
+  var box = document.createElement("div");
+  box.className = cls;
+  var t = skill.tint || ["#8e8e93", "#636366"];
+  box.style.background = "linear-gradient(160deg, " + t[0] + ", " + (t[1] || t[0]) + ")";
+  box.innerHTML = skill.iconSvg || "";
+  return box;
+}
+
+function showView(id) {
+  if (id && !findSkill(id)) id = null;
+  currentView = id;
+  document.getElementById("home").classList.toggle("hidden", !!id);
+  document.getElementById("detail").classList.toggle("hidden", !id);
+  var views = document.querySelectorAll(".app[data-skill]");
+  for (var i = 0; i < views.length; i++) views[i].classList.toggle("hidden", views[i].getAttribute("data-skill") !== id);
+  if (id) {
+    var s = findSkill(id);
+    document.getElementById("nav-title").textContent = s.name;
+    var nav = document.getElementById("nav-icon"), look = iconBox(s, "nav-icon");
+    nav.style.background = look.style.background;
+    nav.innerHTML = look.innerHTML;
+    var log = document.getElementById("log");
+    log.scrollTop = log.scrollHeight;
+  }
+  drawProgress(null);
+}
+
+// Glass sheet instead of window.confirm. Resolves true for the OK button.
+function sheet(opts) {
+  return new Promise(function (resolve) {
+    var el = document.getElementById("sheet");
+    document.getElementById("sheet-title").textContent = opts.title || "";
+    document.getElementById("sheet-text").textContent = opts.text || "";
+    var ok = document.getElementById("sheet-ok"), no = document.getElementById("sheet-cancel");
+    ok.textContent = opts.ok || "Continue";
+    ok.className = "pill " + (opts.okStyle || "primary");
+    no.textContent = opts.cancel || "Cancel";
+    no.className = "pill " + (opts.cancelStyle || "danger");
+    function done(v) { el.classList.add("hidden"); ok.onclick = no.onclick = null; resolve(v); }
+    ok.onclick = function () { done(true); };
+    no.onclick = function () { done(false); };
+    el.classList.remove("hidden");
+  });
 }
 
 function storeKey(skill, input) { return "penytoolkit." + skill.id + "." + input; }
@@ -219,6 +308,7 @@ function loadSkills() {
     try {
       var s = JSON.parse(fs.readFileSync(file, "utf-8"));
       s.dir = path.join(dir, n);
+      if (s.icon) { try { s.iconSvg = fs.readFileSync(path.join(s.dir, s.icon), "utf-8"); } catch (e) {} }
       if (s.panel) {
         var factory = nodeRequire(path.join(s.dir, s.panel));
         s.module = factory({
@@ -241,83 +331,150 @@ function loadSkills() {
       log("Could not load skill " + n + ": " + e.message, "err");
     }
   });
+  skills.sort(function (a, b) { return (a.order || 99) - (b.order || 99); });
 }
 
 function drawSkills() {
-  var host = document.getElementById("skills");
+  var tiles = document.getElementById("tiles"), apps = document.getElementById("apps");
   skills.forEach(function (s) {
-    var card = document.createElement("div");
-    card.className = "skill";
-    var h = document.createElement("h2"); h.textContent = s.name; card.appendChild(h);
-    var p = document.createElement("p"); p.textContent = s.description || ""; card.appendChild(p);
+    // Home tile
+    var tile = document.createElement("button");
+    tile.className = "tile";
+    tile.setAttribute("data-skill", s.id);
+    tile.appendChild(iconBox(s, "icon"));
+    var badge = document.createElement("span"); badge.className = "badge hidden"; badge.title = "Running"; tile.appendChild(badge);
+    var nm = document.createElement("span"); nm.className = "name"; nm.textContent = s.name; tile.appendChild(nm);
+    tile.addEventListener("click", function () { showView(s.id); });
+    tiles.appendChild(tile);
 
-    var fields = document.createElement("div");
-    fields.className = "inputs";
+    // App view
+    var view = document.createElement("div");
+    view.className = "app hidden";
+    view.setAttribute("data-skill", s.id);
+    var card = document.createElement("div");
+    card.className = "glass card";
+    var p = document.createElement("p"); p.className = "desc"; p.textContent = s.description || ""; card.appendChild(p);
+
+    var toggles = document.createElement("div"); toggles.className = "toggles";
+    var getters = {}; // input id -> function returning its value
     (s.inputs || []).forEach(function (inp) {
-      var label = document.createElement("label");
-      label.textContent = inp.label;
-      var row = document.createElement("div"); row.className = "row";
-      var input = document.createElement("input");
-      input.setAttribute("data-input", inp.id);
       if (inp.type === "checkbox") {
-        input.type = "checkbox";
+        var lab = document.createElement("label"); lab.className = "toggle";
+        var tl = document.createElement("span"); tl.className = "tlabel"; tl.textContent = inp.label; lab.appendChild(tl);
+        var sw = document.createElement("span"); sw.className = "switch";
+        var cb = document.createElement("input"); cb.type = "checkbox"; cb.setAttribute("data-input", inp.id);
         var saved = recall(s, inp.id);
-        input.checked = saved === "" ? !!inp["default"] : saved === "true";
-        input.addEventListener("change", function () { remember(s, inp.id, input.checked ? "true" : "false"); });
-        row.className = "row check";
+        cb.checked = saved === "" ? !!inp["default"] : saved === "true";
+        cb.addEventListener("change", function () { remember(s, inp.id, cb.checked ? "true" : "false"); });
+        sw.appendChild(cb);
+        var tr = document.createElement("span"); tr.className = "track"; sw.appendChild(tr);
+        var kn = document.createElement("span"); kn.className = "knob"; sw.appendChild(kn);
+        lab.appendChild(sw);
+        toggles.appendChild(lab);
+        getters[inp.id] = function () { return cb.checked; };
+        return;
+      }
+      var field = document.createElement("div"); field.className = "field";
+      var fl = document.createElement("span"); fl.className = "flabel"; fl.textContent = inp.label; field.appendChild(fl);
+      if (inp.type === "segment") {
+        // Segmented control; an option with "text": true shows a text box whose value is used.
+        var seg = document.createElement("div"); seg.className = "segmented";
+        var txt = document.createElement("input"); txt.type = "text";
+        var chosen = parseInt(recall(s, inp.id + ".option"), 10) || 0;
+        txt.value = recall(s, inp.id + ".text");
+        txt.addEventListener("change", function () { remember(s, inp.id + ".text", txt.value); });
+        var segButtons = inp.options.map(function (o, i) {
+          var b = document.createElement("button");
+          b.textContent = o.label;
+          b.addEventListener("click", function () { chosen = i; remember(s, inp.id + ".option", String(i)); paint(); });
+          seg.appendChild(b);
+          return b;
+        });
+        function paint() {
+          segButtons.forEach(function (b, i) { b.className = i === chosen ? "on" : ""; });
+          var o = inp.options[chosen] || inp.options[0];
+          txt.placeholder = o.placeholder || "";
+          txt.classList.toggle("hidden", !o.text);
+        }
+        if (chosen >= inp.options.length) chosen = 0;
+        paint();
+        field.appendChild(seg); field.appendChild(txt);
+        getters[inp.id] = function () { var o = inp.options[chosen]; return o.text ? txt.value : o.value; };
       } else {
+        var row = document.createElement("div"); row.className = "row";
+        var input = document.createElement("input"); input.type = "text"; input.setAttribute("data-input", inp.id);
         input.placeholder = inp.placeholder || "";
         input.value = recall(s, inp.id);
         input.addEventListener("change", function () { remember(s, inp.id, input.value); });
+        row.appendChild(input);
+        if (inp.type === "folder") {
+          var fb = document.createElement("button");
+          fb.className = "pill secondary small"; fb.textContent = "Choose…";
+          fb.addEventListener("click", function () {
+            var f = chooseFolder(inp.label, input.value);
+            if (f) { input.value = f; remember(s, inp.id, f); }
+          });
+          row.appendChild(fb);
+        }
+        field.appendChild(row);
+        getters[inp.id] = function () { return input.value; };
       }
-      row.appendChild(input);
-      if (inp.type === "folder") {
-        var b = document.createElement("button");
-        b.className = "small"; b.textContent = "Browse…";
-        b.addEventListener("click", function () {
-          var f = chooseFolder(inp.label, input.value);
-          if (f) { input.value = f; remember(s, inp.id, f); }
-        });
-        row.appendChild(b);
-      }
-      label.appendChild(row);
-      fields.appendChild(label);
+      card.appendChild(field);
     });
-    if (fields.children.length) card.appendChild(fields);
+    if (toggles.children.length) card.appendChild(toggles);
 
-    var buttons = document.createElement("div"); buttons.className = "buttons";
-    (s.actions || [{ id: "run", label: s.name }]).forEach(function (a) {
+    // Buttons: normal actions first, then the ones that work while a run is going.
+    var list = s.actions || [{ id: "run", label: s.name, style: "primary" }];
+    var main = document.createElement("div"); main.className = "buttons";
+    var ctl = document.createElement("div"); ctl.className = "buttons";
+    list.forEach(function (a) {
       var b = document.createElement("button");
       b.textContent = a.label;
+      b.className = "pill " + (a.style || (a.control ? "secondary" : "primary"));
       b.setAttribute("data-action", a.id);
-      if (a.control) { b.setAttribute("data-control", "1"); b.className = "control"; }
-      b.addEventListener("click", function () {
-        if (a.confirm && !window.confirm(a.confirm)) return;
-        var params = {};
-        var ins = card.querySelectorAll("input[data-input]");
-        for (var i = 0; i < ins.length; i++) params[ins[i].getAttribute("data-input")] = ins[i].type === "checkbox" ? ins[i].checked : ins[i].value;
-        // "prompts": folders asked for one after another when the button is pressed.
-        var prompts = a.prompts || [];
-        for (var k = 0; k < prompts.length; k++) {
-          // Say what the next window is for before it opens; Cancel stops here.
-          if (prompts[k].explain && !window.confirm(prompts[k].explain + "\n\nClick OK to open the folder window, or Cancel to stop.")) {
-            log(s.name + ": cancelled before " + prompts[k].title, "warn");
-            return;
-          }
-          var picked = chooseFolder(prompts[k].title, "");
-          if (!picked) { log(s.name + ": cancelled (" + prompts[k].title + ")", "warn"); return; }
-          params[prompts[k].id] = picked;
-        }
-        runAction(s.id, a.id, params, "button");
-      });
-      buttons.appendChild(b);
+      if (a.control) b.setAttribute("data-control", "1");
+      b.addEventListener("click", function () { pressAction(s, a, getters); });
+      (a.control ? ctl : main).appendChild(b);
     });
-    card.appendChild(buttons);
-
+    card.appendChild(main);
+    if (ctl.children.length) {
+      var cl = document.createElement("div"); cl.className = "controls-label"; cl.textContent = "While running";
+      card.appendChild(cl); card.appendChild(ctl);
+    }
     var st = document.createElement("div"); st.className = "status"; st.setAttribute("data-skill", s.id);
     card.appendChild(st);
-    host.appendChild(card);
+    view.appendChild(card);
+    apps.appendChild(view);
   });
+  document.getElementById("back").addEventListener("click", function () { showView(null); });
+}
+
+// A button press: confirm if asked, explain + pick each prompted folder, then run.
+function pressAction(s, a, getters) {
+  var params = {};
+  Object.keys(getters).forEach(function (k) { params[k] = getters[k](); });
+  var prompts = a.prompts || [];
+  var chain = a.confirm
+    ? sheet({ title: a.label + "?", text: a.confirm, ok: a.label, okStyle: a.style === "danger" ? "danger" : "primary", cancel: "Back", cancelStyle: "secondary" })
+    : Promise.resolve(true);
+  prompts.forEach(function (pr) {
+    chain = chain.then(function (go) {
+      if (!go) return false;
+      // Say what the next window is for before it opens; Cancel stops here.
+      var explained = pr.explain ? (function () {
+        var lines = pr.explain.split("\n\n");
+        return sheet({ title: lines[0], text: lines.slice(1).join("\n\n") + "\n\nClick Continue to open the folder window, or Cancel to stop." });
+      }()) : Promise.resolve(true);
+      return explained.then(function (ok) {
+        if (!ok) { log(s.name + ": cancelled before " + pr.title, "warn"); return false; }
+        var picked = chooseFolder(pr.title, "");
+        if (!picked) { log(s.name + ": cancelled (" + pr.title + ")", "warn"); return false; }
+        params[pr.id] = picked;
+        return true;
+      });
+    });
+  });
+  chain.then(function (go) { if (go) runAction(s.id, a.id, params, "button"); });
 }
 
 // ---- Test hook ----
@@ -362,6 +519,7 @@ function writeHookResult(result, id) {
     jobs = nodeRequire(path.join(extRoot, "core", "jobs.js"));
     loadSkills();
     drawSkills();
+    showView(null);
     try { fs.mkdirSync(HOOK_INBOX, { recursive: true }); } catch (e) {}
     fs.writeFileSync(INSTANCE_FILE, INSTANCE_ID, "utf-8");
     hookTimer = setInterval(pollHook, HOOK_POLL_MS);

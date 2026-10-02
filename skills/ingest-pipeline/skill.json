@@ -1,7 +1,14 @@
 {
   "id": "ingest-pipeline",
-  "name": "Ingest + proxies",
+  "name": "Ingest + Proxies",
   "description": "One button, three stages: imports a footage folder (Import footage), renders proxies for everything in its bins (Proxies), then attaches them. You are asked for two folders, one after the other: first the FOOTAGE folder to import, then the folder where the PROXIES should be saved. Each stage must pass before the next starts.",
+  "order": 1,
+  "icon": "icon.svg",
+  "tint": [
+    "#7d5cff",
+    "#4a3aff"
+  ],
+  "progress": true,
   "panel": "panel.js",
   "inputs": [],
   "actions": [
@@ -19,23 +26,27 @@
           "title": "Step 2 of 2: choose where the PROXIES should be saved",
           "explain": "Step 2 of 2: PROXIES\n\nA second folder window will open. Choose the folder where the proxy files should be saved, e.g. this project's Proxies folder.\n\nA folder tree matching the bins is created inside it. Existing proxy files are never overwritten or deleted.\n\nAfter this, import, proxy rendering and attaching run on their own."
         }
-      ]
+      ],
+      "style": "primary"
     },
     {
       "id": "pause",
       "label": "Pause",
-      "control": true
+      "control": true,
+      "style": "secondary"
     },
     {
       "id": "resume",
       "label": "Resume",
-      "control": true
+      "control": true,
+      "style": "secondary"
     },
     {
       "id": "cancel",
       "label": "Cancel",
       "control": true,
-      "confirm": "Cancel the proxy renders? Running ffmpeg/REDline jobs are killed; partial files stay on disk. Attach will not run."
+      "confirm": "Cancel the proxy renders? Running ffmpeg/REDline jobs are killed; partial files stay on disk. Attach will not run.",
+      "style": "danger"
     }
   ]
 }

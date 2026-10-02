@@ -2,7 +2,8 @@
 
 One Premiere Pro panel (Window > Extensions > Peny Toolkit) that holds all of Peny's
 automations. Each automation is a **skill**: a folder under `com.peny.toolkit/skills/`.
-The panel reads every `skills/*/skill.json` when it opens and draws a card for each.
+The panel reads every `skills/*/skill.json` when it opens and draws a home screen with
+one app tile per skill; tapping a tile opens that skill's view (< returns home).
 
 - Source (git, local only): `~/PenyToolkit/com.peny.toolkit/`
 - Installed copy: `~/Library/Application Support/Adobe/CEP/extensions/com.peny.toolkit/`
@@ -23,8 +24,16 @@ The panel reads every `skills/*/skill.json` when it opens and draws a card for e
    }
    ```
 
-   Input types: plain text (default) or `"type": "folder"` (adds a Browse button).
-   Values are passed to the skill as `params.<id>`.
+   Input types: plain text (default), `"type": "folder"` (adds a Choose button),
+   `"type": "checkbox"` (iOS-style toggle) or `"type": "segment"` (segmented control,
+   `"options": [{"label", "value"} or {"label", "text": true, "placeholder"}]`; a text option
+   shows a text box whose value is used). Values are passed to the skill as `params.<id>`.
+
+   Tile and look: `"order"` (position on the home screen), `"icon": "icon.svg"` (white
+   glyph, drawn on a rounded square), `"tint": ["#top", "#bottom"]` (icon gradient),
+   `"progress": true` (shows the proxy progress bar above the log in this view).
+   Each action can have `"style": "primary" | "secondary" | "danger"` (blue, grey glass,
+   red pill) and `"prompts"` (folders asked for on click, each with an `"explain"` sheet).
 
 3. Add `premiere.jsx` (ExtendScript, ES3: `var` only, no arrow functions, no JSON object):
 
@@ -86,7 +95,8 @@ Write `/tmp/peny-toolkit/inbox/run.json`:
 { "skill": "link-external-audio", "params": { "start": "0:41:25", "end": "0:43:14" }, "id": "t1" }
 ```
 
-(add `"action": "render"` for skills with actions). The panel runs it through the same
+(add `"action": "render"` for skills with actions; the Ingest app's action is `"ingest"`, with
+`"folder"` in params since the folder window only opens for button presses). The panel runs it through the same
 code as the button and writes `/tmp/peny-toolkit/result.json` and `result-<id>.json`.
 
 ## Skills
@@ -96,5 +106,5 @@ code as the button and writes `/tmp/peny-toolkit/result.json` and `result-<id>.j
 | Make safe copy | Duplicates the active sequence as "<name> TOOLKIT COPY", checks the original is unchanged, opens the copy | Tested 2 Oct 2026 (TEST project) |
 | Link external audio | Links each camera clip to its camera audio and the external wav under it; verifies each link; refuses non-copies | Tested 2 Oct 2026 on 3 groups (TEST project) |
 | Proxies | Renders ProRes Proxy files (ffmpeg / REDline) into a folder tree mirroring the bins, attaches/detaches them; Pause/Resume/Cancel. Never deletes or overwrites a proxy; R3D wins a name clash; same media in two bins renders once | Port of Proxy Automation. Tested 2 Oct 2026 on a 2-clip scratch bin (Canon + R3D) in the TEST project: render, attach, detach, pause/resume, cancel. Not yet tested at scale |
-| Import footage | Imports a footage folder mirroring its tree as bins (port of Master Footage Importer CEP 2.0.0). RED clips import like Media Browser: R3D only; normal-speed clips carry their sound inside the R3D, slow-motion clips (75-240 fps) have none and their separate .wav is left out unless "Also import slow-motion RED .wav" is ticked. Skips Exports/Renders/Proxies/cache folders and files already in the project (including Media Browser imports stored as /Volumes/<start-up disk>/...). Optional linked R3D+wav sequences (off) | Tested 2 Oct 2026 in the TEST project on real Raptor clips: normal clip Movie 48 kHz 4 mono, slow-mo clip Video only, no wav imported, re-run and Media Browser re-import skipped |
-| Ingest + proxies | One button: asks for the footage folder, then the proxy folder, then runs Import footage -> Proxies render -> Proxies attach on the imported bin; each stage must pass before the next; Pause/Resume/Cancel | Tested 2 Oct 2026 in the TEST project with Canon R5 MP4, Sony FX6 MXF and RED Raptor R3D (normal + slow-mo): 4 imported, 4 proxies rendered (ProRes 1280x720, audio channels matching), 4 attached and verified; re-run did nothing |
+| Ingest (import-footage) | Button runs the Ingest + proxies code path stopped after the import step (ingest-pipeline action "ingest"); Step 1 FOOTAGE sheet, then folder window. Imports a footage folder mirroring its tree as bins (port of Master Footage Importer CEP 2.0.0). RED clips import like Media Browser: R3D only; normal-speed clips carry their sound inside the R3D, slow-motion clips (75-240 fps) have none and their separate .wav is left out unless "Also import slow-motion RED .wav" is ticked. Skips Exports/Renders/Proxies/cache folders and files already in the project (including Media Browser imports stored as /Volumes/<start-up disk>/...). Optional linked R3D+wav sequences (off) | Tested 2 Oct 2026 in the TEST project on real Raptor clips: normal clip Movie 48 kHz 4 mono, slow-mo clip Video only, no wav imported, re-run and Media Browser re-import skipped |
+| Ingest + proxies | Overall proxy progress bar (x of y, %) from real render exits plus REDline/ffmpeg per-clip fraction. One button: asks for the footage folder, then the proxy folder, then runs Import footage -> Proxies render -> Proxies attach on the imported bin; each stage must pass before the next; Pause/Resume/Cancel | Tested 2 Oct 2026 in the TEST project with Canon R5 MP4, Sony FX6 MXF and RED Raptor R3D (normal + slow-mo): 4 imported, 4 proxies rendered (ProRes 1280x720, audio channels matching), 4 attached and verified; re-run did nothing |
