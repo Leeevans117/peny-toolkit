@@ -170,6 +170,9 @@ module.exports = function (api) {
   return {
     actions: {
       preview: function (params) { return run(params, false); },
+      // The Ingest app's button: the Ingest + proxies run stopped after its import step,
+      // which calls "import" below. One code path for both apps.
+      ingest: function (params) { return api.skillAction("ingest-pipeline", "ingest", params); },
       "import": function (params) { return run(params, true); },
       // Not a button: lets Ingest + proxies find the bin a folder was imported into.
       rootbin: function (params) { return api.evalSkill({ action: "rootbin", name: params.name, bootPrefixes: bootVolumePrefixes() }); }

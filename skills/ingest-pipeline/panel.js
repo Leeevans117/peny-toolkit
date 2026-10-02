@@ -1,27 +1,31 @@
 /* Ingest + proxies: Import footage -> Proxies render -> Proxies attach, in order.
  * It calls the other two skills' own actions (api.skillAction), so it behaves exactly
  * like pressing their buttons one after another, with the folders chosen once.
+ * The "ingest" action is the same run stopped after step 1 (no proxy folder, no render,
+ * no attach); the Ingest app (import-footage) uses it so both import the same way.
  * The proxy steps cover exactly the clips that come from the chosen folder, wherever
  * they sit in the project (found by media path), so footage imported earlier gets its
  * proxies too. A step that fails stops the run. */
 var path = require("path");
 
 module.exports = function (api) {
-  function step(n, name) { api.status("Step " + n + "/3: " + name + "…"); api.log("Ingest + proxies, step " + n + "/3: " + name); }
-
-  function run(params) {
+  function run(params, ingestOnly) {
+    var steps = ingestOnly ? 1 : 3, title = ingestOnly ? "Ingest" : "Ingest + proxies";
+    function step(n, name) { api.status("Step " + n + "/" + steps + ": " + name + "…"); api.log(title + ", step " + n + "/" + steps + ": " + name); }
     // No trim(): real folder names can end in a space ("Joe La Thuile FMD ").
     var folder = params.folder ? String(params.folder).replace(/(.)\/+$/, "$1") : "";
     var dest = params.dest ? String(params.dest).replace(/(.)\/+$/, "$1") : "";
-    if (!folder || !dest) return Promise.resolve({ ok: false, error: "Needs both a footage folder and a proxy folder." });
+    if (!folder || (!dest && !ingestOnly)) return Promise.resolve({ ok: false, error: ingestOnly ? "Needs a footage folder." : "Needs both a footage folder and a proxy folder." });
     var out = { folder: folder, dest: dest };
 
     step(1, "importing " + folder);
     return api.skillAction("import-footage", "import", {
-      folder: folder, redWav: params.redWav === true, linkedSequences: false
+      folder: folder, redWav: params.redWav === true || params.redWav === "true",
+      linkedSequences: params.linkedSequences === true || params.linkedSequences === "true"
     }).then(function (imp) {
       out.import = { ok: imp.ok, summary: imp.ok ? imp.summary : imp.error, project: imp.project || null };
       if (!imp.ok) throw { stop: "Import failed: " + (imp.error || "") };
+      if (ingestOnly) throw { ingested: imp }; // Ingest app: stop after step 1
       // Stages 2 and 3 work on exactly the clips from this folder, wherever they are in
       // the project (just imported, or already there from an earlier import).
       out.scope = { mediaPaths: (imp.details && imp.details.mediaPaths) || [], bootPrefixes: (imp.details && imp.details.bootPrefixes) || [] };
@@ -42,6 +46,11 @@ module.exports = function (api) {
       api.status("Done.");
       return { ok: att.ok, summary: summary, error: summary, project: out.import.project, details: out };
     }).catch(function (e) {
+      if (e && e.ingested) {
+        api.status("Done.");
+        return { ok: true, summary: "1) " + out.import.summary, project: out.import.project,
+          details: { folder: folder, import: out.import, importDetails: e.ingested.details || {} } };
+      }
       var msg = e && e.stop ? e.stop : "Stopped: " + (e && e.message ? e.message : String(e));
       api.status(msg);
       return { ok: false, error: msg, details: out };
@@ -52,5 +61,8 @@ module.exports = function (api) {
     return function () { return api.skillAction("proxy-automation", name, {}); };
   }
 
-  return { actions: { run: run, pause: control("pause"), resume: control("resume"), cancel: control("cancel") } };
+  return { actions: {
+    run: function (params) { return run(params, false); },
+    ingest: function (params) { return run(params, true); },
+    pause: control("pause"), resume: control("resume"), cancel: control("cancel") } };
 };

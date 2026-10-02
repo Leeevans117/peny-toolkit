@@ -1,16 +1,45 @@
 {
   "id": "import-footage",
-  "name": "Import footage",
-  "description": "Imports a footage folder, mirroring its folder tree as bins. Video and audio only; a RED .RDC folder becomes one clip (first .R3D), as Media Browser does: normal-speed RED clips carry their sound inside the R3D; slow-motion clips have none and their separate .wav is left out unless ticked; Exports/Renders/Proxies/cache folders are skipped; files already in the project are skipped. Optionally makes one linked R3D+wav sequence per RED clip with a wav, in a Synced bin (Premiere cannot script Merge Clips). Preview shows the plan without importing.",
+  "name": "Ingest",
+  "description": "Imports a footage folder, mirroring its folder tree as bins. Runs the same import as Ingest + Proxies, stopping before proxies. Video and audio only; a RED .RDC folder becomes one clip (first .R3D), as Media Browser does: normal-speed RED clips carry their sound inside the R3D; slow-motion clips have none and their separate .wav is left out unless switched on; Exports/Renders/Proxies/cache folders are skipped; files already in the project are skipped. Optionally makes one linked R3D+wav sequence per RED clip with a wav, in a Synced bin (Premiere cannot script Merge Clips). Preview shows the plan without importing.",
   "entry": "premiere.jsx",
   "panel": "panel.js",
   "inputs": [
-    { "id": "folder", "label": "Footage folder", "type": "folder", "placeholder": "choose the folder to import" },
-    { "id": "redWav", "label": "Also import slow-motion RED .wav", "type": "checkbox", "default": false },
-    { "id": "linkedSequences", "label": "Make linked R3D+wav sequences (needs the .wav option)", "type": "checkbox", "default": false }
+    {
+      "id": "redWav",
+      "label": "Also import slow-motion RED .wav",
+      "type": "checkbox",
+      "default": false
+    },
+    {
+      "id": "linkedSequences",
+      "label": "Make linked R3D+wav sequences (needs the .wav option)",
+      "type": "checkbox",
+      "default": false
+    }
   ],
   "actions": [
-    { "id": "preview", "label": "Preview" },
-    { "id": "import", "label": "Import footage" }
+    {
+      "id": "ingest",
+      "label": "Import footage",
+      "prompts": [
+        {
+          "id": "folder",
+          "title": "Step 1 of 1: choose the FOOTAGE folder to import",
+          "explain": "Step 1 of 1: FOOTAGE\n\nA folder window will open. Choose the folder of camera footage to bring into the open Premiere project, e.g. a shoot-day folder that holds the camera card folders.\n\nIts folder tree becomes bins in the project. Files already in the project are skipped. No proxies are made."
+        }
+      ]
+    },
+    {
+      "id": "preview",
+      "label": "Preview",
+      "prompts": [
+        {
+          "id": "folder",
+          "title": "Step 1 of 1: choose the FOOTAGE folder to import",
+          "explain": "Step 1 of 1: FOOTAGE\n\nA folder window will open. Choose the folder of camera footage to bring into the open Premiere project, e.g. a shoot-day folder that holds the camera card folders.\n\nIts folder tree becomes bins in the project. Files already in the project are skipped. No proxies are made."
+        }
+      ]
+    }
   ]
 }
