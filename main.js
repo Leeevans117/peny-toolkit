@@ -144,6 +144,30 @@ function runAction(skillId, actionId, params, source) {
   });
 }
 
+// ---- Proxy progress ----
+// Fed by the render pool (core/jobs.js via proxy-automation): real job starts/exits plus
+// each running render's own fraction. Start/finish events go to the log; ticks are
+// written to the log file at most every 3 s.
+var lastProgressFileAt = 0;
+function progressText(p) {
+  if (p.event === "none") return "Nothing to render" + (p.already ? " (" + p.already + " already have proxies)" : "");
+  return p.finished + " of " + p.total + " proxies done · " + p.percent.toFixed(p.percent % 1 ? 1 : 0) + "%";
+}
+function showProgress(p) {
+  if (!p) return;
+  var line = "Proxy progress: " + progressText(p) + " (" + p.event + ", " + p.running + " running" +
+    (p.failed ? ", " + p.failed + " failed" : "") + (p.cancelled ? ", cancelled" : "") + ")";
+  if (p.event === "tick") {
+    if (Date.now() - lastProgressFileAt >= 3000) {
+      lastProgressFileAt = Date.now();
+      try { fs.appendFileSync(LOG_FILE, stamp() + " [panel] " + line + "\n"); } catch (e) {}
+    }
+  } else {
+    log(line);
+  }
+  if (typeof drawProgress === "function") drawProgress(p);
+}
+
 // ---- UI ----
 function setButtons() {
   var bs = document.querySelectorAll("button[data-action]");
@@ -202,6 +226,7 @@ function loadSkills() {
           jobs: jobs,
           log: log,
           status: function (text) { setStatus(s, text); },
+          progress: showProgress,
           // Run another skill's action directly (used by multi-step skills).
           skillAction: function (skillId, actionId, params) {
             var other = findSkill(skillId);

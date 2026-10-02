@@ -12,6 +12,12 @@
  *    orphan ffmpeg/REDline.
  *  - stall: after a 5 min grace, an output file that has not grown in 10 min is a hung
  *    job and is killed; 4 h is a hard backstop.
+ *
+ * Progress: pool.progress() counts finished jobs (real exits, the same events as the
+ * log's Done/FAILED lines) and adds each running job's fraction when its tool reports
+ * one: REDline logs "Export Job frame complete. <n> <fraction>" per frame, ffmpeg logs
+ * "Duration:" once and "time=" as it goes. opts.onProgress gets it on every start/finish
+ * (event "job-start"/"job-done") and at most every 500 ms in between (event "tick").
  */
 
 var childProcess = require("child_process");
@@ -59,6 +65,8 @@ function JobPool(opts) {
   for (var k in DEFAULTS) this.opts[k] = opts[k] !== undefined ? opts[k] : DEFAULTS[k];
   this.log = opts.log || function () {};
   this.onChange = opts.onChange || function () {};
+  this.onProgress = opts.onProgress || function () {};
+  this.lastTickAt = 0;
   this.queue = [];
   this.running = {};
   this.done = [];
@@ -86,6 +94,43 @@ JobPool.prototype.summary = function () {
   return s;
 };
 
+// Fraction (0..1) of the current job from a chunk of its output, or null. Lines can be
+// split across chunks, so the tail of the last chunk is kept on the job.
+function parseProgress(job, chunk) {
+  var text = (job.outTail || "") + chunk, m, last = null, re;
+  job.outTail = text.slice(-300);
+  re = /Export Job frame complete\.\s+\d+\s+([\d.]+)/g; // REDline
+  while ((m = re.exec(text))) last = parseFloat(m[1]);
+  if (last !== null) return last;
+  if (!job.durationSec && (m = /Duration:\s*(\d+):(\d+):([\d.]+)/.exec(text))) {
+    job.durationSec = (+m[1]) * 3600 + (+m[2]) * 60 + parseFloat(m[3]);
+  }
+  if (job.durationSec > 0) { // ffmpeg
+    re = /time=\s*(\d+):(\d+):([\d.]+)/g;
+    while ((m = re.exec(text))) last = ((+m[1]) * 3600 + (+m[2]) * 60 + parseFloat(m[3])) / job.durationSec;
+  }
+  return last;
+}
+
+JobPool.prototype.progress = function () {
+  var s = this.summary(), self = this, partial = 0;
+  Object.keys(this.running).forEach(function (k) { partial += Math.min(Math.max(self.running[k].progress || 0, 0), 0.99); });
+  var finished = s.ok + s.failed + s.killed;
+  var fraction = s.total ? Math.min((finished + partial) / s.total, 1) : 1;
+  return { total: s.total, finished: finished, ok: s.ok, failed: s.failed + s.killed, running: s.running,
+    queued: s.queued, notStarted: s.notStarted, cancelled: s.cancelled, paused: s.paused,
+    fraction: fraction, percent: Math.floor(fraction * 1000) / 10 };
+};
+
+JobPool.prototype._emitProgress = function (event) {
+  var now = Date.now();
+  if (event === "tick" && now - this.lastTickAt < 500) return;
+  this.lastTickAt = now;
+  var p = this.progress();
+  p.event = event;
+  try { this.onProgress(p); } catch (e) {}
+};
+
 JobPool.prototype.start = function () {
   if (this.started) return;
   this.started = true;
@@ -104,6 +149,7 @@ JobPool.prototype.cancel = function () {
   this.queue = [];
   Object.keys(this.running).forEach(function (key) { self._kill(self.running[key], "cancelled"); });
   this.log("Pool cancelled.");
+  this._emitProgress("cancelled");
   this._maybeFinish();
 };
 
@@ -151,9 +197,19 @@ JobPool.prototype._launch = function (job) {
       (job.reason ? " - " + job.reason : ""), job.state === "ok" ? "ok" : "err");
     self.done.push(job);
     self.onChange();
+    self._emitProgress("job-done");
     self._fill();
   });
+  job.progress = 0;
+  [job.child.stdout, job.child.stderr].forEach(function (stream) {
+    if (!stream) return;
+    stream.on("data", function (chunk) {
+      var f = parseProgress(job, String(chunk));
+      if (f !== null && isFinite(f)) { job.progress = f; self._emitProgress("tick"); }
+    });
+  });
   this.onChange();
+  this._emitProgress("job-start");
 };
 
 JobPool.prototype._kill = function (job, reason) {
@@ -197,4 +253,4 @@ JobPool.prototype._maybeFinish = function () {
   waiters.forEach(function (w) { w(s); });
 };
 
-module.exports = { JobPool: JobPool, isCompleteMov: isCompleteMov, fileSize: fileSize };
+module.exports = { JobPool: JobPool, isCompleteMov: isCompleteMov, fileSize: fileSize, parseProgress: parseProgress };

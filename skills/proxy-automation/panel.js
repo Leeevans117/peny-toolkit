@@ -179,7 +179,11 @@ module.exports = function (api) {
           scope: res.details.scope, tally: res.details.tally, render: brief(p.render, 500), done: brief(p.done),
           shared: brief(p.shared), skipped: brief(p.skipped, 500) } };
       }
-      if (!p.render.length) return { ok: true, summary: "Nothing to render.", details: { done: brief(p.done), shared: brief(p.shared), skipped: brief(p.skipped, 500) } };
+      if (!p.render.length) {
+        api.progress({ event: "none", total: 0, finished: 0, ok: 0, failed: 0, running: 0, queued: 0, fraction: 1, percent: 100,
+          already: p.done.length });
+        return { ok: true, summary: "Nothing to render.", details: { done: brief(p.done), shared: brief(p.shared), skipped: brief(p.skipped, 500) } };
+      }
 
       pool = new jobs.JobPool({
         maxConcurrent: params.maxConcurrent || 4,
@@ -188,7 +192,10 @@ module.exports = function (api) {
           var s = pool.summary();
           api.status((s.paused ? "Paused. " : "") + s.ok + "/" + s.total + " done, " + s.running + " running, " +
             s.queued + " queued" + (s.failed + s.killed ? ", " + (s.failed + s.killed) + " failed" : ""));
-        }
+        },
+        // Drives the overall progress bar: finished renders (real process exits) plus the
+        // running renders' own fractions; see core/jobs.js.
+        onProgress: function (pr) { pr.already = p.done.length; api.progress(pr); }
       });
       var noCmd = [];
       p.render.forEach(function (r) {
@@ -199,6 +206,7 @@ module.exports = function (api) {
       });
       pool.start();
       return pool.wait().then(function (s) {
+        var pr = pool.progress(); pr.event = "finished"; pr.already = p.done.length; api.progress(pr);
         pool = null;
         var summary = s.ok + " of " + s.total + " rendered and checked complete" +
           (s.failed + s.killed ? ", " + (s.failed + s.killed) + " failed or killed" : "") +
