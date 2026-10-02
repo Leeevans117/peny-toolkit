@@ -129,6 +129,49 @@ PenyToolkit.skills["link-external-audio"] = function (params) {
   var summary = cams.length + " camera clips: " + linked.length + " linked and verified, " + already.length +
     " already linked, " + failed.length + " failed, " + skipped.length + " skipped.";
 
+  // Lee, 2 Oct 2026: once the synced wav pieces are linked, remove the whole wavs parked on
+  // the timeline (e.g. dropped after the clips for Sync). Only when every clip in range
+  // linked or was already linked, and only a clip instance on this TOOLKIT COPY timeline
+  // that: is not a camera clip, overlaps no video clip, is linked to nothing, and whose file
+  // is already linked under a camera clip. Project items and files are never touched.
+  var removed = [];
+  if (!failed.length && (linked.length || already.length)) {
+    var camSet = {}, usedPaths = {}, parked = [];
+    for (k = 0; k < cams.length; k++) camSet[String(cams[k].item.name)] = true;
+    for (t = 0; t < seq.audioTracks.numTracks; t++) {
+      var tcl = seq.audioTracks[t].clips;
+      for (c = 0; c < tcl.numItems; c++) {
+        var ai = tcl[c];
+        if (camSet[String(ai.name)] || !ai.projectItem) continue;
+        var mp = ""; try { mp = String(ai.projectItem.getMediaPath()); } catch (eM) {}
+        if (!mp) continue;
+        if (T.linkedNodeIds(ai).length) { usedPaths[mp] = true; continue; }
+        var as = T.sec(ai.start.ticks), ae = T.sec(ai.end.ticks), overVideo = false;
+        for (var vt = 0; vt < seq.videoTracks.numTracks && !overVideo; vt++) {
+          var vcl = seq.videoTracks[vt].clips;
+          for (var vi = 0; vi < vcl.numItems; vi++) {
+            if (T.sec(vcl[vi].start.ticks) < ae - 0.001 && T.sec(vcl[vi].end.ticks) > as + 0.001) { overVideo = true; break; }
+          }
+        }
+        if (!overVideo) parked.push({ item: ai, path: mp, track: t, name: String(ai.name), start: as, nodeId: String(ai.nodeId) });
+      }
+    }
+    for (k = 0; k < parked.length; k++) {
+      var pk = parked[k], pr = { name: pk.name, track: T.trackLabel("audio", pk.track), time: T.fmt(pk.start) };
+      if (!usedPaths[pk.path]) { pr.reason = "kept: this file is not linked under any camera clip"; skipped.push(pr); continue; }
+      pk.item.remove(false, false);
+      var still = false, tc2 = seq.audioTracks[pk.track].clips;
+      for (c = 0; c < tc2.numItems; c++) if (String(tc2[c].nodeId) === pk.nodeId) still = true;
+      if (still) { pr.reason = "could not remove the parked copy"; failed.push(pr); } else removed.push(pr);
+    }
+  }
+  details.removedParkedWavs = removed;
+  if (removed.length) {
+    var rl = [];
+    for (k = 0; k < removed.length; k++) rl.push(removed[k].name + " on " + removed[k].track + " at " + removed[k].time);
+    summary += " Removed " + removed.length + " parked wav copy(s) from the timeline (" + rl.join(", ") + ").";
+  }
+
   // Seen 2 Oct 2026: the wavs sat on A5 after the camera clips (not synced), so every clip
   // was skipped with "no external audio". Say where the external audio is instead.
   var noExt = 0;

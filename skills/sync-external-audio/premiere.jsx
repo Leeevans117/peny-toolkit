@@ -53,34 +53,79 @@
     return null;
   }
 
-  // A clip whose sound runs across two wav files gets two pieces. Premiere will not link
-  // two clips on one track to a camera clip (tested 2 Oct 2026: getLinkedItems 0), so the
-  // second piece goes on another audio track that is empty there; with none free it stays
-  // on the wavs' track and the clip has to be linked by hand.
-  function chooseTrack(seq, main, used, a, b) {
-    if (!used[main] && !busy(seq.audioTracks[main], a, b)) return main;
-    for (var t = 0; t < seq.audioTracks.numTracks; t++) {
-      if (t === main || used[t]) continue;
-      if (!busy(seq.audioTracks[t], a, b)) return t;
+  // A clip whose sound runs across two wav files gets two pieces on the same wireless
+  // track (Lee: wireless audio always on one track). Premiere will not link a camera clip to
+  // two clips on one track (tested 2 Oct 2026: getLinkedItems 0), so the camera clip is cut
+  // where the wav changes and each half links to its own piece (Lee, 2 Oct 2026).
+  function razorCam(seq, camName, at, frame) {
+    var res = { at: T.fmt(at) }, tv = -1, v = null, t, c;
+    for (t = 0; t < seq.videoTracks.numTracks && !v; t++) {
+      var vc = seq.videoTracks[t].clips;
+      for (c = 0; c < vc.numItems; c++) {
+        var x = vc[c];
+        if (String(x.name) === camName && T.sec(x.start.ticks) < at - frame / 2 && T.sec(x.end.ticks) > at + frame / 2) { v = x; tv = t; break; }
+      }
     }
-    return used[main] && !busy(seq.audioTracks[main], a, b) ? -2 : -1; // -2: only the shared track
+    if (!v) { res.reason = "camera clip not found across " + T.fmt(at); return res; }
+    var vStart = parseFloat(v.start.ticks), audioTracks = [];
+    for (t = 0; t < seq.audioTracks.numTracks; t++) {
+      var ac = seq.audioTracks[t].clips;
+      for (c = 0; c < ac.numItems; c++) if (String(ac[c].name) === camName && parseFloat(ac[c].start.ticks) === vStart) audioTracks.push(t);
+    }
+    app.enableQE();
+    var q = qe.project.getActiveSequence(), st = seq.getSettings(), tm = new Time();
+    tm.seconds = at;
+    var tc = tm.getFormatted(st.videoFrameRate, st.videoDisplayFormat);
+    res.timecode = tc;
+    q.getVideoTrackAt(tv).razor(tc);
+    for (var k = 0; k < audioTracks.length; k++) q.getAudioTrackAt(audioTracks[k]).razor(tc);
+    // Read back: a camera clip must now start at the cut on the video track and on each
+    // camera audio track, and both video halves must still be linked to their camera audio.
+    function halfAt(trk) {
+      for (var i = 0; i < trk.clips.numItems; i++) {
+        var y = trk.clips[i];
+        if (String(y.name) === camName && Math.abs(T.sec(y.start.ticks) - at) < frame / 2 + 0.001) return y;
+      }
+      return null;
+    }
+    var right = halfAt(seq.videoTracks[tv]), cut = 0;
+    for (k = 0; k < audioTracks.length; k++) if (halfAt(seq.audioTracks[audioTracks[k]])) cut++;
+    var left = null, vc2 = seq.videoTracks[tv].clips;
+    for (c = 0; c < vc2.numItems; c++) if (String(vc2[c].name) === camName && parseFloat(vc2[c].start.ticks) === vStart) left = vc2[c];
+    res.videoCut = !!right; res.audioCut = cut + " of " + audioTracks.length;
+    res.leftLinks = left ? T.linkedNodeIds(left).length : -1;
+    res.rightLinks = right ? T.linkedNodeIds(right).length : -1;
+    // The QE razor left the right-hand half unlinked from its camera audio (2 Oct 2026).
+    // A cut must not unlink anything (Lee), so relink that half's video + camera audio.
+    if (right && res.rightLinks < res.leftLinks) {
+      T.deselectAll(seq);
+      right.setSelected(true, true);
+      for (k = 0; k < audioTracks.length; k++) { var ah = halfAt(seq.audioTracks[audioTracks[k]]); if (ah) ah.setSelected(true, true); }
+      seq.linkSelection();
+      T.deselectAll(seq);
+      res.rightLinksBefore = res.rightLinks;
+      res.rightLinks = T.linkedNodeIds(right).length;
+      if (res.rightLinks < res.leftLinks) res.reason = "right half of the cut is linked to " + res.rightLinks + " items, left half to " + res.leftLinks;
+    }
+    if (!right || cut !== audioTracks.length) res.reason = "cut did not land on every track (video " + !!right + ", audio " + res.audioCut + ")";
+    return res;
   }
 
   function place(seq, params) {
     if (!seq.audioTracks[params.track]) return T.fail("Audio track A" + (params.track + 1) + " does not exist.");
     var fps = T.sequenceFps(seq) || 25, frame = 1 / fps;
-    var placed = [], failed = [], usedBy = {};
+    var placed = [], failed = [], pieceStarts = {};
     for (var i = 0; i < params.pieces.length; i++) {
       var p = params.pieces[i], item = S.items[p.path];
       var rec = { clip: p.clip, wav: p.path.replace(/.*\//, ""), start: T.fmt(p.start), "in": p["in"], out: p.out };
       if (!item) { rec.reason = "wav not found in the project (run Sync again)"; failed.push(rec); continue; }
-      var len = p.out - p["in"];
-      var used = usedBy[p.clip] || (usedBy[p.clip] = {});
-      var ti = chooseTrack(seq, params.track, used, p.start, p.start + len);
-      if (ti === -1) { rec.reason = "A" + (params.track + 1) + " is not empty there (" + busy(seq.audioTracks[params.track], p.start, p.start + len) + ")"; failed.push(rec); continue; }
-      if (ti === -2) { ti = params.track; rec.note = "second piece on the same track (no empty audio track free): link this clip by hand, or add an empty audio track and sync a new copy"; }
-      var trk = seq.audioTracks[ti];
-      rec.track = "A" + (ti + 1);
+      // Whole frames: Premiere rounds in/out down to a frame, which left pieces 1 frame short.
+      var len = Math.round((p.out - p["in"]) * fps) / fps;
+      p.out = p["in"] + len;
+      var trk = seq.audioTracks[params.track];
+      rec.track = "A" + (params.track + 1);
+      var clash = busy(trk, p.start, p.start + len);
+      if (clash) { rec.reason = rec.track + " is not empty there (" + clash + ")"; failed.push(rec); continue; }
       // ProjectItem.setInPoint/setOutPoint take ticks (a seconds value was ignored on 26.5.2:
       // pieces landed 1 frame long from 0). Read back before placing.
       var oldIn = null, oldOut = null;
@@ -112,11 +157,24 @@
         failed.push(rec);
         continue;
       }
-      used[ti] = true;
+      (pieceStarts[p.clip] = pieceStarts[p.clip] || []).push(T.sec(got.start.ticks));
       placed.push(rec);
     }
-    var summary = placed.length + " wav piece(s) placed and checked, " + failed.length + " failed.";
-    var r = T.ok(summary, { placed: placed, failed: failed, track: "A" + (params.track + 1) });
+    // Cut camera clips where their sound moves to the next wav file.
+    var cuts = [];
+    for (var name in pieceStarts) {
+      if (!pieceStarts.hasOwnProperty(name)) continue;
+      var starts = pieceStarts[name].sort(function (x, y) { return x - y; });
+      for (var j = 1; j < starts.length; j++) {
+        var cr = razorCam(seq, name, starts[j], frame);
+        cr.clip = name;
+        cuts.push(cr);
+        if (cr.reason) failed.push({ clip: name, start: cr.at, reason: cr.reason });
+      }
+    }
+    var summary = placed.length + " wav piece(s) placed and checked" + (cuts.length ? ", " + cuts.length + " camera clip(s) cut where the wav file changes" : "") +
+      ", " + failed.length + " failed.";
+    var r = T.ok(summary, { placed: placed, failed: failed, cuts: cuts, track: "A" + (params.track + 1) });
     if (failed.length) { r.ok = false; r.error = summary; }
     return r;
   }

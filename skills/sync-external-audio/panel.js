@@ -5,7 +5,8 @@
  *    is only synced on a confident match, otherwise it is reported and left alone.
  * 3. premiere.jsx "place": one wav piece under each synced clip on the wavs' audio track,
  *    in = measured time, length = the clip's; a clip that runs past the end of a ~1 h wav
- *    gets a second piece from the start of the next file (the recorder splits without a gap).
+ *    gets a second piece from the start of the next file (the recorder splits without a gap),
+ *    on the same track, and the camera clip is cut there so each half links to one piece.
  *    In/out are multiples of 1/64 s (Premiere sometimes refuses other values).
  * Only on a TOOLKIT COPY sequence. Nothing is deleted, moved or renamed. */
 var fs = require("fs");
@@ -113,18 +114,17 @@ module.exports = function (api) {
     }).then(function (o) {
       var d = o.placed.details || {};
       var clocks = o.synced.filter(function (s) { return s.wavStartClock !== undefined; }).map(function (s) { return s.wavStartClock; });
-      var byHand = (d.placed || []).filter(function (x) { return x.note; }).map(function (x) { return x.clip; });
       var spread = clocks.length > 1 ? (Math.max.apply(null, clocks) - Math.min.apply(null, clocks)) : null;
       var summary = o.synced.length + " of " + (o.synced.length + o.unsynced.length) + " camera clips synced by waveform; " +
         (d.placed || []).length + " wav piece(s) placed and checked, " + (d.failed || []).length + " failed; " +
         o.unsynced.length + " left for you to sync by hand." +
         (spread !== null ? " Camera clocks agree to " + spread.toFixed(1) + " s." : "") +
-        (byHand.length ? " " + byHand.length + " clip(s) cross two wav files and had no empty audio track for the second piece; link those by hand or add an empty audio track and sync a new copy." : "") +
+        ((d.cuts || []).length ? " " + d.cuts.length + " camera clip(s) cut where the wav file changes, so each half links to its own piece." : "") +
         (o.unsynced.length || (d.failed || []).length ? "" : " Now run step 3, Link.");
       api.status(summary);
       return { ok: o.placed.ok !== false, summary: summary, error: summary, details: {
         synced: o.synced, skipped: o.unsynced.map(function (u) { return { name: u.name, time: u.time !== null ? fmt(u.time) : "", reason: u.reason }; }),
-        placed: d.placed || [], failed: d.failed || [] } };
+        placed: d.placed || [], cuts: d.cuts || [], failed: d.failed || [] } };
     }).catch(function (e) {
       var msg = e && e.stop ? e.stop : "Sync stopped: " + (e && e.message ? e.message : String(e));
       api.status(msg);
