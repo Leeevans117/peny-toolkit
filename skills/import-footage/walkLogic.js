@@ -387,7 +387,16 @@ async function resolveDirectory(dirRef, listEntries, preloadedEntries) {
         });
         continue;
       }
-      const wav = findCompanionWav(w.children, audioFolders, resolved.clipBase);
+      // Peny Toolkit change (2 Oct 2026; Lee's original importer is unchanged): real
+      // RED sidecar wavs drop the chunk number (A157_D032_0326LV.wav beside
+      // A157_D032_0326LV_001.R3D), so the full-name match alone never finds them and
+      // the wav was not imported at all. Try the full name first, as before, then
+      // the name without its _NNN chunk suffix (RED clips only).
+      let wav = findCompanionWav(w.children, audioFolders, resolved.clipBase);
+      if (!wav && resolved.kind === "red") {
+        const unchunked = resolved.clipBase.replace(/_\d{3,4}$/, "");
+        if (unchunked !== resolved.clipBase) wav = findCompanionWav(w.children, audioFolders, unchunked);
+      }
       if (wav) claimed.add(wav);
       items.push({
         type: "clip",
