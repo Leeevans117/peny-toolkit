@@ -223,13 +223,17 @@
   // (QE moveToTrack(video offset, audio offset, "00:00:00:00", false), tested 3 Oct 2026 on
   // 26.5.2: moves only that piece, keeps its time and links). Everything is read back.
   function answerSpans(seq, frame) {
-    var list = markerList(seq), spans = [];
-    for (var i = 0; i < list.length; i++) {
+    // Question (Chapter) markers when there are any; otherwise every answer (Comment) marker.
+    var list = markerList(seq), spans = [], chapters = false, i;
+    for (i = 0; i < list.length; i++) if (list[i].type === "Chapter" && list[i].end - list[i].start > frame) chapters = true;
+    for (i = 0; i < list.length; i++) {
       var m = list[i];
+      if (chapters && m.type !== "Chapter") continue;
       if (m.comments && m.end - m.start > frame) spans.push({ a: m.start, b: m.end, name: m.name });
     }
     spans.sort(function (x, y) { return x.a - y.a; });
     var out = [];
+    out.byChapter = chapters;
     for (i = 0; i < spans.length; i++) {
       var p = out[out.length - 1];
       if (p && spans[i].a < p.b - frame / 2) { if (spans[i].b > p.b) p.b = spans[i].b; p.names.push(spans[i].name); }
@@ -384,22 +388,98 @@
         if (inside.length > 1 && n2 < inside.length) linkBad.push(T.fmt(spans[i].a) + " " + inside[j].track + " linked to " + n2 + " of " + inside.length);
       }
     }
+    var layers = params.layers === false ? { skipped: "turned off" } : addLayers(seq, spans, frame);
     var durAfter = T.sec(seq.end);
-    var ok = !shifted.length && !linkBad.length && !linkProblems.length && Math.abs(durAfter - durBefore) < half;
+    var ok = !shifted.length && !linkBad.length && !linkProblems.length && Math.abs(durAfter - durBefore) < half && !layers.error;
     var text = spans.length + " answers: " + cuts + " cuts, " + raised + " pieces raised one track, " + skipped.length + " skipped; links " +
       (linkBad.length || linkProblems.length ? "NOT all intact" : "intact") + "; " + (shifted.length ? shifted.length + " pieces shifted in time" : "nothing shifted in time") +
-      "; length " + T.fmt(durAfter) + (Math.abs(durAfter - durBefore) < half ? " (unchanged)." : " (was " + T.fmt(durBefore) + ").");
-    var details = { sequence: String(seq.name), answers: spans.length, joined: 0, cuts: cuts, relinkedGroups: relinked, raised: raised, raisedPiecesFound: up,
+      "; length " + T.fmt(durAfter) + (Math.abs(durAfter - durBefore) < half ? " (unchanged)" : " (was " + T.fmt(durBefore) + ")") +
+      "; " + (layers.error ? "adjustment layers: " + layers.error : layers.skipped ? "no adjustment layers (" + layers.skipped + ")" :
+        layers.placed + " adjustment layers named on " + layers.track) + ".";
+    var details = { sequence: String(seq.name), spansFrom: spans.byChapter ? "question markers" : "answer markers", layers: layers, answers: spans.length, joined: 0, cuts: cuts, relinkedGroups: relinked, raised: raised, raisedPiecesFound: up,
       skipped: skipped, unmatched: notUp, linkProblems: linkProblems.concat(linkBad), shifted: shifted,
       durationBefore: durBefore, durationAfter: durAfter, cutLogSample: cutLog.slice(0, 5) };
     for (i = 0; i < spans.length; i++) if (spans[i].names.length > 1) details.joined++;
     return ok ? T.ok(text, details) : T.fail(text, details);
   }
 
+  // The project's adjustment layer item (Lee's projects have one called "Adjustment Layer";
+  // ExtendScript cannot make one). First item that says it is an adjustment layer, else by name.
+  function findAdjustmentItem() {
+    var byName = null;
+    function walk(bin) {
+      for (var i = 0; i < bin.children.numItems; i++) {
+        var it = bin.children[i];
+        if (it.type === ProjectItemType.BIN) { var r = walk(it); if (r) return r; continue; }
+        var adj = false;
+        try { adj = it.isAdjustmentLayer && it.isAdjustmentLayer(); } catch (e) {}
+        if (adj) return it;
+        if (!byName && String(it.name) === "Adjustment Layer") byName = it;
+      }
+      return null;
+    }
+    return walk(app.project.rootItem) || byName;
+  }
+
+  // One adjustment layer per span, named after the question, on the lowest unlocked video
+  // track above every clip that is empty over the whole sequence. Only layers this makes are
+  // named; a layer already there with that name and span is left as it is.
+  function addLayers(seq, spans, frame) {
+    var half = frame / 2, item = findAdjustmentItem(), i, j;
+    if (!item) return { error: "no Adjustment Layer in the project (make one: File > New > Adjustment Layer, then run again)" };
+    var top = -1, vt = seq.videoTracks;
+    for (i = 0; i < vt.numTracks; i++) if (vt[i].clips.numItems) top = i;
+    var target = -1;
+    for (i = top + 1; i < vt.numTracks; i++) {
+      var locked = false;
+      try { locked = vt[i].isLocked(); } catch (e) {}
+      if (!locked && !vt[i].clips.numItems) { target = i; break; }
+    }
+    // A re-run: our layers are already on a track above the clips.
+    var existing = null;
+    for (i = 0; i < vt.numTracks && !existing; i++) {
+      var cl = vt[i].clips;
+      for (j = 0; j < cl.numItems; j++) {
+        var adj = false;
+        try { adj = cl[j].isAdjustmentLayer(); } catch (e2) {}
+        if (adj) { existing = i; break; }
+      }
+    }
+    if (existing !== null) target = existing;
+    if (target < 0) return { error: "no empty unlocked video track above the clips (add one and run again)" };
+    var track = vt[target], placed = 0, problems = [], names = [];
+    for (i = 0; i < spans.length; i++) {
+      var sp = spans[i], title = sp.names[0], got = null;
+      if (/^\s*topic\b/i.test(title)) title = title.replace(/^\s*topic\s*[:\-]?\s*/i, "");
+      for (j = 0; j < track.clips.numItems; j++) if (Math.abs(track.clips[j].start.seconds - sp.a) < half) got = track.clips[j];
+      if (!got) {
+        track.overwriteClip(item, sp.a);
+        for (j = 0; j < track.clips.numItems; j++) if (Math.abs(track.clips[j].start.seconds - sp.a) < half) got = track.clips[j];
+      }
+      if (!got) { problems.push(T.fmt(sp.a) + " " + title + ": layer did not appear"); continue; }
+      var isAdj = false;
+      try { isAdj = got.isAdjustmentLayer(); } catch (e3) {}
+      if (!isAdj) { problems.push(T.fmt(sp.a) + ": a non-adjustment clip is there; left alone"); continue; }
+      if (Math.abs(got.end.seconds - sp.b) >= half) {
+        var t = new Time();
+        t.ticks = String(T.ticks(sp.b));
+        try { got.end = t; } catch (e4) {}
+        if (Math.abs(got.end.seconds - sp.b) >= half) { try { got.end = sp.b; } catch (e5) {} }
+      }
+      got.name = title;
+      if (Math.abs(got.end.seconds - sp.b) >= half) problems.push(T.fmt(sp.a) + " " + title + ": ends at " + T.fmt(got.end.seconds) + " not " + T.fmt(sp.b));
+      else if (String(got.name) !== title) problems.push(T.fmt(sp.a) + ": name did not stick");
+      else { placed++; if (names.length < 5) names.push(T.fmt(sp.a) + "-" + T.fmt(sp.b) + " " + title); }
+    }
+    var r = { track: "V" + (target + 1), placed: placed, of: spans.length, problems: problems, sample: names };
+    if (problems.length) r.error = placed + " of " + spans.length + " placed on V" + (target + 1) + "; " + problems.slice(0, 3).join("; ");
+    return r;
+  }
+
   function markerList(seq) {
     var out = [], m = seq.markers.getFirstMarker();
     while (m) {
-      out.push({ start: m.start.seconds, end: m.end.seconds, name: String(m.name), comments: String(m.comments) });
+      out.push({ start: m.start.seconds, end: m.end.seconds, name: String(m.name), comments: String(m.comments), type: String(m.type) });
       m = seq.markers.getNextMarker(m);
     }
     return out;
@@ -425,9 +505,13 @@
 
   function mark(seq, params) {
     if (!T.isToolkitCopy(seq)) return T.fail("Markers only go on a TOOLKIT COPY. \"" + seq.name + "\" is not one.");
-    var want = params.answers || [], before = markerList(seq).length, added = [], failed = [];
+    var want = [], before = markerList(seq).length, added = [], failed = [], q = params.questions || [], i;
+    // Question markers (one per interviewer question, a broad title, spanning all its answers)
+    // are Chapter markers; the small answer markers are Comment markers.
+    for (i = 0; i < q.length; i++) want.push({ start: q[i].start, end: q[i].end, topic: q[i].title, outline: q[i].comment, chapter: true });
+    for (i = 0; i < (params.answers || []).length; i++) want.push(params.answers[i]);
     var fps = T.sequenceFps(seq) || 25;
-    for (var i = 0; i < want.length; i++) {
+    for (i = 0; i < want.length; i++) {
       var w = want[i];
       // Whole frames, so the marker sits exactly where Premiere shows it.
       var a = Math.round(w.start * fps) / fps, b = Math.round(w.end * fps) / fps;
@@ -437,7 +521,8 @@
         m.name = w.topic;
         m.comments = w.outline;
         setEnd(m, b);
-        added.push({ start: a, end: b, name: w.topic });
+        if (w.chapter) m.setTypeAsChapter();
+        added.push({ start: a, end: b, name: w.topic, chapter: !!w.chapter });
       } catch (e) {
         failed.push({ start: T.fmt(a), name: w.topic, error: String(e) });
       }
@@ -452,10 +537,11 @@
       if (!hit) { wrong.push({ name: added[j].name, problem: "not found after adding" }); continue; }
       if (Math.abs(hit.end - added[j].end) > 0.05) wrong.push({ name: added[j].name, problem: "ends at " + T.fmt(hit.end) + " not " + T.fmt(added[j].end) });
       else if (!hit.comments) wrong.push({ name: added[j].name, problem: "comment missing" });
+      else if (added[j].chapter && hit.type !== "Chapter") wrong.push({ name: added[j].name, problem: "type is " + hit.type + ", not Chapter" });
       else found++;
     }
-    var text = found + " of " + want.length + " answer markers added to \"" + seq.name + "\" and checked" + (wrong.length || failed.length ? "; see the list below." : ".");
-    var details = { sequence: String(seq.name), markersBefore: before, markersAfter: now.length, checked: found, failed: failed, wrong: wrong };
+    var text = found + " of " + want.length + " markers (" + q.length + " question, " + (want.length - q.length) + " answer) added to \"" + seq.name + "\" and checked" + (wrong.length || failed.length ? "; see the list below." : ".");
+    var details = { sequence: String(seq.name), markersBefore: before, markersAfter: now.length, checked: found, questions: q.length, failed: failed, wrong: wrong };
     return found === want.length ? T.ok(text, details) : T.fail(text, details);
   }
 }());

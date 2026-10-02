@@ -38,9 +38,11 @@ function prompt(lines, first, who) {
     "Return ONLY JSON: {\"answers\":[{\"start_line\":1,\"end_line\":2,\"topic\":\"...\",\"outline\":\"...\"}]}\n\nTranscript:\n" + body;
 }
 
-function ollamaGenerate(text, numCtx) {
+function ollamaGenerate(text, numCtx) { return ollamaGenerateWith(text, SCHEMA, numCtx); }
+
+function ollamaGenerateWith(text, schema, numCtx) {
   return new Promise(function (ok, no) {
-    var data = JSON.stringify({ model: MODEL, prompt: text, stream: false, format: SCHEMA, keep_alive: "10m",
+    var data = JSON.stringify({ model: MODEL, prompt: text, stream: false, format: schema, keep_alive: "10m",
       options: { temperature: 0, num_ctx: numCtx } });
     var req = http.request({ host: "127.0.0.1", port: 11434, path: "/api/generate", method: "POST",
       headers: { "content-type": "application/json", "content-length": Buffer.byteLength(data) } }, function (res) {
@@ -162,10 +164,69 @@ function splitLong(lines, list, opts, stats, progress) {
   });
 }
 
+/* Groups the answers by interviewer question. A second pass over the transcript (same
+ * overlapping windows) lists the interviewer's questions: the line each starts on, the question
+ * in a few words and a broad title for the answer it gets. Each answer belongs to the last
+ * question before it; a question spans its first answer's start to its last answer's end
+ * (the question itself stays out). Questions without an answer are dropped. */
+var Q_SCHEMA = { type: "object", required: ["questions"], properties: { questions: { type: "array", items: { type: "object",
+  required: ["line", "question", "title"], properties: { line: { type: "integer" }, question: { type: "string" }, title: { type: "string" } } } } } };
+
+function qPrompt(lines, who) {
+  var body = lines.map(function (l, i) { return (i + 1) + " [" + tc(l.a) + "] " + l.text; }).join("\n");
+  return "Below is part of a machine transcript of a sit-down interview" + (who ? " with " + who : "") + ". Speakers are NOT labelled.\n" +
+    "List EVERY question the interviewer asks, including follow-up questions that move the answer on to a new point (a typical hour has 30-40). " +
+    "Leave out only one- or two-word prompts (\"and then?\", \"why?\"), crew chat and set-up. " +
+    "For each give the line number where the question starts, the question in a few words, and a broad title for the answer it gets " +
+    "(a short phrase, capital first letter, names keep their capitals, never starting with the word \"Topic\").\n" +
+    "Return ONLY JSON: {\"questions\":[{\"line\":12,\"question\":\"...\",\"title\":\"...\"}]}\n\nTranscript:\n" + body;
+}
+
+function group(lines, answers, opts, progress) {
+  opts = opts || {};
+  var wins = windows(lines, opts.winSec || 540, opts.ovSec || 60), found = [], tokens = { prompt: 0, output: 0 }, chain = Promise.resolve();
+  wins.forEach(function (w, wi) {
+    chain = chain.then(function () {
+      if (progress) progress(wi, wins.length, w);
+      var slice = lines.slice(w.first, w.last + 1);
+      return ollamaGenerateWith(qPrompt(slice, opts.who), Q_SCHEMA, opts.numCtx || 16384).then(function (r) {
+        tokens.prompt += r.prompt_eval_count || 0; tokens.output += r.eval_count || 0;
+        var qs = [];
+        try { qs = JSON.parse(r.response).questions || []; } catch (e) {}
+        qs.forEach(function (q) {
+          var n = Math.max(1, Math.min(slice.length, q.line | 0)), t = slice[n - 1].a;
+          if (t >= w.coreA && t < w.coreB) found.push({ at: t, question: String(q.question || "").trim(), title: cleanTopic(q.title) });
+        });
+      });
+    });
+  });
+  return chain.then(function () {
+    found.sort(function (p, q) { return p.at - q.at; });
+    var groups = [];
+    answers.forEach(function (x, i) {
+      var q = null;
+      found.forEach(function (f) { if (f.at <= x.start + 0.5) q = f; });
+      var g = groups[groups.length - 1];
+      if (g && g.q === q) g.l = i; else groups.push({ q: q, f: i, l: i });
+    });
+    return {
+      questions: groups.map(function (g) {
+        var list = answers.slice(g.f, g.l + 1), title = g.q ? g.q.title : list[0].topic;
+        return { start: list[0].start, end: list[list.length - 1].end, title: title, question: g.q ? g.q.question : "",
+          comment: (g.q && g.q.question ? "Q: " + g.q.question + "\n" : "") + "Answers: " + list.map(function (x) { return x.topic; }).join("; "),
+          answers: [g.f + 1, g.l + 1] };
+      }),
+      asked: found.length,
+      tokens: tokens
+    };
+  });
+}
+
 function cleanTopic(t) {
   t = String(t || "").replace(/^\s*topic\s*[:\-–—]?\s*/i, "").trim();
+  if (!/\s/.test(t) && /[a-z][A-Z]/.test(t)) t = t.replace(/([a-z])([A-Z])/g, "$1 $2"); // "FamilyDynamicInTeam"
   if (!t) t = "Answer";
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
-module.exports = { readTranscript: readTranscript, selects: selects, windows: windows, tc: tc, MODEL: MODEL };
+module.exports = { readTranscript: readTranscript, selects: selects, group: group, windows: windows, tc: tc, MODEL: MODEL };

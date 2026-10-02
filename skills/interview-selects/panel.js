@@ -145,9 +145,9 @@ module.exports = function (api) {
     if (!inModelDir(VAD_MODEL)) missing.push(VAD_MODEL + " in " + MODEL_DIRS.join(" or "));
     if (missing.length) return Promise.resolve({ ok: false, error: "Missing on this Mac: " + missing.join("; ") + "." });
 
-    var t0 = Date.now(), scan, dir, answers, stats, server = null, times = {};
+    var t0 = Date.now(), scan, dir, answers, questions = [], stats, server = null, times = {};
     function lap(k) { times[k] = Math.round((Date.now() - t0) / 1000); }
-    if (params.reuse) return markOnly(params.reuse);
+    if (params.reuse) return markOnly(params.reuse, params);
     api.status("Reading the sequence's audio…");
     return api.evalSkill({ action: "scan", track: params.track || "" }).then(function (r) {
       if (!r.ok) throw { stop: r.error };
@@ -181,26 +181,33 @@ module.exports = function (api) {
         });
       });
     }).then(function (r) {
-      lap("answers");
       answers = r.answers; stats = r.stats;
-      fs.writeFileSync(path.join(dir, "answers.json"), JSON.stringify(r, null, 1));
-      writeCsv(path.join(dir, "answers.csv"), answers);
       if (!answers.length) throw { stop: "The model found no answers. Transcript: " + path.join(dir, "transcript.srt") };
+      api.status("Grouping the " + answers.length + " answers by question…");
+      return pipeline.group(pipeline.readTranscript(path.join(dir, "transcript.json")), answers, { who: (params.name || "").trim() }).then(function (g) {
+        questions = g.questions; stats.groupTokens = g.tokens;
+        r.questions = questions;
+        fs.writeFileSync(path.join(dir, "answers.json"), JSON.stringify(r, null, 1));
+        writeCsv(path.join(dir, "answers.csv"), answers);
+        writeCsv(path.join(dir, "questions.csv"), questions.map(function (q) { return { start: q.start, end: q.end, topic: q.title, outline: q.comment }; }));
+        lap("answers");
+      });
+    }).then(function () {
       api.status("Making a safe copy of the sequence…");
       return api.evalSkill({ action: "copy" });
     }).then(function (c) {
       if (!c.ok) throw { stop: c.error };
       api.status("Adding " + answers.length + " markers…");
-      return api.evalSkill({ action: "mark", answers: answers }).then(function (m) { return { copy: c, mark: m }; });
+      return api.evalSkill({ action: "mark", answers: answers, questions: questions }).then(function (m) { return { copy: c, mark: m }; });
     }).then(function (o) {
       lap("total");
       var d = o.mark.details || {};
-      var summary = (o.mark.ok ? "" : "Not all markers went on. ") + d.checked + " of " + answers.length + " answer markers on \"" + d.sequence + "\"" +
+      var summary = (o.mark.ok ? "" : "Not all markers went on. ") + questions.length + " questions and " + answers.length + " answers: " + d.checked + " markers on \"" + d.sequence + "\"" +
         (o.copy.details.made ? " (a new safe copy; the original is untouched)" : "") + ". Took " + fmt(times.total) +
         " (audio " + times.audio + " s, transcript " + (times.transcribe - times.audio) + " s, answers " + (times.answers - times.transcribe) + " s). List: " + path.join(dir, "answers.csv");
       api.status(summary);
       return { ok: !!o.mark.ok, summary: summary, error: summary, details: {
-        sequence: d.sequence, markers: d.checked, wrong: d.wrong, failed: d.failed, workFolder: dir, stats: stats, times: times } };
+        sequence: d.sequence, markers: d.checked, questions: questions.length, wrong: d.wrong, failed: d.failed, workFolder: dir, stats: stats, times: times } };
     }).catch(function (e) {
       var msg = e && e.stop ? e.stop : "Interview Selects stopped: " + (e && e.message ? e.message : String(e));
       api.status(msg);
@@ -213,19 +220,38 @@ module.exports = function (api) {
 
   // Puts the answers of an earlier run (its answers.json) on the active sequence's safe
   // copy without transcribing again (test hook: params.reuse = path to answers.json).
-  function markOnly(file) {
-    var answers;
-    try { answers = JSON.parse(fs.readFileSync(file, "utf-8")).answers; } catch (e) { return Promise.resolve({ ok: false, error: "Could not read " + file }); }
-    api.status("Making a safe copy of the sequence…");
-    return api.evalSkill({ action: "copy" }).then(function (c) {
+  function markOnly(file, params) {
+    var saved, answers, questions, server = null;
+    try { saved = JSON.parse(fs.readFileSync(file, "utf-8")); answers = saved.answers; questions = saved.questions; } catch (e) { return Promise.resolve({ ok: false, error: "Could not read " + file }); }
+    var grouped = Promise.resolve();
+    if (!questions || params.regroup) {
+      var ollama = firstExisting(OLLAMA);
+      api.status("Grouping the answers by question…");
+      grouped = startOllama(ollama).then(function (child) {
+        server = child;
+        return pipeline.group(pipeline.readTranscript(path.join(path.dirname(file), "transcript.json")), answers, { who: (params.name || "").trim() });
+      }).then(function (g) {
+        questions = g.questions; saved.questions = questions;
+        fs.writeFileSync(file, JSON.stringify(saved, null, 1));
+      });
+    }
+    return grouped.then(function () {
+      if (server) { try { server.kill(); } catch (eK) {} server = null; }
+      api.status("Making a safe copy of the sequence…");
+      return api.evalSkill({ action: "copy" });
+    }).then(function (c) {
       if (!c.ok) return c;
-      api.status("Adding " + answers.length + " markers…");
-      return api.evalSkill({ action: "mark", answers: answers }).then(function (m) {
+      api.status("Adding " + questions.length + " question and " + answers.length + " answer markers…");
+      return api.evalSkill({ action: "mark", answers: answers, questions: questions }).then(function (m) {
         var d = m.details || {};
-        var summary = d.checked + " of " + answers.length + " answer markers on \"" + d.sequence + "\" (from " + file + ").";
+        var summary = d.checked + " markers (" + questions.length + " questions, " + answers.length + " answers) on \"" + d.sequence + "\" (from " + file + ").";
         api.status(summary);
+        d.questionList = questions.map(function (q) { return fmt(q.start) + "-" + fmt(q.end) + " " + q.title + (q.question ? " (Q: " + q.question + ")" : ""); });
         return { ok: !!m.ok, summary: summary, error: m.error || summary, details: d };
       });
+    }).catch(function (e) {
+      if (server) { try { server.kill(); } catch (eK) {} }
+      return { ok: false, error: "Stopped: " + (e && e.message ? e.message : String(e)) };
     });
   }
 
