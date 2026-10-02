@@ -44,6 +44,7 @@ var PenyToolkit = (typeof PenyToolkit !== "undefined" && PenyToolkit) ? PenyTool
     try {
       var f = new File(T.LOG_PATH);
       f.encoding = "UTF-8";
+      f.lineFeed = "Unix";
       if (f.open("a")) { f.writeln(T.stamp() + " [jsx] " + msg); f.close(); }
     } catch (e) {}
   };
