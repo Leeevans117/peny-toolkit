@@ -97,8 +97,23 @@
     return { roots: roots };
   }
 
+  // Start-up-disk paths stored by Media Browser (/Volumes/Macintosh HD/Users/...) are
+  // compared as /Users/... (prefixes sent by the panel).
+  function normPath(p, prefixes) {
+    var s = String(p || "").replace(/\\/g, "/");
+    for (var i = 0; i < (prefixes || []).length; i++) if (s.indexOf(prefixes[i] + "/") === 0) { s = s.substring(prefixes[i].length); break; }
+    return s;
+  }
+
   function list(params) {
-    var sc = scopeRoots(params);
+    // params.mediaPaths: only the project items using these files, wherever they are
+    // (used by Ingest + proxies, so footage already in the project is covered too).
+    var only = null;
+    if (params.mediaPaths) {
+      only = {};
+      for (var mpi = 0; mpi < params.mediaPaths.length; mpi++) only[normPath(params.mediaPaths[mpi], params.bootPrefixes)] = true;
+    }
+    var sc = only ? { roots: [{ bin: app.project.rootItem, path: "" }] } : scopeRoots(params);
     if (sc.error) return T.fail(sc.error);
     P.items = {};
     var out = [], tally = { bins: 0, noMediaPath: 0, audioOnly: 0, nonVideo: 0, offline: 0 };
@@ -116,6 +131,7 @@
         var mp = "";
         try { if (typeof it.getMediaPath === "function") mp = String(it.getMediaPath() || ""); } catch (e) {}
         if (!mp) { tally.noMediaPath++; continue; }
+        if (only && !only[normPath(mp, params.bootPrefixes)]) continue;
         var ext = extOf(mp);
         if (inList(AUDIO_ONLY, ext)) { tally.audioOnly++; continue; }
         if (inList(NON_VIDEO, ext)) { tally.nonVideo++; continue; }
@@ -129,7 +145,7 @@
       }
     }
     return T.ok(out.length + " video items in scope.", { items: out, tally: tally,
-      scope: (function () { var s = []; for (var i = 0; i < sc.roots.length; i++) s.push(sc.roots[i].path || "(whole project)"); return s; }()) });
+      scope: (function () { var s = []; for (var i = 0; i < sc.roots.length; i++) s.push(only ? "(" + params.mediaPaths.length + " files from the footage folder)" : (sc.roots[i].path || "(whole project)")); return s; }()) });
   }
 
   function attach(params) {

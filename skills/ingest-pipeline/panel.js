@@ -1,16 +1,18 @@
 /* Ingest + proxies: Import footage -> Proxies render -> Proxies attach, in order.
  * It calls the other two skills' own actions (api.skillAction), so it behaves exactly
  * like pressing their buttons one after another, with the folders chosen once.
- * The proxy steps are scoped to the bin the footage folder was imported into (found by
- * nodeId, the same bin Import footage used). A step that fails stops the run. */
+ * The proxy steps cover exactly the clips that come from the chosen folder, wherever
+ * they sit in the project (found by media path), so footage imported earlier gets its
+ * proxies too. A step that fails stops the run. */
 var path = require("path");
 
 module.exports = function (api) {
   function step(n, name) { api.status("Step " + n + "/3: " + name + "…"); api.log("Ingest + proxies, step " + n + "/3: " + name); }
 
   function run(params) {
-    var folder = params.folder ? String(params.folder).trim().replace(/\/+$/, "") : "";
-    var dest = params.dest ? String(params.dest).trim() : "";
+    // No trim(): real folder names can end in a space ("Joe La Thuile FMD ").
+    var folder = params.folder ? String(params.folder).replace(/(.)\/+$/, "$1") : "";
+    var dest = params.dest ? String(params.dest).replace(/(.)\/+$/, "$1") : "";
     if (!folder || !dest) return Promise.resolve({ ok: false, error: "Needs both a footage folder and a proxy folder." });
     var out = { folder: folder, dest: dest };
 
@@ -20,19 +22,18 @@ module.exports = function (api) {
     }).then(function (imp) {
       out.import = { ok: imp.ok, summary: imp.ok ? imp.summary : imp.error, project: imp.project || null };
       if (!imp.ok) throw { stop: "Import failed: " + (imp.error || "") };
-      // Root bin of this import, by nodeId.
-      return api.skillAction("import-footage", "rootbin", { name: path.basename(folder) });
-    }).then(function (rb) {
-      if (!rb || !rb.ok) throw { stop: "Could not find the bin the footage went into: " + (rb && rb.error) };
-      out.bin = rb.details;
-      step(2, "rendering proxies for bin " + rb.details.name);
-      return api.skillAction("proxy-automation", "render", { binNodeId: rb.details.nodeId, dest: dest });
+      // Stages 2 and 3 work on exactly the clips from this folder, wherever they are in
+      // the project (just imported, or already there from an earlier import).
+      out.scope = { mediaPaths: (imp.details && imp.details.mediaPaths) || [], bootPrefixes: (imp.details && imp.details.bootPrefixes) || [] };
+      if (!out.scope.mediaPaths.length) throw { stop: "No video or audio files found in " + folder };
+      step(2, "rendering proxies for " + out.scope.mediaPaths.length + " file(s) from the footage folder");
+      return api.skillAction("proxy-automation", "render", { mediaPaths: out.scope.mediaPaths, bootPrefixes: out.scope.bootPrefixes, dest: dest });
     }).then(function (ren) {
       out.render = { ok: ren.ok, summary: ren.ok ? ren.summary : ren.error, jobs: (ren.details && ren.details.jobs) || [],
         skipped: (ren.details && ren.details.skipped) || [] };
       if (!ren.ok) throw { stop: "Proxy render did not finish cleanly: " + (ren.error || ren.summary) };
       step(3, "attaching proxies");
-      return api.skillAction("proxy-automation", "attach", { binNodeId: out.bin.nodeId, dest: dest });
+      return api.skillAction("proxy-automation", "attach", { mediaPaths: out.scope.mediaPaths, bootPrefixes: out.scope.bootPrefixes, dest: dest });
     }).then(function (att) {
       var d = att.details || {};
       out.attach = { ok: att.ok, summary: att.ok ? att.summary : att.error, attached: (d.attached || []).map(function (a) { return a.name; }),

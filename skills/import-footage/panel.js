@@ -42,7 +42,8 @@ module.exports = function (api) {
   }
 
   function run(params, doImport) {
-    var root = params.folder ? String(params.folder).trim().replace(/\/+$/, "") : "";
+    // No trim(): real folder names can end in a space ("Joe La Thuile FMD ").
+    var root = params.folder ? String(params.folder).replace(/(.)\/+$/, "$1") : "";
     if (!root) return Promise.resolve({ ok: false, error: "Choose the footage folder first." });
     try { if (!fs.statSync(root).isDirectory()) return Promise.resolve({ ok: false, error: "Not a folder: " + root }); }
     catch (e) { return Promise.resolve({ ok: false, error: "Folder does not exist: " + root }); }
@@ -64,8 +65,10 @@ module.exports = function (api) {
 
     // Duplicates within this run are dropped here; files already in the project are
     // filtered per folder in flush(), by asking Premiere (the index stays there).
+    var considered = []; // every media file this folder contributes (imported now or already there)
     function known(p) {
       if (seen[p]) return true;
+      considered.push(p);
       seen[p] = true;
       return false;
     }
@@ -159,6 +162,7 @@ module.exports = function (api) {
       var ld = (linked && linked.details) || {};
       return { ok: stats.importFailures === 0 && (!linked || linked.ok), project: project, summary: summary, error: summary, details: {
         root: root, stats: stats, bins: bins, createdBins: createdBins, failed: failures.concat(ld.failed || []), warnings: warnings,
+        mediaPaths: considered, bootPrefixes: bootPrefixes,
         linkedSequences: linked ? { made: ld.made || [], skipped: ld.skipped || [], failed: ld.failed || [] } : null } };
     });
   }

@@ -91,7 +91,8 @@ module.exports = function (api) {
   }
 
   function checkRoot(params) {
-    var root = params.dest ? String(params.dest).trim() : "";
+    // No trim(): real folder names can end in a space ("Joe La Thuile FMD ").
+    var root = params.dest ? String(params.dest).replace(/(.)\/+$/, "$1") : "";
     if (!root) return { error: "Choose the proxy folder first." };
     try { if (!fs.statSync(root).isDirectory()) return { error: "Not a folder: " + root }; }
     catch (e) { return { error: "Proxy folder does not exist: " + root }; }
@@ -99,7 +100,9 @@ module.exports = function (api) {
   }
 
   function listScope(params) {
-    return api.evalSkill({ action: "list", bin: params.bin || "", binNodeId: params.binNodeId || "" });
+    var q = { action: "list", bin: params.bin || "", binNodeId: params.binNodeId || "" };
+    if (params.mediaPaths) { q.mediaPaths = params.mediaPaths; q.bootPrefixes = params.bootPrefixes || []; }
+    return api.evalSkill(q);
   }
 
   // Works out what to render without touching anything.
