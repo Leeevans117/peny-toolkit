@@ -485,10 +485,12 @@
     return out;
   }
 
-  function findMarker(seq, start, name) {
+  // chapter: true finds only Chapter markers, false only the others, so a question and an
+  // answer with the same start and title stay two markers.
+  function findMarker(seq, start, name, chapter) {
     var m = seq.markers.getFirstMarker();
     while (m) {
-      if (Math.abs(m.start.seconds - start) < 0.02 && String(m.name) === name) return m;
+      if (Math.abs(m.start.seconds - start) < 0.02 && String(m.name) === name && (String(m.type) === "Chapter") === !!chapter) return m;
       m = seq.markers.getNextMarker(m);
     }
     return null;
@@ -517,7 +519,7 @@
       var a = Math.round(w.start * fps) / fps, b = Math.round(w.end * fps) / fps;
       try {
         // A marker this skill already put here (same start and topic) is updated, not doubled.
-        var m = findMarker(seq, a, w.topic) || seq.markers.createMarker(a);
+        var m = findMarker(seq, a, w.topic, w.chapter) || seq.markers.createMarker(a);
         m.name = w.topic;
         m.comments = w.outline;
         setEnd(m, b);
@@ -532,7 +534,7 @@
     for (var j = 0; j < added.length; j++) {
       var hit = null;
       for (var k = 0; k < now.length; k++) {
-        if (Math.abs(now[k].start - added[j].start) < 0.02 && now[k].name === added[j].name) { hit = now[k]; break; }
+        if (Math.abs(now[k].start - added[j].start) < 0.02 && now[k].name === added[j].name && (now[k].type === "Chapter") === added[j].chapter) { hit = now[k]; break; }
       }
       if (!hit) { wrong.push({ name: added[j].name, problem: "not found after adding" }); continue; }
       if (Math.abs(hit.end - added[j].end) > 0.05) wrong.push({ name: added[j].name, problem: "ends at " + T.fmt(hit.end) + " not " + T.fmt(added[j].end) });
