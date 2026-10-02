@@ -36,13 +36,17 @@ module.exports = function (api) {
   var jobs = api.jobs;
   var pool = null;
 
+  // RED proxies use --primaryDev ("Export Ungraded RWG/Log3G10"): the same flat, ungraded
+  // look Premiere shows for the raw R3D. Without it REDline applies the clip's IPP2
+  // output transform (a graded Rec.709 look), so toggling proxies changed the picture
+  // as if a LUT had been added (Lee, 2 Oct 2026).
   function encodeCommand(entry) {
     if (extOf(entry.mediaPath) === "r3d") {
       var redline = firstExisting(REDLINE);
       if (!redline) return null;
       return q(redline) + " --i " + q(entry.mediaPath) + " --o " + q(entry.nameNoExt + PROXY_INFIX) +
         " --outDir " + q(path.dirname(entry.outputPath)) + " --format 201 --res 4 --resizeX " + SCALE_W +
-        " --resizeY " + SCALE_H + " --fit 3";
+        " --resizeY " + SCALE_H + " --fit 3 --primaryDev";
     }
     var ffmpeg = firstExisting(FFMPEG);
     if (!ffmpeg) return null;
