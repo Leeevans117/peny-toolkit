@@ -14,7 +14,19 @@
 (function (T) {
   var I = T.importer = T.importer || {};
 
-  function norm(p) { return p ? String(p).replace(/\\/g, "/") : p; }
+  // Media Browser stores files on the start-up disk as /Volumes/<disk name>/Users/...,
+  // importFiles stores /Users/...; I.bootPrefixes (sent by the panel) maps the first
+  // form to the second so the same file is never imported twice.
+  I.bootPrefixes = I.bootPrefixes || [];
+  function norm(p) {
+    if (!p) return p;
+    var s = String(p).replace(/\\/g, "/");
+    for (var i = 0; i < I.bootPrefixes.length; i++) {
+      var pre = I.bootPrefixes[i];
+      if (s.indexOf(pre + "/") === 0) { s = s.substring(pre.length); break; }
+    }
+    return s;
+  }
 
   function index() {
     I.binsByName = {};
@@ -226,6 +238,7 @@
 
   T.skills["import-footage"] = function (params) {
     if (!app.project) return T.fail("No project open.");
+    if (params.bootPrefixes) I.bootPrefixes = params.bootPrefixes;
     if (params.action === "index") return index();
     if (params.action === "exists") return exists(params);
     if (params.action === "import") return doImport(params);

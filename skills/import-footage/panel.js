@@ -30,6 +30,17 @@ module.exports = function (api) {
     }).then(function (list) { return list.filter(Boolean); });
   }
 
+  // Every /Volumes/<name> that is the start-up disk itself (realpath "/").
+  function bootVolumePrefixes() {
+    var out = [];
+    try {
+      fs.readdirSync("/Volumes").forEach(function (n) {
+        try { if (fs.realpathSync(path.join("/Volumes", n)) === "/") out.push("/Volumes/" + n); } catch (e) {}
+      });
+    } catch (e) {}
+    return out;
+  }
+
   function run(params, doImport) {
     var root = params.folder ? String(params.folder).trim().replace(/\/+$/, "") : "";
     if (!root) return Promise.resolve({ ok: false, error: "Choose the footage folder first." });
@@ -44,7 +55,12 @@ module.exports = function (api) {
     var project = null;
     var pending = {};
     var redPairs = []; // RED clips with a matched wav: {chain, video, wav}
-    var makeLinked = params.linkedSequences === true || params.linkedSequences === "true";
+    // Media Browser imports a RED clip as its R3D only. Slow-motion RED clips keep their
+    // real-time sound in a separate .wav (the R3D has no audio); Media Browser leaves
+    // that out, so the toolkit does too unless "Also import slow-motion RED .wav" is on.
+    var redWav = params.redWav === true || params.redWav === "true";
+    var makeLinked = redWav && (params.linkedSequences === true || params.linkedSequences === "true");
+    var bootPrefixes = bootVolumePrefixes();
 
     // Duplicates within this run are dropped here; files already in the project are
     // filtered per folder in flush(), by asking Premiere (the index stays there).
@@ -66,7 +82,7 @@ module.exports = function (api) {
         files.forEach(function (f) { if (walkLogic.isAudioFile(f)) stats.audioImported++; else stats.videoImported++; });
         return Promise.resolve();
       }
-      return api.evalSkill({ action: "import", chain: segs, paths: files, numbered: numbered }).then(function (r) {
+      return api.evalSkill({ action: "import", chain: segs, paths: files, numbered: numbered, bootPrefixes: bootPrefixes }).then(function (r) {
         var d = r.details || {};
         (d.imported || []).forEach(function (f) { if (walkLogic.isAudioFile(f)) stats.audioImported++; else stats.videoImported++; });
         (d.createdBins || []).forEach(function (b) { createdBins.push(b); });
@@ -82,7 +98,7 @@ module.exports = function (api) {
     }
     function dropExisting(files) {
       if (!files.length) return Promise.resolve(files);
-      return api.evalSkill({ action: "exists", paths: files }).then(function (r) {
+      return api.evalSkill({ action: "exists", paths: files, bootPrefixes: bootPrefixes }).then(function (r) {
         if (!r.ok) throw new Error(r.error);
         var found = {};
         (r.details.found || []).forEach(function (f) { found[f] = true; });
@@ -101,7 +117,7 @@ module.exports = function (api) {
       });
     }
 
-    return api.evalSkill({ action: "index" }).then(function (idx) {
+    return api.evalSkill({ action: "index", bootPrefixes: bootPrefixes }).then(function (idx) {
       if (!idx.ok) throw new Error(idx.error);
       project = idx.project || null;
       api.log("Project already has " + idx.details.count + " media items; those files are skipped.");
@@ -111,7 +127,9 @@ module.exports = function (api) {
           stats.wrapperClips++;
           var clip = item.representativeFile.ref;
           if (!known(clip)) queue(segs, clip, item.asNumberedStills);
-          if (item.wav) {
+          if (item.wav && item.kind === "red" && !redWav) {
+            stats.redWavLeftOut = (stats.redWavLeftOut || 0) + 1;
+          } else if (item.wav) {
             if (!known(item.wav.ref)) queue(segs, item.wav.ref, false);
             if (item.kind === "red") redPairs.push({ chain: segs, video: clip, wav: item.wav.ref });
           }
@@ -128,14 +146,15 @@ module.exports = function (api) {
       if (!makeLinked || !redPairs.length) return null;
       if (!doImport) return { ok: true, summary: redPairs.length + " linked R3D+wav sequence(s) would be made (or skipped if already there).", details: {} };
       api.status("Making linked R3D+wav sequences…");
-      return api.evalSkill({ action: "sync", pairs: redPairs });
+      return api.evalSkill({ action: "sync", pairs: redPairs, bootPrefixes: bootPrefixes });
     }).then(function (linked) {
       if (linked) api.log("  " + (linked.ok ? linked.summary : linked.error), linked.ok ? "ok" : "err");
       var secs = ((Date.now() - started) / 1000).toFixed(1);
       var verb = doImport ? "imported" : "would import";
       var summary = (stats.videoImported + stats.audioImported) + " " + verb + " (" + stats.videoImported + " video, " +
         stats.audioImported + " audio) into " + bins.length + " bin(s); " + stats.skippedExisting + " already in the project; " +
-        stats.importFailures + " failed; " + stats.warnings + " warnings. " + secs + " s.";
+        stats.importFailures + " failed; " + stats.warnings + " warnings. " + secs + " s." +
+        (stats.redWavLeftOut ? " " + stats.redWavLeftOut + " slow-motion RED .wav file(s) left out, as Media Browser does." : "");
       if (linked) summary += " Linked sequences: " + (linked.ok ? linked.summary : linked.error);
       var ld = (linked && linked.details) || {};
       return { ok: stats.importFailures === 0 && (!linked || linked.ok), project: project, summary: summary, error: summary, details: {
