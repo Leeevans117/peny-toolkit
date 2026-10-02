@@ -6,7 +6,7 @@
   "panel": "panel.js",
   "inputs": [
     { "id": "folder", "label": "Footage folder", "type": "folder", "placeholder": "choose the folder to import" },
-    { "id": "linkedSequences", "label": "Make linked R3D+wav sequences", "type": "checkbox", "default": true }
+    { "id": "linkedSequences", "label": "Make linked R3D+wav sequences", "type": "checkbox", "default": false }
   ],
   "actions": [
     { "id": "preview", "label": "Preview" },
