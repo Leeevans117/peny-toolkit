@@ -5,6 +5,9 @@
 //             already a TOOLKIT COPY.
 //   "mark"  - adds one sequence marker per answer (name = topic, comment = outline, spanning
 //             the answer) to the active TOOLKIT COPY and reads them back.
+//   "cutraise" - on a TOOLKIT COPY: cuts every clip at each answer marker's start and end,
+//             relinks the pieces and moves each answer up one track (see cutraise below).
+//   "probe", "dump" - read-only checks used through the test hook (jsxAction).
 (function () {
   var T = PenyToolkit;
 
@@ -16,7 +19,8 @@
     if (action === "copy") return copy(seq);
     if (action === "mark") return mark(seq, params);
     if (action === "probe") return probe(seq, params);
-    if (action === "cutraise") return T.fail("Cut & raise is not written yet.");
+    if (action === "dump") return T.ok("Pieces " + params.a + "-" + params.b, { pieces: around(seq, params.a, params.b) });
+    if (action === "cutraise") return cutraise(seq, params);
     return T.fail("Unknown action: " + action);
   };
 
@@ -128,6 +132,268 @@
       if (qi && String(qi.type) === "Clip") { d.qeItem = methods(qi); break; }
     }
     return T.ok("Probe done.", d);
+  }
+
+  // Timecode of the frame nearest sec. Built from whole-frame ticks: setting Time.seconds
+  // to e.g. 324.88 formatted one frame early (5:24.84) on 26.5.2.
+  function tcOf(seq, sec) {
+    var st = seq.getSettings(), tm = new Time(), tpf = parseFloat(seq.timebase);
+    tm.ticks = String(Math.round(sec * T.TICKS_PER_SECOND / tpf) * tpf);
+    return tm.getFormatted(st.videoFrameRate, st.videoDisplayFormat);
+  }
+
+  // Every clip on an unlocked track that spans t (strictly inside) is cut at t with the QE
+  // razor, one track at a time. Returns the tracks cut.
+  function razorAt(seq, q, t, frame) {
+    var tc = tcOf(seq, t), done = [];
+    function each(tracks, kind) {
+      for (var i = 0; i < tracks.numTracks; i++) {
+        var locked = false;
+        try { locked = tracks[i].isLocked(); } catch (e) {}
+        if (locked) continue;
+        var cl = tracks[i].clips, hit = false;
+        for (var c = 0; c < cl.numItems; c++) {
+          if (cl[c].start.seconds < t - frame / 2 && cl[c].end.seconds > t + frame / 2) { hit = true; break; }
+        }
+        if (!hit) continue;
+        (kind === "V" ? q.getVideoTrackAt(i) : q.getAudioTrackAt(i)).razor(tc);
+        done.push(kind + (i + 1));
+      }
+    }
+    each(seq.videoTracks, "V");
+    each(seq.audioTracks, "A");
+    return { at: t, timecode: tc, tracks: done };
+  }
+
+  function piecesBetween(seq, a, b, frame) {
+    var out = [];
+    function each(tracks, kind) {
+      for (var i = 0; i < tracks.numTracks; i++) {
+        var cl = tracks[i].clips;
+        for (var c = 0; c < cl.numItems; c++) {
+          var x = cl[c];
+          if (Math.abs(x.start.seconds - a) < frame / 2 && Math.abs(x.end.seconds - b) < frame / 2)
+            out.push({ item: x, track: kind + (i + 1), kind: kind, index: i, name: String(x.name), nodeId: String(x.nodeId), links: T.linkedNodeIds(x).length });
+        }
+      }
+    }
+    each(seq.videoTracks, "V");
+    each(seq.audioTracks, "A");
+    return out;
+  }
+
+  function plain(list) {
+    var o = [];
+    for (var i = 0; i < list.length; i++) o.push({ track: list[i].track, name: list[i].name, nodeId: list[i].nodeId, links: list[i].links });
+    return o;
+  }
+
+  // QE item of the piece starting at a on track kind ("V"/"A") index i, or null.
+  function qeItemAt(seq, q, kind, i, a, frame) {
+    var qt = kind === "V" ? q.getVideoTrackAt(i) : q.getAudioTrackAt(i);
+    for (var k = 0; k < qt.numItems; k++) {
+      var c = qt.getItemAt(k);
+      if (c && String(c.type) === "Clip" && Math.abs(T.sec(c.start.ticks) - a) < frame / 2) return c;
+    }
+    return null;
+  }
+
+  function around(seq, a, b) {
+    var now = [];
+    function each(tracks, kind) {
+      for (var t2 = 0; t2 < tracks.numTracks; t2++) {
+        var cl = tracks[t2].clips;
+        for (var c2 = 0; c2 < cl.numItems; c2++) {
+          var x = cl[c2];
+          if (x.end.seconds > a - 1 && x.start.seconds < b + 1)
+            now.push(kind + (t2 + 1) + " " + T.fmt(x.start.seconds) + "-" + T.fmt(x.end.seconds) + " " + x.name + " links " + T.linkedNodeIds(x).length);
+        }
+      }
+    }
+    each(seq.videoTracks, "V");
+    each(seq.audioTracks, "A");
+    return now;
+  }
+
+  // ---- Cut & raise ----
+  // Answer spans = sequence markers with a comment and a length (what "mark" adds);
+  // overlapping spans are joined. Every clip on an unlocked track is cut at each span's
+  // start and end (QE razor), the pieces are relinked to their original link groups (the
+  // razor leaves right-hand halves unlinked), then each answer's pieces move up one track
+  // (QE moveToTrack(video offset, audio offset, "00:00:00:00", false), tested 3 Oct 2026 on
+  // 26.5.2: moves only that piece, keeps its time and links). Everything is read back.
+  function answerSpans(seq, frame) {
+    var list = markerList(seq), spans = [];
+    for (var i = 0; i < list.length; i++) {
+      var m = list[i];
+      if (m.comments && m.end - m.start > frame) spans.push({ a: m.start, b: m.end, name: m.name });
+    }
+    spans.sort(function (x, y) { return x.a - y.a; });
+    var out = [];
+    for (i = 0; i < spans.length; i++) {
+      var p = out[out.length - 1];
+      if (p && spans[i].a < p.b - frame / 2) { if (spans[i].b > p.b) p.b = spans[i].b; p.names.push(spans[i].name); }
+      else out.push({ a: spans[i].a, b: spans[i].b, names: [spans[i].name] });
+    }
+    return out;
+  }
+
+  function allPieces(seq) {
+    var out = [];
+    function each(tracks, kind) {
+      for (var i = 0; i < tracks.numTracks; i++) {
+        var cl = tracks[i].clips;
+        for (var c = 0; c < cl.numItems; c++) {
+          var x = cl[c];
+          out.push({ item: x, kind: kind, index: i, track: kind + (i + 1), name: String(x.name), nodeId: String(x.nodeId),
+            a: x.start.seconds, b: x.end.seconds, offset: x.inPoint.seconds - x.start.seconds });
+        }
+      }
+    }
+    each(seq.videoTracks, "V");
+    each(seq.audioTracks, "A");
+    return out;
+  }
+
+  function isLocked(seq, kind, i) {
+    var tr = kind === "V" ? seq.videoTracks[i] : seq.audioTracks[i];
+    try { return tr.isLocked(); } catch (e) { return false; }
+  }
+
+  function cutraise(seq, params) {
+    if (!T.isToolkitCopy(seq)) return T.fail("Cut & raise only works on a TOOLKIT COPY. \"" + seq.name + "\" is not one.");
+    var fps = T.sequenceFps(seq) || 25, frame = 1 / fps, half = frame / 2;
+    var spans = answerSpans(seq, frame);
+    if (!spans.length) return T.fail("No answer markers (markers with a comment and a length) on this sequence. Run Find answers first.");
+    var durBefore = T.sec(seq.end);
+    app.enableQE();
+    var q = qe.project.getActiveSequence();
+
+    // Original clips: link group and source offset, to relink and to check nothing shifted.
+    var orig = allPieces(seq), groups = [], gi, i, j, k;
+    for (i = 0; i < orig.length; i++) {
+      // getLinkedItems includes the clip itself; the group key is the sorted, de-duplicated ids.
+      var raw = T.linkedNodeIds(orig[i].item), seen = {}, ids = [];
+      raw.push(orig[i].nodeId);
+      for (j = 0; j < raw.length; j++) if (!seen[raw[j]]) { seen[raw[j]] = true; ids.push(raw[j]); }
+      ids.sort();
+      orig[i].group = ids.length > 1 ? ids.join(",") : null;
+    }
+    function origAt(track, t) {
+      for (var n = 0; n < orig.length; n++) if (orig[n].track === track && orig[n].a <= t + half && orig[n].b >= t - half) return orig[n];
+      return null;
+    }
+
+    // 1. Cuts
+    var points = [], cuts = 0, cutLog = [];
+    for (i = 0; i < spans.length; i++) { points.push(spans[i].a); points.push(spans[i].b); }
+    points.sort(function (x, y) { return x - y; });
+    for (i = 0; i < points.length; i++) {
+      if (i && points[i] - points[i - 1] < half) continue;
+      var r = razorAt(seq, q, points[i], frame);
+      cuts += r.tracks.length;
+      if (r.tracks.length) cutLog.push(r.timecode + " " + r.tracks.join(" "));
+    }
+
+    // 2. Relink: pieces with the same start and end whose original clips were one link group.
+    var pieces = allPieces(seq), relinked = 0, segs = {};
+    for (i = 0; i < pieces.length; i++) {
+      var o = origAt(pieces[i].track, (pieces[i].a + pieces[i].b) / 2);
+      if (!o || !o.group) continue;
+      var key = o.group + "|" + Math.round(pieces[i].a * fps) + "|" + Math.round(pieces[i].b * fps);
+      (segs[key] = segs[key] || []).push(pieces[i]);
+    }
+    var linkProblems = [];
+    for (var key2 in segs) {
+      if (!segs.hasOwnProperty(key2)) continue;
+      var grp = segs[key2], need = false;
+      for (j = 0; j < grp.length; j++) if (T.linkedNodeIds(grp[j].item).length < grp.length) need = true;
+      if (!need || grp.length < 2) continue;
+      T.deselectAll(seq);
+      for (j = 0; j < grp.length; j++) grp[j].item.setSelected(true, true);
+      seq.linkSelection();
+      T.deselectAll(seq);
+      relinked++;
+      for (j = 0; j < grp.length; j++) if (T.linkedNodeIds(grp[j].item).length < grp.length) {
+        linkProblems.push(grp[j].track + " " + T.fmt(grp[j].a) + " " + grp[j].name + " linked to " + T.linkedNodeIds(grp[j].item).length + " of " + grp.length);
+      }
+    }
+
+    // 3. Raise each answer's pieces one track up, top track first.
+    var raised = 0, skipped = [];
+    for (i = 0; i < spans.length; i++) {
+      var sp = spans[i], mine = [];
+      pieces = allPieces(seq);
+      for (j = 0; j < pieces.length; j++) {
+        var pc = pieces[j];
+        if (Math.abs(pc.a - sp.a) < half && Math.abs(pc.b - sp.b) < half) {
+          var og = origAt(pc.track, (pc.a + pc.b) / 2);
+          if (og && og.name === pc.name) mine.push(pc); // still on its original track = not raised yet
+        }
+      }
+      if (!mine.length) { skipped.push(T.fmt(sp.a) + " " + sp.names[0] + ": already raised or nothing under it"); continue; }
+      mine.sort(function (x, y) { return y.index - x.index; });
+      // Target must exist, be unlocked and be free over the span (or hold a piece of this answer that moves first).
+      var problem = null;
+      for (j = 0; j < mine.length && !problem; j++) {
+        var tk = mine[j].kind, ti = mine[j].index + 1, tracks = tk === "V" ? seq.videoTracks : seq.audioTracks;
+        if (ti >= tracks.numTracks) { problem = "there is no track above " + mine[j].track + " (add one and run again)"; break; }
+        if (isLocked(seq, tk, ti)) { problem = tk + (ti + 1) + " is locked"; break; }
+        var cl = tracks[ti].clips;
+        for (k = 0; k < cl.numItems; k++) {
+          var x = cl[k];
+          if (x.end.seconds > sp.a + half && x.start.seconds < sp.b - half) {
+            var movesToo = false;
+            for (var m2 = 0; m2 < mine.length; m2++) if (String(mine[m2].nodeId) === String(x.nodeId)) movesToo = true;
+            if (!movesToo) { problem = tk + (ti + 1) + " already has \"" + x.name + "\" there"; break; }
+          }
+        }
+      }
+      if (problem) { skipped.push(T.fmt(sp.a) + " " + sp.names[0] + ": " + problem); continue; }
+      for (j = 0; j < mine.length; j++) {
+        var qi = qeItemAt(seq, q, mine[j].kind, mine[j].index, sp.a, frame);
+        if (!qi) { skipped.push(T.fmt(sp.a) + " " + mine[j].track + ": QE item not found"); continue; }
+        try {
+          qi.moveToTrack(mine[j].kind === "V" ? 1 : 0, mine[j].kind === "A" ? 1 : 0, tcOf(seq, 0), false);
+          raised++;
+        } catch (e) { skipped.push(T.fmt(sp.a) + " " + mine[j].track + ": moveToTrack failed: " + e); }
+      }
+    }
+
+    // 4. Read back: every piece keeps its original source offset and stays inside the original
+    // clip's time; answer pieces sit one track up; links intact per answer; duration unchanged.
+    pieces = allPieces(seq);
+    var shifted = [], up = 0, notUp = [], linkBad = [];
+    for (i = 0; i < pieces.length; i++) {
+      var pc2 = pieces[i], inSpan = null;
+      for (j = 0; j < spans.length; j++) if (Math.abs(pc2.a - spans[j].a) < half && Math.abs(pc2.b - spans[j].b) < half) inSpan = spans[j];
+      var src = origAt(pc2.track, (pc2.a + pc2.b) / 2);
+      if (src && src.name !== pc2.name) src = null;
+      if (!src && inSpan && pc2.index > 0) {
+        var srcBelow = origAt(pc2.kind + pc2.index, (pc2.a + pc2.b) / 2); // label of the track below
+        if (srcBelow && srcBelow.name === pc2.name) { src = srcBelow; up++; }
+      }
+      if (!src) { notUp.push(pc2.track + " " + T.fmt(pc2.a) + " " + pc2.name + ": no original clip found"); continue; }
+      if (Math.abs(src.offset - pc2.offset) > half) shifted.push(pc2.track + " " + T.fmt(pc2.a) + " " + pc2.name + " moved by " + (pc2.offset - src.offset).toFixed(3) + " s");
+    }
+    for (i = 0; i < spans.length; i++) {
+      var inside = [];
+      for (j = 0; j < pieces.length; j++) if (Math.abs(pieces[j].a - spans[i].a) < half && Math.abs(pieces[j].b - spans[i].b) < half) inside.push(pieces[j]);
+      for (j = 0; j < inside.length; j++) {
+        var n2 = T.linkedNodeIds(inside[j].item).length;
+        if (inside.length > 1 && n2 < inside.length) linkBad.push(T.fmt(spans[i].a) + " " + inside[j].track + " linked to " + n2 + " of " + inside.length);
+      }
+    }
+    var durAfter = T.sec(seq.end);
+    var ok = !shifted.length && !linkBad.length && !linkProblems.length && Math.abs(durAfter - durBefore) < half;
+    var text = spans.length + " answers: " + cuts + " cuts, " + raised + " pieces raised one track, " + skipped.length + " skipped; links " +
+      (linkBad.length || linkProblems.length ? "NOT all intact" : "intact") + "; " + (shifted.length ? shifted.length + " pieces shifted in time" : "nothing shifted in time") +
+      "; length " + T.fmt(durAfter) + (Math.abs(durAfter - durBefore) < half ? " (unchanged)." : " (was " + T.fmt(durBefore) + ").");
+    var details = { sequence: String(seq.name), answers: spans.length, joined: 0, cuts: cuts, relinkedGroups: relinked, raised: raised, raisedPiecesFound: up,
+      skipped: skipped, unmatched: notUp, linkProblems: linkProblems.concat(linkBad), shifted: shifted,
+      durationBefore: durBefore, durationAfter: durAfter, cutLogSample: cutLog.slice(0, 5) };
+    for (i = 0; i < spans.length; i++) if (spans[i].names.length > 1) details.joined++;
+    return ok ? T.ok(text, details) : T.fail(text, details);
   }
 
   function markerList(seq) {
