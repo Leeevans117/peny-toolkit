@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Peny Toolkit</title>
+  <style>
+    :root { --bg: #232323; --card: #2d2d2d; --line: #3c3c3c; --text: #d6d6d6; --dim: #8f8f8f;
+            --accent: #2d8ceb; --ok: #4caf50; --err: #e5534b; --warn: #d9a03f; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 10px; background: var(--bg); color: var(--text);
+           font: 12px -apple-system, "Segoe UI", sans-serif; }
+    h1 { font-size: 13px; margin: 0 0 8px; font-weight: 600; }
+    #status { color: var(--dim); margin-bottom: 8px; }
+    .skill { background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 8px; margin-bottom: 8px; }
+    .skill p { margin: 4px 0 6px; color: var(--dim); }
+    .inputs { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+    .inputs label { flex: 1 1 120px; color: var(--dim); font-size: 11px; }
+    .inputs input { width: 100%; margin-top: 2px; padding: 4px; background: #1b1b1b; color: var(--text);
+                    border: 1px solid var(--line); border-radius: 3px; }
+    button { background: var(--accent); color: #fff; border: 0; border-radius: 3px; padding: 6px 10px; cursor: pointer; }
+    button:disabled { background: #555; cursor: default; }
+    #log { background: #1b1b1b; border: 1px solid var(--line); border-radius: 4px; padding: 6px; height: 180px;
+           overflow-y: auto; font: 11px Menlo, monospace; white-space: pre-wrap; }
+    .ok { color: var(--ok); } .err { color: var(--err); } .warn { color: var(--warn); }
+  </style>
+</head>
+<body>
+  <h1>Peny Toolkit</h1>
+  <div id="status">Loading skills…</div>
+  <div id="skills"></div>
+  <div id="log"></div>
+  <script src="main.js"></script>
+</body>
+</html>

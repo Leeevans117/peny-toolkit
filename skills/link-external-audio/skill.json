@@ -1,0 +1,10 @@
+{
+  "id": "link-external-audio",
+  "name": "Link external audio",
+  "description": "Links each camera clip to its camera audio and the external-audio piece under it. Only runs on a sequence whose name ends \"TOOLKIT COPY\". Every link is checked afterwards.",
+  "entry": "premiere.jsx",
+  "inputs": [
+    { "id": "start", "label": "From (optional)", "placeholder": "h:mm:ss, h:mm:ss:ff or seconds" },
+    { "id": "end", "label": "To (optional)", "placeholder": "h:mm:ss, h:mm:ss:ff or seconds" }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "id": "make-safe-copy",
+  "name": "Make safe copy",
+  "description": "Duplicates the active sequence as \"<name> TOOLKIT COPY\", checks the original is unchanged, and opens the copy.",
+  "entry": "premiere.jsx",
+  "inputs": []
+}

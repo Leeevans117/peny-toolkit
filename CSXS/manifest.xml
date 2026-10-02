@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- CSXS / host / Node settings copied from the working MCP for Adobe Premiere Pro
+     bridge panel (CSXS 9.0, PPRO 14.0+, Node enabled). Premiere 26.5.2 runs CEP 12. -->
+<ExtensionManifest Version="7.0" ExtensionBundleId="com.peny.toolkit" ExtensionBundleVersion="0.1.0" ExtensionBundleName="Peny Toolkit">
+  <ExtensionList>
+    <Extension Id="com.peny.toolkit.panel" Version="0.1.0"/>
+  </ExtensionList>
+  <ExecutionEnvironment>
+    <HostList>
+      <Host Name="PPRO" Version="14.0"/>
+    </HostList>
+    <LocaleList>
+      <Locale Code="All"/>
+    </LocaleList>
+    <RequiredRuntimeList>
+      <RequiredRuntime Name="CSXS" Version="9.0"/>
+    </RequiredRuntimeList>
+  </ExecutionEnvironment>
+  <DispatchInfoList>
+    <Extension Id="com.peny.toolkit.panel">
+      <DispatchInfo>
+        <Resources>
+          <MainPath>./index.html</MainPath>
+          <ScriptPath>./core/core.jsx</ScriptPath>
+          <CEFCommandLine>
+            <Parameter>--allow-file-access-from-files</Parameter>
+            <Parameter>--enable-nodejs</Parameter>
+          </CEFCommandLine>
+        </Resources>
+        <Lifecycle>
+          <AutoVisible>true</AutoVisible>
+        </Lifecycle>
+        <UI>
+          <Type>Panel</Type>
+          <Menu>Peny Toolkit</Menu>
+          <Geometry>
+            <Size>
+              <Height>480</Height>
+              <Width>360</Width>
+            </Size>
+            <MinSize>
+              <Height>240</Height>
+              <Width>280</Width>
+            </MinSize>
+          </Geometry>
+          <Icons/>
+        </UI>
+      </DispatchInfo>
+    </Extension>
+  </DispatchInfoList>
+</ExtensionManifest>
