@@ -1,0 +1,14 @@
+{
+  "id": "import-footage",
+  "name": "Import footage",
+  "description": "Imports a footage folder, mirroring its folder tree as bins. Video and audio only; a RED .RDC folder becomes one clip (first .R3D) with its wav in the same bin; Exports/Renders/Proxies/cache folders are skipped; files already in the project are skipped. Preview shows the plan without importing.",
+  "entry": "premiere.jsx",
+  "panel": "panel.js",
+  "inputs": [
+    { "id": "folder", "label": "Footage folder", "type": "folder", "placeholder": "choose the folder to import" }
+  ],
+  "actions": [
+    { "id": "preview", "label": "Preview" },
+    { "id": "import", "label": "Import footage" }
+  ]
+}

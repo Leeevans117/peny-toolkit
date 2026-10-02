@@ -227,6 +227,7 @@ var PenyToolkit = $.global.PenyToolkit;
       T.log("run " + skillId + " params=" + T.json(params || {}));
       var r = fn(params || {});
       r.skill = skillId;
+      try { r.project = app.project ? String(app.project.name) : null; } catch (eP) {}
       r.ms = new Date().getTime() - started;
       T.log("done " + skillId + " ok=" + r.ok + " " + (r.ok ? r.summary : r.error) + " (" + r.ms + " ms)");
       return T.json(r);
