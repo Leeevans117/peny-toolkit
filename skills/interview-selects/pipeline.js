@@ -146,7 +146,20 @@ function splitLong(lines, list, opts, stats, progress) {
       });
     });
   });
-  return chain.then(function () { return out; });
+  return chain.then(function () {
+    // A split can overlap its neighbour; keep the first and drop near-duplicates.
+    var res = [];
+    out.sort(function (p, q) { return p.a - q.a; }).forEach(function (x) {
+      var p = res[res.length - 1];
+      if (p && x.a < p.b - 0.5) {
+        var ov = Math.min(p.b, x.b) - x.a, shorter = Math.min(p.b - p.a, x.b - x.a);
+        if (ov > shorter * 0.5) { p.b = Math.max(p.b, x.b); return; }
+        x.a = p.b;
+      }
+      res.push(x);
+    });
+    return res;
+  });
 }
 
 function cleanTopic(t) {

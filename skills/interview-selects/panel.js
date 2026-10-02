@@ -147,6 +147,7 @@ module.exports = function (api) {
 
     var t0 = Date.now(), scan, dir, answers, stats, server = null, times = {};
     function lap(k) { times[k] = Math.round((Date.now() - t0) / 1000); }
+    if (params.reuse) return markOnly(params.reuse);
     api.status("Reading the sequence's audio…");
     return api.evalSkill({ action: "scan", track: params.track || "" }).then(function (r) {
       if (!r.ok) throw { stop: r.error };
@@ -207,6 +208,24 @@ module.exports = function (api) {
     }).then(function (result) {
       if (server) { try { server.kill(); } catch (eK) {} api.log("Stopped the Ollama server started for this run."); }
       return result;
+    });
+  }
+
+  // Puts the answers of an earlier run (its answers.json) on the active sequence's safe
+  // copy without transcribing again (test hook: params.reuse = path to answers.json).
+  function markOnly(file) {
+    var answers;
+    try { answers = JSON.parse(fs.readFileSync(file, "utf-8")).answers; } catch (e) { return Promise.resolve({ ok: false, error: "Could not read " + file }); }
+    api.status("Making a safe copy of the sequence…");
+    return api.evalSkill({ action: "copy" }).then(function (c) {
+      if (!c.ok) return c;
+      api.status("Adding " + answers.length + " markers…");
+      return api.evalSkill({ action: "mark", answers: answers }).then(function (m) {
+        var d = m.details || {};
+        var summary = d.checked + " of " + answers.length + " answer markers on \"" + d.sequence + "\" (from " + file + ").";
+        api.status(summary);
+        return { ok: !!m.ok, summary: summary, error: m.error || summary, details: d };
+      });
     });
   }
 

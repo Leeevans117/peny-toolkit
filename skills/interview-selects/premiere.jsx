@@ -105,6 +105,24 @@
     return out;
   }
 
+  function findMarker(seq, start, name) {
+    var m = seq.markers.getFirstMarker();
+    while (m) {
+      if (Math.abs(m.start.seconds - start) < 0.02 && String(m.name) === name) return m;
+      m = seq.markers.getNextMarker(m);
+    }
+    return null;
+  }
+
+  // Marker.end takes seconds as a number (a Time object gives "Illegal Parameter type",
+  // seen 2 Oct 2026); ticks string as a fallback.
+  function setEnd(m, sec) {
+    try { m.end = sec; } catch (e) {}
+    if (Math.abs(m.end.seconds - sec) < 0.02) return;
+    try { m.end = String(T.ticks(sec)); } catch (e2) {}
+    if (Math.abs(m.end.seconds - sec) >= 0.02) throw new Error("end could not be set (reads " + T.fmt(m.end.seconds) + ")");
+  }
+
   function mark(seq, params) {
     if (!T.isToolkitCopy(seq)) return T.fail("Markers only go on a TOOLKIT COPY. \"" + seq.name + "\" is not one.");
     var want = params.answers || [], before = markerList(seq).length, added = [], failed = [];
@@ -114,12 +132,11 @@
       // Whole frames, so the marker sits exactly where Premiere shows it.
       var a = Math.round(w.start * fps) / fps, b = Math.round(w.end * fps) / fps;
       try {
-        var m = seq.markers.createMarker(a);
+        // A marker this skill already put here (same start and topic) is updated, not doubled.
+        var m = findMarker(seq, a, w.topic) || seq.markers.createMarker(a);
         m.name = w.topic;
         m.comments = w.outline;
-        var t = new Time();
-        t.seconds = b;
-        m.end = t;
+        setEnd(m, b);
         added.push({ start: a, end: b, name: w.topic });
       } catch (e) {
         failed.push({ start: T.fmt(a), name: w.topic, error: String(e) });
