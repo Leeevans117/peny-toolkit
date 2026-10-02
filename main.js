@@ -217,9 +217,17 @@ function drawSkills() {
       var row = document.createElement("div"); row.className = "row";
       var input = document.createElement("input");
       input.setAttribute("data-input", inp.id);
-      input.placeholder = inp.placeholder || "";
-      input.value = recall(s, inp.id);
-      input.addEventListener("change", function () { remember(s, inp.id, input.value); });
+      if (inp.type === "checkbox") {
+        input.type = "checkbox";
+        var saved = recall(s, inp.id);
+        input.checked = saved === "" ? !!inp["default"] : saved === "true";
+        input.addEventListener("change", function () { remember(s, inp.id, input.checked ? "true" : "false"); });
+        row.className = "row check";
+      } else {
+        input.placeholder = inp.placeholder || "";
+        input.value = recall(s, inp.id);
+        input.addEventListener("change", function () { remember(s, inp.id, input.value); });
+      }
       row.appendChild(input);
       if (inp.type === "folder") {
         var b = document.createElement("button");
@@ -245,7 +253,7 @@ function drawSkills() {
         if (a.confirm && !window.confirm(a.confirm)) return;
         var params = {};
         var ins = card.querySelectorAll("input[data-input]");
-        for (var i = 0; i < ins.length; i++) params[ins[i].getAttribute("data-input")] = ins[i].value;
+        for (var i = 0; i < ins.length; i++) params[ins[i].getAttribute("data-input")] = ins[i].type === "checkbox" ? ins[i].checked : ins[i].value;
         runAction(s.id, a.id, params, "button");
       });
       buttons.appendChild(b);

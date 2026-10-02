@@ -43,6 +43,8 @@ module.exports = function (api) {
     var seen = {};
     var project = null;
     var pending = {};
+    var redPairs = []; // RED clips with a matched wav: {chain, video, wav}
+    var makeLinked = params.linkedSequences === true || params.linkedSequences === "true";
 
     // Duplicates within this run are dropped here; files already in the project are
     // filtered per folder in flush(), by asking Premiere (the index stays there).
@@ -109,7 +111,10 @@ module.exports = function (api) {
           stats.wrapperClips++;
           var clip = item.representativeFile.ref;
           if (!known(clip)) queue(segs, clip, item.asNumberedStills);
-          if (item.wav) { if (!known(item.wav.ref)) queue(segs, item.wav.ref, false); }
+          if (item.wav) {
+            if (!known(item.wav.ref)) queue(segs, item.wav.ref, false);
+            if (item.kind === "red") redPairs.push({ chain: segs, video: clip, wav: item.wav.ref });
+          }
           else stats.clipsWithNoWav++;
         } else if (item.type === "flat") {
           stats.flatItems++;
@@ -120,13 +125,22 @@ module.exports = function (api) {
         onDirDone: function (segs) { return flush(segs); }
       });
     }).then(function () {
+      if (!makeLinked || !redPairs.length) return null;
+      if (!doImport) return { ok: true, summary: redPairs.length + " linked R3D+wav sequence(s) would be made (or skipped if already there).", details: {} };
+      api.status("Making linked R3D+wav sequences…");
+      return api.evalSkill({ action: "sync", pairs: redPairs });
+    }).then(function (linked) {
+      if (linked) api.log("  " + (linked.ok ? linked.summary : linked.error), linked.ok ? "ok" : "err");
       var secs = ((Date.now() - started) / 1000).toFixed(1);
       var verb = doImport ? "imported" : "would import";
       var summary = (stats.videoImported + stats.audioImported) + " " + verb + " (" + stats.videoImported + " video, " +
         stats.audioImported + " audio) into " + bins.length + " bin(s); " + stats.skippedExisting + " already in the project; " +
         stats.importFailures + " failed; " + stats.warnings + " warnings. " + secs + " s.";
-      return { ok: stats.importFailures === 0, project: project, summary: summary, error: summary, details: {
-        root: root, stats: stats, bins: bins, createdBins: createdBins, failed: failures, warnings: warnings } };
+      if (linked) summary += " Linked sequences: " + (linked.ok ? linked.summary : linked.error);
+      var ld = (linked && linked.details) || {};
+      return { ok: stats.importFailures === 0 && (!linked || linked.ok), project: project, summary: summary, error: summary, details: {
+        root: root, stats: stats, bins: bins, createdBins: createdBins, failed: failures.concat(ld.failed || []), warnings: warnings,
+        linkedSequences: linked ? { made: ld.made || [], skipped: ld.skipped || [], failed: ld.failed || [] } : null } };
     });
   }
 

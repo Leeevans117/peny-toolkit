@@ -109,11 +109,127 @@
     return failed.length ? { ok: false, error: s, summary: s, details: d } : T.ok(s, d);
   }
 
+  // ---- Linked R3D + wav sequences ----
+  // Premiere cannot script Merge Clips (checked on 26.5.2: only isMergedClip exists), so
+  // for each RED clip with a matched wav this builds one sequence, named exactly after
+  // the clip, in a "Synced" bin inside the card bin: the R3D (with its own audio) from
+  // createNewSequenceFromClips, the wav on the first empty audio track placed by
+  // timecode (start timecode of each item; falls back to lining up the starts when a
+  // timecode is missing), then everything linked and the link read back.
+  function findByMedia(bin, mediaPath) {
+    var want = norm(mediaPath);
+    for (var i = 0; i < bin.children.numItems; i++) {
+      var ch = bin.children[i];
+      try { if (norm(ch.getMediaPath()) === want) return ch; } catch (e) {}
+    }
+    return null;
+  }
+  function childByName(bin, name) {
+    for (var i = 0; i < bin.children.numItems; i++) if (bin.children[i].name === name) return bin.children[i];
+    return null;
+  }
+  function sequenceForItem(item) {
+    var seqs = app.project.sequences;
+    for (var i = 0; i < seqs.numSequences; i++) {
+      try { if (seqs[i].projectItem && String(seqs[i].projectItem.nodeId) === String(item.nodeId)) return seqs[i]; } catch (e) {}
+    }
+    return null;
+  }
+  function tcSeconds(item) { try { var t = item.startTime(); return t ? parseFloat(t.seconds) : NaN; } catch (e) { return NaN; } }
+
+  function syncPair(pair) {
+    var rec = { name: null, chain: pair.chain.join(" / ") };
+    var createdBins = [];
+    if (!I.binsByName) index();
+    var card = resolveChain(pair.chain, createdBins);
+    var r3d = findByMedia(card, pair.video), wav = findByMedia(card, pair.wav);
+    if (!r3d || !wav) { rec.reason = "R3D or wav not found in bin " + rec.chain; return { ok: false, rec: rec }; }
+    rec.name = String(r3d.name);
+    var synced = childBin(card, "Synced").bin;
+    // Premiere drops the extension when it names the sequence (A157_D032_0326LV_001.R3D
+    // becomes A157_D032_0326LV_001), so look for both names before making another.
+    var bare = rec.name.replace(/\.[^.]+$/, "");
+    if (childByName(synced, rec.name) || childByName(synced, bare)) { rec.reason = "a sequence of this name is already in Synced"; return { ok: true, skipped: true, rec: rec }; }
+
+    var seq = app.project.createNewSequenceFromClips(rec.name, [r3d], synced);
+    if (!seq) {
+      var made = childByName(synced, rec.name);
+      seq = made ? sequenceForItem(made) : null;
+    }
+    if (!seq) { rec.reason = "createNewSequenceFromClips made no sequence"; return { ok: false, rec: rec }; }
+    rec.sequenceId = String(seq.sequenceID);
+    rec.sequenceName = String(seq.name);
+    app.project.openSequence(seq.sequenceID);
+    var active = app.project.activeSequence;
+    if (!active || String(active.sequenceID) !== rec.sequenceId) { rec.reason = "could not make the new sequence active"; return { ok: false, rec: rec }; }
+
+    var v = seq.videoTracks[0].clips.numItems ? seq.videoTracks[0].clips[0] : null;
+    if (!v) { rec.reason = "new sequence has no video clip"; return { ok: false, rec: rec }; }
+    var r3dTc = tcSeconds(r3d), wavTc = tcSeconds(wav);
+    var offset = 0;
+    if (!isNaN(r3dTc) && !isNaN(wavTc) && (r3dTc > 0 || wavTc > 0)) { offset = wavTc - r3dTc; rec.aligned = "timecode"; }
+    else rec.aligned = "start (no timecode)";
+    var pos = T.sec(v.start.ticks) + offset;
+    if (pos < 0) { rec.aligned = "start (wav starts " + (-offset).toFixed(3) + " s before the video)"; pos = T.sec(v.start.ticks); }
+    rec.r3dTc = r3dTc; rec.wavTc = wavTc; rec.offsetSeconds = offset;
+
+    var target = -1;
+    for (var t = 0; t < seq.audioTracks.numTracks; t++) if (seq.audioTracks[t].clips.numItems === 0) { target = t; break; }
+    rec.audioTracks = seq.audioTracks.numTracks;
+    if (target === -1) { rec.reason = "no empty audio track for the wav (" + seq.audioTracks.numTracks + " tracks, all used)"; return { ok: false, rec: rec }; }
+    seq.audioTracks[target].overwriteClip(wav, pos);
+    var w = null;
+    for (var c = 0; c < seq.audioTracks[target].clips.numItems; c++) {
+      var ci = seq.audioTracks[target].clips[c];
+      try { if (String(ci.projectItem.nodeId) === String(wav.nodeId)) w = ci; } catch (e) {}
+    }
+    if (!w) { rec.reason = "wav did not land on A" + (target + 1); return { ok: false, rec: rec }; }
+    rec.wavTrack = "A" + (target + 1);
+    var fps = T.sequenceFps(seq) || 25;
+    rec.offsetFrames = Math.round((T.sec(w.start.ticks) - T.sec(v.start.ticks) - offset) * fps);
+
+    // Link: select every clip in the new sequence, unlink (the R3D video and its own
+    // audio arrive already linked, and linkSelection will not add to an existing
+    // group), then link them all as one group.
+    var all = [], k;
+    T.deselectAll(seq);
+    for (t = 0; t < seq.videoTracks.numTracks; t++) for (k = 0; k < seq.videoTracks[t].clips.numItems; k++) all.push(seq.videoTracks[t].clips[k]);
+    for (t = 0; t < seq.audioTracks.numTracks; t++) for (k = 0; k < seq.audioTracks[t].clips.numItems; k++) all.push(seq.audioTracks[t].clips[k]);
+    for (k = 0; k < all.length; k++) all[k].setSelected(true, true);
+    seq.unlinkSelection();
+    seq.linkSelection();
+    T.deselectAll(seq);
+    var ids = T.linkedNodeIds(v), have = {}, missing = 0;
+    have[String(v.nodeId)] = true;
+    for (k = 0; k < ids.length; k++) have[ids[k]] = true;
+    for (k = 0; k < all.length; k++) if (!have[String(all[k].nodeId)]) missing++;
+    rec.clipsInSequence = all.length;
+    rec.linked = all.length - missing;
+    if (missing) { rec.reason = missing + " of " + all.length + " clips not in the link group after linkSelection"; return { ok: false, rec: rec }; }
+    return { ok: true, rec: rec };
+  }
+
+  function sync(params) {
+    var pairs = params.pairs || [], done = [], skipped = [], failed = [];
+    for (var i = 0; i < pairs.length; i++) {
+      var r;
+      try { r = syncPair(pairs[i]); } catch (e) { r = { ok: false, rec: { name: pairs[i].video, reason: String(e) + (e.line ? " (line " + e.line + ")" : "") } }; }
+      // Plain if/else: a nested ?: here put skipped pairs in the "made" list.
+      if (r.skipped) skipped.push(r.rec);
+      else if (r.ok) done.push(r.rec);
+      else failed.push(r.rec);
+    }
+    var s = done.length + " linked R3D+wav sequence(s) made and verified, " + skipped.length + " already there, " + failed.length + " failed.";
+    var d = { made: done, skipped: skipped, failed: failed };
+    return failed.length ? { ok: false, error: s, summary: s, details: d } : T.ok(s, d);
+  }
+
   T.skills["import-footage"] = function (params) {
     if (!app.project) return T.fail("No project open.");
     if (params.action === "index") return index();
     if (params.action === "exists") return exists(params);
     if (params.action === "import") return doImport(params);
+    if (params.action === "sync") return sync(params);
     return T.fail("Unknown import action: " + params.action);
   };
 }(PenyToolkit));
