@@ -40,13 +40,16 @@ module.exports = function (api) {
   // look Premiere shows for the raw R3D. Without it REDline applies the clip's IPP2
   // output transform (a graded Rec.709 look), so toggling proxies changed the picture
   // as if a LUT had been added (Lee, 2 Oct 2026).
+  // --useMeta: develop at the clip's shot white balance/tint/ISO as Premiere does. Without it
+  // REDline uses its defaults (5600K, tint 0, ISO 320), so a 4800K clip's proxy came out warm
+  // (Lee, 2 Oct 2026). --metaIgnoreFrameGuide keeps in-camera frame guides from cropping.
   function encodeCommand(entry) {
     if (extOf(entry.mediaPath) === "r3d") {
       var redline = firstExisting(REDLINE);
       if (!redline) return null;
       return q(redline) + " --i " + q(entry.mediaPath) + " --o " + q(entry.nameNoExt + PROXY_INFIX) +
         " --outDir " + q(path.dirname(entry.outputPath)) + " --format 201 --res 4 --resizeX " + SCALE_W +
-        " --resizeY " + SCALE_H + " --fit 3 --primaryDev";
+        " --resizeY " + SCALE_H + " --fit 3 --primaryDev --useMeta --metaIgnoreFrameGuide";
     }
     var ffmpeg = firstExisting(FFMPEG);
     if (!ffmpeg) return null;
