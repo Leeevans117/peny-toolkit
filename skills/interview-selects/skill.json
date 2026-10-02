@@ -1,0 +1,39 @@
+{
+  "id": "interview-selects",
+  "name": "Interviews",
+  "description": "Transcribes the active interview sequence on this Mac (whisper), finds each answer with the local AI model (Ollama, no internet) and adds one marker per answer to a safe copy: the marker name is the topic, the comment a short outline, and it spans the answer. Takes about 15 minutes for an hour of interview.",
+  "order": 6,
+  "icon": "icon.svg",
+  "tint": [
+    "#1c1c1e",
+    "#000000"
+  ],
+  "entry": "premiere.jsx",
+  "panel": "panel.js",
+  "inputs": [
+    {
+      "id": "name",
+      "label": "Interviewee (optional)",
+      "placeholder": "e.g. Tahnee, used in the outlines"
+    },
+    {
+      "id": "track",
+      "label": "Audio track (optional)",
+      "placeholder": "e.g. A1; empty = all unmuted tracks"
+    }
+  ],
+  "actions": [
+    {
+      "id": "find",
+      "label": "Find answers and add markers",
+      "style": "primary",
+      "confirm": "Transcribe this sequence and find the answers on this Mac? It takes about 15 minutes for an hour of interview. A safe copy of the sequence is made and the markers go on the copy; the original is not changed."
+    },
+    {
+      "id": "cancel",
+      "label": "Cancel",
+      "control": true,
+      "style": "danger"
+    }
+  ]
+}
