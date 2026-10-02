@@ -77,7 +77,7 @@ The panel reads every `skills/*/skill.json` when it opens and draws a card for e
 
 ## Testing without clicking
 
-Write `/tmp/peny-toolkit/run.json`:
+Write `/tmp/peny-toolkit/inbox/run.json`:
 
 ```json
 { "skill": "link-external-audio", "params": { "start": "0:41:25", "end": "0:43:14" }, "id": "t1" }

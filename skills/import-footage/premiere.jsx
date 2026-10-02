@@ -7,7 +7,9 @@
 // value, and only files that are really missing get a one-at-a-time retry (the
 // original retried every file whenever importFiles returned false, which can import
 // duplicates if that return is wrong). Nothing is deleted, renamed or moved.
-//   action "index"  -> every media path already in the project
+//   action "index"  -> builds the project's media-path index (kept in Premiere; returns a count)
+//   action "exists" -> params.paths: returns the ones already in the project (small replies only;
+//                      a 600 KB reply with every path was lost on the way back to the panel)
 //   action "import" -> params.chain [bin names], params.paths [files], params.numbered
 (function (T) {
   var I = T.importer = T.importer || {};
@@ -17,7 +19,8 @@
   function index() {
     I.binsByName = {};
     I.binCache = {};
-    var paths = [], stack = [app.project.rootItem];
+    I.pathIndex = {};
+    var count = 0, stack = [app.project.rootItem];
     while (stack.length) {
       var bin = stack.pop();
       for (var i = 0; i < bin.children.numItems; i++) {
@@ -26,11 +29,18 @@
           (I.binsByName[ch.name] = I.binsByName[ch.name] || []).push(ch);
           stack.push(ch);
         } else {
-          try { var mp = ch.getMediaPath ? ch.getMediaPath() : null; if (mp) paths.push(norm(mp)); } catch (e) {}
+          try { var mp = ch.getMediaPath ? ch.getMediaPath() : null; if (mp) { I.pathIndex[norm(mp)] = true; count++; } } catch (e) {}
         }
       }
     }
-    return T.ok(paths.length + " media items already in the project.", { paths: paths });
+    return T.ok(count + " media items already in the project.", { count: count });
+  }
+
+  function exists(params) {
+    if (!I.pathIndex) index();
+    var paths = params.paths || [], found = [];
+    for (var i = 0; i < paths.length; i++) if (I.pathIndex[norm(paths[i])]) found.push(paths[i]);
+    return T.ok(found.length + " of " + paths.length + " already in the project.", { found: found });
   }
 
   function childBin(parent, name) {
@@ -88,6 +98,7 @@
     var imported = [], failed = [], already = [];
     for (i = 0; i < paths.length; i++) {
       var p = norm(paths[i]);
+      if (have[p] && I.pathIndex) I.pathIndex[p] = true;
       if (before[p]) already.push(paths[i]);
       else if (have[p]) imported.push(paths[i]);
       else failed.push(paths[i]);
@@ -101,6 +112,7 @@
   T.skills["import-footage"] = function (params) {
     if (!app.project) return T.fail("No project open.");
     if (params.action === "index") return index();
+    if (params.action === "exists") return exists(params);
     if (params.action === "import") return doImport(params);
     return T.fail("Unknown import action: " + params.action);
   };

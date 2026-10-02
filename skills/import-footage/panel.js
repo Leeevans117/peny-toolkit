@@ -16,13 +16,17 @@ var path = require("path");
 module.exports = function (api) {
   var walkLogic = require(path.join(api.skillDir, "walkLogic.js"));
 
+  // Callback-style fs wrapped in this page's Promise: after a CEP page reload,
+  // fs.promises calls never resolve (seen 2 Oct 2026), callbacks still do.
+  function readdir(p) { return new Promise(function (ok, no) { fs.readdir(p, function (e, n) { if (e) no(e); else ok(n); }); }); }
+  function stat(p) { return new Promise(function (ok) { fs.stat(p, function (e, st) { ok(e ? null : st); }); }); }
+
   function listEntries(dirPath) {
-    return fs.promises.readdir(dirPath).then(function (names) {
+    return readdir(dirPath).then(function (names) {
       return Promise.all(names.map(function (name) {
         var full = path.join(dirPath, name);
-        return fs.promises.stat(full).then(function (st) { return { name: name, isDir: st.isDirectory(), ref: full }; },
-          function () { return null; }); // broken link or no permission: skip, as the original did
-      }));
+        return stat(full).then(function (st) { return st ? { name: name, isDir: st.isDirectory(), ref: full } : null; });
+      })); // broken links / no permission come back null and are skipped, as in the original
     }).then(function (list) { return list.filter(Boolean); });
   }
 
@@ -36,11 +40,14 @@ module.exports = function (api) {
     var stats = { wrapperClips: 0, flatItems: 0, videoImported: 0, audioImported: 0, skippedExisting: 0,
       clipsWithNoWav: 0, importFailures: 0, warnings: 0 };
     var bins = [], warnings = [], failures = [], createdBins = [];
-    var existing = {}, seen = {};
+    var seen = {};
+    var project = null;
     var pending = {};
 
+    // Duplicates within this run are dropped here; files already in the project are
+    // filtered per folder in flush(), by asking Premiere (the index stays there).
     function known(p) {
-      if (existing[p] || seen[p]) return true;
+      if (seen[p]) return true;
       seen[p] = true;
       return false;
     }
@@ -71,28 +78,42 @@ module.exports = function (api) {
         api.status("Importing… " + (stats.videoImported + stats.audioImported) + " imported so far");
       });
     }
+    function dropExisting(files) {
+      if (!files.length) return Promise.resolve(files);
+      return api.evalSkill({ action: "exists", paths: files }).then(function (r) {
+        if (!r.ok) throw new Error(r.error);
+        var found = {};
+        (r.details.found || []).forEach(function (f) { found[f] = true; });
+        stats.skippedExisting += (r.details.found || []).length;
+        return files.filter(function (f) { return !found[f]; });
+      });
+    }
     function flush(segs) {
       var key = JSON.stringify(segs), e = pending[key];
       if (!e) return Promise.resolve();
       delete pending[key];
-      return importGroup(segs, e.plain, false).then(function () { return importGroup(segs, e.numbered, true); });
+      return dropExisting(e.plain).then(function (plain) {
+        return importGroup(segs, plain, false);
+      }).then(function () { return dropExisting(e.numbered); }).then(function (numbered) {
+        return importGroup(segs, numbered, true);
+      });
     }
 
     return api.evalSkill({ action: "index" }).then(function (idx) {
       if (!idx.ok) throw new Error(idx.error);
-      (idx.details.paths || []).forEach(function (p) { existing[p] = true; });
-      api.log("Project already has " + idx.details.paths.length + " media items; those files are skipped.");
+      project = idx.project || null;
+      api.log("Project already has " + idx.details.count + " media items; those files are skipped.");
       return walkLogic.walkTree(root, path.basename(root), listEntries, function (item, segs) {
         if (item.type === "warning") { stats.warnings++; warnings.push(item.message); api.log("  WARN: " + item.message, "warn"); return; }
         if (item.type === "clip") {
           stats.wrapperClips++;
           var clip = item.representativeFile.ref;
-          if (known(clip)) stats.skippedExisting++; else queue(segs, clip, item.asNumberedStills);
-          if (item.wav) { if (known(item.wav.ref)) stats.skippedExisting++; else queue(segs, item.wav.ref, false); }
+          if (!known(clip)) queue(segs, clip, item.asNumberedStills);
+          if (item.wav) { if (!known(item.wav.ref)) queue(segs, item.wav.ref, false); }
           else stats.clipsWithNoWav++;
         } else if (item.type === "flat") {
           stats.flatItems++;
-          if (known(item.file.ref)) stats.skippedExisting++; else queue(segs, item.file.ref, false);
+          if (!known(item.file.ref)) queue(segs, item.file.ref, false);
         }
       }, {
         onEnterDir: function (segs) { api.status("Scanning: " + segs.join(" / ")); },
@@ -104,7 +125,7 @@ module.exports = function (api) {
       var summary = (stats.videoImported + stats.audioImported) + " " + verb + " (" + stats.videoImported + " video, " +
         stats.audioImported + " audio) into " + bins.length + " bin(s); " + stats.skippedExisting + " already in the project; " +
         stats.importFailures + " failed; " + stats.warnings + " warnings. " + secs + " s.";
-      return { ok: stats.importFailures === 0, summary: summary, error: summary, details: {
+      return { ok: stats.importFailures === 0, project: project, summary: summary, error: summary, details: {
         root: root, stats: stats, bins: bins, createdBins: createdBins, failed: failures, warnings: warnings } };
     });
   }

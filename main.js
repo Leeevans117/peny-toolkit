@@ -11,7 +11,7 @@
  *
  * Every ExtendScript call goes through one queue, so only one is ever in flight.
  *
- * Test hook: /tmp/peny-toolkit/run.json {"skill", "action" (optional), "params", "id"}
+ * Test hook: /tmp/peny-toolkit/inbox/run.json {"skill", "action" (optional), "params", "id"}
  * runs through the same runAction() as the buttons. The result is written to
  * /tmp/peny-toolkit/result.json and, when an id is given, result-<id>.json. */
 
@@ -27,7 +27,15 @@ var path = nodeRequire("path");
 var os = nodeRequire("os");
 
 var HOOK_DIR = "/tmp/peny-toolkit";
-var HOOK_RUN = path.join(HOOK_DIR, "run.json");
+var HOOK_INBOX = path.join(HOOK_DIR, "inbox");
+var HOOK_RUN = path.join(HOOK_INBOX, "run.json");
+// Reloading a CEP page can leave the old page running invisibly (seen 2 Oct 2026:
+// hidden copies kept polling the hook and took requests they could never finish).
+// Each page writes its own id here when it starts; a page whose id is no longer the
+// current one stops polling.
+var INSTANCE_FILE = path.join(HOOK_DIR, "instance");
+var INSTANCE_ID = Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+var hookTimer = null;
 var HOOK_RESULT = path.join(HOOK_DIR, "result.json");
 var LOG_FILE = path.join(os.homedir(), "Library", "Logs", "PenyToolkit.log");
 var HOOK_POLL_MS = 500;
@@ -37,7 +45,7 @@ var extRoot = (function () {
   return p.replace(/^file:\/\//, "");
 })();
 
-var jobs = nodeRequire(path.join(extRoot, "core", "jobs.js"));
+var jobs = null; // loaded in start(), after clearToolkitModules()
 var skills = [];
 var running = null; // "<skill>/<action>" while a non-control action runs
 
@@ -159,6 +167,15 @@ function chooseFolder(title, start) {
   return null;
 }
 
+// Node's require cache outlives a CEP page reload, so without this a reload keeps
+// running the old panel.js/jobs.js. Drop the toolkit's own modules before loading.
+function clearToolkitModules() {
+  try {
+    var req = typeof require !== "undefined" ? require : cep_node.require;
+    Object.keys(req.cache).forEach(function (k) { if (k.indexOf(extRoot) === 0) delete req.cache[k]; });
+  } catch (e) {}
+}
+
 function loadSkills() {
   var dir = path.join(extRoot, "skills");
   fs.readdirSync(dir).sort().forEach(function (n) {
@@ -243,6 +260,13 @@ function drawSkills() {
 
 // ---- Test hook ----
 function pollHook() {
+  var current = "";
+  try { current = fs.readFileSync(INSTANCE_FILE, "utf-8"); } catch (e) {}
+  if (current !== INSTANCE_ID) {
+    clearInterval(hookTimer);
+    try { fs.appendFileSync(LOG_FILE, stamp() + " [panel] Stale panel instance " + INSTANCE_ID + " stopped polling.\n"); } catch (e2) {}
+    return;
+  }
   if (!fs.existsSync(HOOK_RUN)) return;
   var req = null;
   try { req = JSON.parse(fs.readFileSync(HOOK_RUN, "utf-8")); } catch (e) { req = null; }
@@ -272,12 +296,15 @@ function writeHookResult(result, id) {
 // ---- Start ----
 (function start() {
   try {
+    clearToolkitModules();
+    jobs = nodeRequire(path.join(extRoot, "core", "jobs.js"));
     loadSkills();
     drawSkills();
-    try { fs.mkdirSync(HOOK_DIR, { recursive: true }); } catch (e) {}
-    setInterval(pollHook, HOOK_POLL_MS);
+    try { fs.mkdirSync(HOOK_INBOX, { recursive: true }); } catch (e) {}
+    fs.writeFileSync(INSTANCE_FILE, INSTANCE_ID, "utf-8");
+    hookTimer = setInterval(pollHook, HOOK_POLL_MS);
     document.getElementById("status").textContent = skills.length + " skills loaded.";
-    log("Panel open, " + skills.length + " skills: " + skills.map(function (s) { return s.id; }).join(", "));
+    log("Panel open (instance " + INSTANCE_ID + "), " + skills.length + " skills: " + skills.map(function (s) { return s.id; }).join(", "));
   } catch (e) {
     document.getElementById("status").textContent = "Error: " + e.message;
     log("Start failed: " + e.message, "err");
