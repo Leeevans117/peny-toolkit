@@ -82,9 +82,56 @@ def stats(job):
     return out
 
 
+def phrases(job):
+    """Quiet stretches of speech to lift with Volume keyframes. Speech windows (dry render) use a
+    stricter gate (`rideGate`, 15 dB) so pauses and room tone are never lifted. The level of a
+    window is the median peak of the speech windows within +-2 windows (about 2 s) in the
+    `file` render (the levelled result). Runs of speech windows whose level is more than `under`
+    dB below `target` (one other window may sit inside a run), at least minWindows long and
+    inside one clip, get lift = min(maxLift, rideTo - median level of the run)."""
+    d = np.load(job["file"]); m = np.load(job["mask"])
+    r = m["rms"]; ok = r > -100
+    ref = float(np.percentile(r[ok], 95)) if ok.any() else -100.0
+    speech = r > ref - float(job.get("rideGate", 15))
+    pk = d["pk"]; n = min(len(pk), len(speech))
+    target, under, ride_to, max_lift, min_w = (float(job["target"]), float(job["under"]), float(job["rideTo"]),
+                                               float(job["maxLift"]), int(job["minWindows"]))
+    out = {}
+    for c in job["clips"]:
+        a = int(np.ceil((c["start"] + 0.05) / 0.4)); b = min(n, int(np.floor((c["end"] - 0.05) / 0.4)))
+        res = []
+        if b - a < min_w:
+            out[c["id"]] = res; continue
+        sp = speech[a:b]; p = pk[a:b]
+        lev = np.full(b - a, np.nan)
+        for k in range(b - a):
+            if not sp[k]: continue
+            lo, hi = max(0, k - 2), min(b - a, k + 3)
+            w = p[lo:hi][sp[lo:hi]]
+            lev[k] = np.median(w)
+        quiet = sp & (np.nan_to_num(lev, nan=0.0) < target - under)
+        k = 0
+        while k < b - a:
+            if not quiet[k]:
+                k += 1; continue
+            e, last = k, k
+            while e < b - a and (quiet[e] or (e + 1 < b - a and quiet[e + 1])):
+                if quiet[e]: last = e
+                e += 1
+            sel = quiet[k:last + 1]
+            if sel.sum() >= min_w:
+                level = float(np.median(lev[k:last + 1][sel]))
+                res.append({"start": round((a + k) * 0.4, 3), "end": round((a + last + 1) * 0.4, 3), "level": round(level, 2),
+                            "lift": round(min(max_lift, ride_to - level), 2)})
+            k = e
+        out[c["id"]] = res
+    return out
+
+
 def main():
     job = json.load(sys.stdin)
-    res = blocks(job) if job.get("mode") == "blocks" else stats(job)
+    mode = job.get("mode")
+    res = blocks(job) if mode == "blocks" else phrases(job) if mode == "phrases" else stats(job)
     json.dump(res, sys.stdout)
 
 

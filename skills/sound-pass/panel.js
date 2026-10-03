@@ -27,6 +27,12 @@ var PROBE_CEILING = -20; // clip-side ceiling used to find the gain after each c
 var MIN_WINDOWS = 5;   // clips with less speech (2 s) take the usual boost of their source
 var LONG_WINDOWS = 50; // clips with 20 s of speech set the usual boost
 var SPREAD = 6;        // dB a clip may move from its source's usual boost
+// Ride quiet moments (Volume keyframes on the answer clips, after levelling):
+var RIDE_UNDER = 3;    // a phrase whose median window peak is this far under TARGET_PRE is lifted
+var RIDE_TO = -7;      // ... towards this level
+var RIDE_MAX = 6;      // dB at most (Lee can change these)
+var RIDE_RAMP = 0.15;  // s ramp in and out of each lift
+var RIDE_MIN = 2;      // speech windows (0.8 s) a phrase needs
 
 function firstExisting(list) { for (var i = 0; i < list.length; i++) if (fs.existsSync(list[i])) return list[i]; return null; }
 function boostValue(db) { return 2 / 3 + db / 150; }     // Input Boost, measured by render
@@ -102,6 +108,47 @@ module.exports = function (api) {
         .then(function (m) { return m.files; });
     }
 
+    // Lifts quiet phrases of the answer clips with Volume > Level keyframes (ramps of RIDE_RAMP),
+    // then renders again. Clips flagged as off-mic/little speech and clips whose Volume is
+    // already keyframed are not ridden.
+    function ride(m) {
+      var riders = clips.filter(function (c) {
+        if (c.note) { c.rideNote = "not ridden (" + c.note.split(":")[0] + ")"; return false; }
+        if (typeof c.volumeDb !== "number") { c.rideNote = "not ridden: Volume already keyframed"; return false; }
+        return true;
+      });
+      api.status("Sound Pass: finding quiet phrases…");
+      return measure(python, { mode: "phrases", file: npz.final, mask: npz.dry, gate: 20, target: TARGET_PRE, under: RIDE_UNDER, rideTo: RIDE_TO, maxLift: RIDE_MAX,
+        minWindows: RIDE_MIN, clips: riders.map(function (c) { return { id: c.nodeId, start: c.start, end: c.end }; }) }).then(function (ph) {
+        var jobs = [];
+        riders.forEach(function (c) {
+          var list = (ph[c.nodeId] || []).slice(), merged = [];
+          list.forEach(function (p) {
+            var last = merged[merged.length - 1];
+            if (last && p.start - last.end < 2 * RIDE_RAMP + 0.1) { last.end = p.end; last.lift = Math.min(last.lift, p.lift); }
+            else merged.push({ start: p.start, end: p.end, lift: p.lift, level: p.level });
+          });
+          c.lifted = merged;
+          if (!merged.length) return;
+          var base = c.volumeDb, keys = [], lo = c.start + 0.01, hi = c.end - 0.01;
+          merged.forEach(function (p) {
+            var a = Math.max(lo, p.start), b = Math.min(hi, p.end);
+            keys.push({ t: Math.max(lo, a - RIDE_RAMP), db: base }, { t: a, db: r2(base + p.lift) }, { t: b, db: r2(base + p.lift) }, { t: Math.min(hi, b + RIDE_RAMP), db: base });
+          });
+          // Drop duplicate times (ramps clamped at the clip edges).
+          var seen = {}, uniq = [];
+          keys.forEach(function (k) { var id = k.t.toFixed(3); if (!seen[id]) { seen[id] = 1; uniq.push(k); } });
+          jobs.push({ track: c.track, nodeId: c.nodeId, keys: uniq });
+        });
+        report.ride = { clips: jobs.length, phrases: jobs.reduce(function (n, j) { return n + j.keys.length / 4; }, 0) };
+        if (!jobs.length) return m;
+        api.status("Sound Pass: lifting quiet phrases on " + jobs.length + " clip(s)…");
+        return jsx({ action: "keys", clips: jobs }).then(function () {
+          return pass("ride", null);
+        }).then(stats);
+      });
+    }
+
     return jsx({ action: "copy" }).then(function (c) {
       copyInfo = c.details;
       return jsx({ action: "scan", tracks: params.tracks || "" });
@@ -164,13 +211,18 @@ module.exports = function (api) {
       if (noPost.length) report.notes = ["No clip on " + noPost.join(", ") + " reached the probe ceiling; assumed the usual -3 dB pan law after the clip."];
       return pass("final", plan);
     }).then(stats).then(function (m) {
+      if (params.ride === false) return m;
+      return ride(m);
+    }).then(function (m) {
       var rows = [], spread = [], spreadBefore = [], bad = [];
       clips.forEach(function (c) {
-        var f = m.final.clips[c.nodeId] || {}, b = m.before.clips[c.nodeId] || {};
+        var f = (m.ride || m.final).clips[c.nodeId] || {}, b = m.before.clips[c.nodeId] || {}, l = m.final.clips[c.nodeId] || {};
         var row = { track: c.label, start: fmt(c.start), end: fmt(c.end), name: c.name, speechSec: r2((f.n || 0) * 0.4),
           clipGainDb: c.clipGainDb, volumeDb: c.volumeDb, hadLimiter: c.hl.count > 0,
           beforePk25: b.pk25, beforePk50: b.pk50, beforePk75: b.pk75, beforeMax: b.max, beforeIn12to6: b.in12to6,
           boostDb: c.boostDb, ceilingDb: c.ceilingDb, note: c.note || "",
+          levelledPk25: l.pk25, levelledPk50: l.pk50, levelledIn12to6: l.in12to6,
+          phrasesLifted: c.lifted ? c.lifted.length : 0, liftMaxDb: c.lifted && c.lifted.length ? Math.max.apply(null, c.lifted.map(function (x) { return x.lift; })) : 0, rideNote: c.rideNote || "",
           afterPk10: f.pk10, afterPk25: f.pk25, afterPk50: f.pk50, afterPk75: f.pk75, afterMax: f.max, afterIn12to6: f.in12to6 };
         rows.push(row);
         if (f.n >= MIN_WINDOWS && !c.note) {
@@ -182,24 +234,27 @@ module.exports = function (api) {
       });
       function range(a) { return a.length ? { min: Math.min.apply(null, a), max: Math.max.apply(null, a), median: median(a) } : null; }
       report.clips = rows;
-      report.all = m.final.all; report.allBefore = m.before.all;
+      report.all = (m.ride || m.final).all; report.allBefore = m.before.all; report.allLevelled = m.final.all;
       report.spread = range(spread); report.spreadBefore = range(spreadBefore);
       fs.writeFileSync(path.join(dir, "report.json"), JSON.stringify(report, null, 1));
       var keys = Object.keys(rows[0]);
       fs.writeFileSync(path.join(dir, "report.csv"), keys.join(",") + "\n" + rows.map(function (r) {
         return keys.map(function (k) { var v = r[k]; return typeof v === "string" ? '"' + v.replace(/"/g, '""') + '"' : (v === undefined || v === null ? "" : v); }).join(",");
       }).join("\n") + "\n");
-      var a = m.final.all || {}, ab = m.before.all || {}, flagged = clips.filter(function (c) { return c.note; }).length;
+      var a = (m.ride || m.final).all || {}, ab = m.before.all || {}, al = m.final.all || {}, nLift = 0;
+      clips.forEach(function (c) { nLift += c.lifted ? c.lifted.length : 0; });
+      var flagged = clips.filter(function (c) { return c.note; }).length;
       var summary = "Levelled " + clips.length + " voice clip(s) on \"" + scan.sequence + "\"" + (copyInfo.made ? " (new safe copy; the original is untouched)" : "") +
         ". Speech now: median " + a.pk50 + " dB, body " + a.pk25 + " to " + a.pk75 + " dB, top " + a.max + " dB, " + Math.round((a.in12to6 || 0) * 100) + "% between -12 and -6" +
         (report.spread ? "; answer clips' medians " + report.spread.min + " to " + report.spread.max + " dB" : "") +
         " (as found: median " + ab.pk50 + ", top " + ab.max + ", " + Math.round((ab.in12to6 || 0) * 100) + "%" +
         (report.spreadBefore ? ", medians " + report.spreadBefore.min + " to " + report.spreadBefore.max : "") + ")" +
+        (m.ride ? "; " + nLift + " quiet phrase(s) lifted with Volume keyframes (levelled only: median " + al.pk50 + ", " + Math.round((al.in12to6 || 0) * 100) + "%)" : "") +
         (flagged ? ". " + flagged + " quiet/short clip(s) kept near the usual boost (see notes)" : "") +
         (bad.length ? ". " + bad.length + " clip(s) with 20 s+ of speech outside -9..-5 dB, or over the ceiling" : "") +
         ". Took " + Math.round((Date.now() - t0) / 1000) + " s. Report: " + path.join(dir, "report.csv");
       api.status(summary);
-      return { ok: bad.length === 0, summary: summary, error: summary, details: { sequence: scan.sequence, workFolder: dir, all: a, allBefore: ab, spread: report.spread,
+      return { ok: bad.length === 0, summary: summary, error: summary, details: { sequence: scan.sequence, workFolder: dir, all: a, allBefore: ab, allLevelled: al, phrasesLifted: nLift, spread: report.spread,
         spreadBefore: report.spreadBefore, postGainDb: report.postGainDb, outside: bad, clips: rows, skipped: scan.skipped, notes: report.notes || [] } };
     }).catch(function (e) {
       var msg = e && e.stop ? e.stop : "Sound Pass stopped: " + (e && e.message ? e.message : String(e));
