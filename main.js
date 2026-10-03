@@ -538,7 +538,6 @@ var startError = null;
     if (!window.PenyLoader) fs.writeFileSync(INSTANCE_FILE, INSTANCE_ID, "utf-8");
     hookTimer = setInterval(pollHook, HOOK_POLL_MS);
     document.getElementById("status").textContent = skills.filter(function (s) { return !s.hidden; }).length + " apps";
-    log("T3 soft-reload test line");
     log("Panel open (instance " + INSTANCE_ID + "), " + skills.length + " skills: " + skills.map(function (s) { return s.id; }).join(", "));
   } catch (e) {
     startError = e.message;
