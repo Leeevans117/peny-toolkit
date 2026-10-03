@@ -29,6 +29,7 @@
     if (action === "set") return set(seq, params);
     if (action === "render") return render(seq, params);
     if (action === "probe") return probe(seq, params);
+    if (action === "keys") return keys(seq, params);
     return T.fail("Unknown action: " + action);
   };
 
@@ -245,6 +246,33 @@
     return T.ok("Rendered " + T.fmt(T.sec(seq.end)) + " of audio in " + (ms / 1000).toFixed(1) + " s.", { path: params.path, bytes: f.length, ms: ms, result: String(res), mutesRestored: restored, duration: T.sec(seq.end) });
   }
 
+  // params.clips: [{track, nodeId, keys: [{t: sequence seconds, db}], clear}] - Volume > Level
+  // keyframes on a TOOLKIT COPY, read back (key times are clip/media time: in + (t - start)).
+  function keys(seq, params) {
+    if (!T.isToolkitCopy(seq)) return T.fail("Sound Pass only changes a TOOLKIT COPY; \"" + seq.name + "\" is not one.");
+    var list = params.clips || [], out = [], failed = 0;
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i], it = itemByNode(seq, c.track, c.nodeId);
+      if (!it) { out.push({ nodeId: c.nodeId, error: "clip not found" }); failed++; continue; }
+      var lv = prop(findComponent(it, "Volume"), "Level");
+      if (c.clear && lv.isTimeVarying()) lv.setTimeVarying(false);
+      if (!lv.isTimeVarying()) lv.setTimeVarying(true);
+      var off = it.inPoint.seconds - it.start.seconds, rec = { nodeId: c.nodeId, set: 0, bad: [] };
+      for (var k = 0; k < c.keys.length; k++) {
+        var tm = new Time(); tm.seconds = c.keys[k].t + off;
+        var v = Math.pow(10, (c.keys[k].db - 15) / 20);
+        lv.addKey(tm);
+        lv.setValueAtKey(tm, v, true);
+        var got = lv.getValueAtKey(tm);
+        if (Math.abs(got - v) > 1e-4) rec.bad.push({ t: c.keys[k].t, want: v, got: got }); else rec.set++;
+      }
+      var all = lv.getKeys();
+      rec.keysNow = all ? all.length : 0;
+      if (rec.bad.length) failed++;
+      out.push(rec);
+    }
+    return failed ? T.fail(failed + " clip(s) did not take their keyframes.", { clips: out }) : T.ok(list.length + " clip(s) keyframed and read back.", { clips: out });
+  }
   function probe(seq, params) {
     var it = seq.audioTracks[params.track || 0].clips[params.clip || 0], out = [];
     for (var c = 0; c < it.components.numItems; c++) {

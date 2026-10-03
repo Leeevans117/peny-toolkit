@@ -66,6 +66,12 @@ module.exports = function (api) {
   }
 
   function run(params) {
+    // Test hook: params.jsxAction calls one premiere.jsx action directly (e.g. "keys", "render").
+    if (params.jsxAction) {
+      var p = {}; for (var k in params) if (params.hasOwnProperty(k)) p[k] = params[k];
+      p.action = params.jsxAction;
+      return api.evalSkill(p);
+    }
     var ffmpeg = firstExisting(FFMPEG), python = pythonWithNumpy();
     if (!ffmpeg) return Promise.resolve({ ok: false, error: "ffmpeg not found (" + FFMPEG.join(", ") + ")." });
     if (!python) return Promise.resolve({ ok: false, error: "No python3 with numpy found (" + PYTHON.join(", ") + ")." });
