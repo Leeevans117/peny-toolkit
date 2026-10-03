@@ -1,1 +1,12 @@
 .DS_Store
+__pycache__/
+*.pyc
+# Too big for git: the setup script downloads these or points to the release.
+*.prfpset
+*.bin
+*.gguf
+# Never commit keys.
+anthropic_key
+*.key
+*.pem
+.env
