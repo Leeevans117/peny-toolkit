@@ -266,5 +266,5 @@ module.exports = function (api) {
     });
   };
 
-  return { actions: actions, controls: ["pause", "resume", "cancel"] };
+  return { actions: actions, controls: ["pause", "resume", "cancel"], busy: function () { return pool ? "render pool running" : null; } };
 };
