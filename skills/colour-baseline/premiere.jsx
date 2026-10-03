@@ -31,6 +31,10 @@
     if (action === "scan") return scan(seq);
     if (action === "apply") return apply(seq, params);
     if (action === "frame") return frame(seq, params);
+    if (action === "addplain") return addPlain(seq, params);
+    if (action === "setparam") return setParam(seq, params);
+    if (action === "exportproj") return exportProj(seq, params);
+    if (action === "importseq") return importSeq(params);
     return T.fail("Unknown action: " + action);
   };
 
@@ -206,6 +210,48 @@
     if (changedElsewhere.length) problems.push(changedElsewhere.length + " other clip(s) changed");
     if (countMismatch.length) problems.push(countMismatch.length + " clip(s) with an unexpected number of effects");
     return problems.length ? T.fail(summary + " Problems: " + problems.join("; "), details) : T.ok(summary, details);
+  }
+
+  // Test hook only: a plain Lumetri Color added with QE (goes at the bottom), TOOLKIT COPY only.
+  function addPlain(seq, params) {
+    if (!T.isToolkitCopy(seq)) return T.fail("Only on a TOOLKIT COPY.");
+    var it = trackItem(seq, params.track, params.nodeId);
+    if (!it) return T.fail("Clip not found.");
+    app.enableQE();
+    var qs = qe.project.getActiveSequence(), qt = qs.getVideoTrackAt(params.track), want = String(it.start.ticks);
+    for (var i = 0; i < qt.numItems; i++) {
+      var qi = qt.getItemAt(i);
+      if (qi && String(qi.type) === "Clip" && String(qi.start.ticks) === want) { qi.addVideoEffect(qe.project.getVideoEffectByName("Lumetri Color")); break; }
+    }
+    it = trackItem(seq, params.track, params.nodeId);
+    return T.ok("Lumetri stack: " + lumetris(it.components).join(" | "), { lumetri: lumetris(it.components) });
+  }
+  // Test hook only: sets one param of the clip's n-th Lumetri (params.lumetri, from the top).
+  function setParam(seq, params) {
+    if (!T.isToolkitCopy(seq)) return T.fail("Only on a TOOLKIT COPY.");
+    var it = trackItem(seq, params.track, params.nodeId), n = -1;
+    if (!it) return T.fail("Clip not found.");
+    for (var c = 0; c < it.components.numItems; c++) {
+      if (!isLumetri(it.components[c])) continue;
+      if (++n !== params.lumetri) continue;
+      var pr = it.components[c].properties[params.prop], before = pr.getValue();
+      pr.setValue(params.value, true);
+      return T.ok(String(pr.displayName) + ": " + before + " -> " + it.components[c].properties[params.prop].getValue(), {});
+    }
+    return T.fail("No Lumetri #" + params.lumetri);
+  }
+  // Test hook only: writes the active sequence (and the media it uses) to a new .prproj file.
+  function exportProj(seq, params) {
+    var ok = seq.exportAsProject(params.path);
+    return new File(params.path).exists ? T.ok("Exported to " + params.path, { returned: ok }) : T.fail("exportAsProject wrote nothing (returned " + ok + ").");
+  }
+  // Test hook only: imports sequences from a .prproj file (Project.importSequences).
+  function importSeq(params) {
+    var before = T.sequenceList().length, r = null, err = null;
+    try { r = app.project.importSequences(params.path, params.ids); } catch (e) { err = String(e); }
+    var list = T.sequenceList(), names = [];
+    for (var i = before; i < list.length; i++) names.push({ name: String(list[i].name), id: String(list[i].sequenceID) });
+    return T.ok("importSequences returned " + r + (err ? " error " + err : "") + "; " + (list.length - before) + " new sequence(s).", { added: names });
   }
 
   function frame(seq, params) {

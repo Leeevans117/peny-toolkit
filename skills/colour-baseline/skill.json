@@ -22,6 +22,18 @@
       "label": "Apply baseline grade",
       "style": "primary",
       "confirm": "Add the baseline grade on a safe copy of this sequence? Every video clip gets its camera's LUT preset as a Lumetri Color, and a Lumetri Color called \"Adjustments\" above it. Clips that already have them are skipped. Only the TOOLKIT COPY changes; nothing is saved."
+    },
+    {
+      "id": "makepresets",
+      "label": "Make LUT presets",
+      "style": "secondary",
+      "prompts": [
+        {
+          "id": "folder",
+          "title": "Choose the folder with your LUTs",
+          "explain": "Make LUT presets\n\nEvery .cube LUT in the folder you choose (and its subfolders) becomes a Lumetri preset with the same name, with the LUT loaded on the Creative tab's Look, plus a plain \"Adjustments\" preset. They are written to one preset file in PenyToolkit-scratch/colour; nothing in Premiere changes until you import that file (Effects panel menu > Import Presets\u2026)."
+        }
+      ]
     }
   ]
 }

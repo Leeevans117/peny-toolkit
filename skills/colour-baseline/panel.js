@@ -278,6 +278,40 @@ module.exports = function (api) {
     }
   }
 
+  // Make LUT presets: every 3D .cube under the chosen folder becomes a Lumetri effect preset
+  // named after its file (LUT embedded, Creative Look slot, like Lee's own "CANON LUT"), plus a
+  // plain "Adjustments" preset, written to one .prfpset for Effects panel > Import Presets.
+  // Premiere's preset list is read without touching Premiere if a call to it fails.
+  function makePresets(params) {
+    var folder = params.folder;
+    if (!folder || !fs.existsSync(folder)) return Promise.resolve({ ok: false, error: "Choose the folder that holds your LUTs." });
+    var python = firstExisting(["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]);
+    var outDir = path.join(os.homedir(), "PenyToolkit-scratch", "colour");
+    var out = path.join(outDir, path.basename(folder).replace(/[\/:]/g, "-") + " LUT Presets.prfpset");
+    return jsx({ action: "presets" }).catch(function () { return { ok: false }; }).then(function (pr) {
+      var have = pr && pr.ok ? pr.details.presets : [];
+      var spec = { bin: "Peny LUTs - " + path.basename(folder), paths: [folder] };
+      if (have.indexOf(ADJUSTMENTS) === -1) spec.adjustments = ADJUSTMENTS;
+      fs.mkdirSync(outDir, { recursive: true });
+      var specFile = path.join(outDir, "spec-" + Date.now() + ".json");
+      fs.writeFileSync(specFile, JSON.stringify(spec));
+      api.status("Colour: building presets from " + folder + "…");
+      return new Promise(function (resolve) {
+        childProcess.execFile(python, [path.join(api.skillDir, "lutpreset.py"), "presets", out, specFile], { maxBuffer: 16 * 1024 * 1024, timeout: 600000 }, function (err, stdout, stderr) {
+          try { fs.unlinkSync(specFile); } catch (e) {}
+          if (err) return resolve({ ok: false, error: "Making presets failed: " + String(stderr || err.message).slice(0, 400) });
+          var r = JSON.parse(stdout), made = r.results.filter(function (x) { return x.ok; }), bad = r.results.filter(function (x) { return !x.ok; });
+          var already = made.filter(function (x) { return have.indexOf(x.name) !== -1; }).map(function (x) { return x.name; });
+          resolve({ ok: made.length > 0, error: made.length ? undefined : "No usable .cube LUTs in " + folder,
+            summary: made.length + " preset(s) written to " + out + (bad.length ? "; " + bad.length + " LUT(s) could not be used" : "") + (r.skipped.length ? "; " + r.skipped.length + " skipped (duplicates or unsupported)" : "") +
+              ". To load them in Premiere: Effects panel menu (≡) > Import Presets…, choose that file. Then press Detect cameras.",
+            details: { file: out, presets: made.map(function (x) { return x.name; }), failed: bad.map(function (x) { return { name: x.name, reason: x.error }; }),
+              skipped: r.skipped.map(function (x) { return { name: path.basename(x.file), reason: x.reason }; }), alreadyInPremiere: already } });
+        });
+      });
+    });
+  }
+
   function wrap(name, fn) {
     return function (params) {
       busy = name;
@@ -288,7 +322,7 @@ module.exports = function (api) {
   }
 
   return {
-    actions: { detect: wrap("detect", detect), apply: wrap("apply", apply) },
+    actions: { detect: wrap("detect", detect), apply: wrap("apply", apply), makepresets: wrap("makepresets", makePresets) },
     busy: function () { return busy; },
     mount: function (element) { root = element; render(); }
   };
