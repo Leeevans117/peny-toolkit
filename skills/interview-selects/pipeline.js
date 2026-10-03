@@ -209,6 +209,22 @@ function group(lines, answers, opts, progress) {
       var g = groups[groups.length - 1];
       if (g && g.q === q) g.l = i; else groups.push({ q: q, f: i, l: i });
     });
+    // Long sections are split at answer boundaries (Lee wanted finer sections: his own edit of
+    // Tahnee Home IV has 36, most 1-3 min, none over 5): over opts.maxSection (240 s) with
+    // 2+ answers -> pieces of about 200 s; each new piece is named after its first answer.
+    var maxSec = opts.maxSection || 240, fine = [];
+    groups.forEach(function (g) {
+      var dur = answers[g.l].end - answers[g.f].start, n = g.l - g.f + 1;
+      if (dur <= maxSec || n < 2) { fine.push(g); return; }
+      var k = Math.min(n, Math.ceil(dur / 200)), size = dur / k, cur = { q: g.q, f: g.f, l: g.f }, part = 1;
+      for (var i = g.f + 1; i <= g.l; i++) {
+        if (answers[i].start - answers[g.f].start >= part * size - 30 && part < k) {
+          fine.push(cur); cur = { q: null, f: i, l: i, split: true }; part++;
+        } else cur.l = i;
+      }
+      fine.push(cur);
+    });
+    groups = fine;
     return {
       questions: groups.map(function (g) {
         var list = answers.slice(g.f, g.l + 1), title = g.q ? g.q.title : list[0].topic;

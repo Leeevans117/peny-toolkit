@@ -1,7 +1,7 @@
 {
   "id": "interview-selects",
   "name": "Interviews",
-  "description": "Transcribes the active interview sequence on this Mac (whisper), finds each answer with the local AI model (Ollama, no internet), groups the answers by the interviewer's question, and puts them on a safe copy: one Chapter marker per question (a broad title, spanning the whole answer) and one Comment marker per small topic. About 20 minutes for an hour of interview. Then Cut & raise answers cuts at each question's answer and moves it up one track, with an adjustment layer named after the question above it (copy only).",
+  "description": "Transcribes the active interview sequence on this Mac (whisper), finds each answer with the local AI model (Ollama, no internet), groups the answers by the interviewer's question, and puts them on a safe copy: one Chapter marker per question (a broad title, spanning the whole answer) and one Comment marker per small topic. About 20 minutes for an hour of interview. Then Cut, raise & trim answers raises each question's answer one track, removes the questions and dead bits in between and puts an adjustment layer named after each question over its answers (copy only).",
   "order": 6,
   "icon": "icon.svg",
   "tint": [
@@ -31,9 +31,9 @@
     },
     {
       "id": "cutraise",
-      "label": "Cut & raise answers",
+      "label": "Cut, raise & trim answers",
       "style": "secondary",
-      "confirm": "Cut the clips at the start and end of every question's answer on this TOOLKIT COPY, move each answer up one track and put an adjustment layer named after the question over it? The small topic markers are not cut. Cuts keep video and audio linked. Only a TOOLKIT COPY is changed; nothing is deleted or saved."
+      "confirm": "On this TOOLKIT COPY: cut at every question's answer, move each answer up one track, remove everything between the answers (questions, crew chat, pauses) so the answers run back to back, move the markers with them and put an adjustment layer named after each question over its answers? Links are kept. Only the TOOLKIT COPY changes; no footage is deleted and nothing is saved."
     },
     {
       "id": "cancel",

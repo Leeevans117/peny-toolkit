@@ -388,19 +388,131 @@
         if (inside.length > 1 && n2 < inside.length) linkBad.push(T.fmt(spans[i].a) + " " + inside[j].track + " linked to " + n2 + " of " + inside.length);
       }
     }
-    var layers = params.layers === false ? { skipped: "turned off" } : addLayers(seq, spans, frame);
+    // 5. Trim (Lee, 3 Oct 2026, like "Tahnee Home IV Trimmed"): everything outside the answers
+    // (questions, crew chat, pauses) is extracted, so the answers run back to back; markers move
+    // with them and each question's adjustment layer runs to the start of the next one.
+    var trim = null, layerSpans = spans, expectDur = durBefore;
+    if (params.trim !== false) {
+      trim = trimDead(seq, q, spans, frame, orig);
+      expectDur = trim.keptTotal;
+      layerSpans = [];
+      for (i = 0; i < spans.length; i++) {
+        var la = trim.map(spans[i].a), lb = i + 1 < spans.length ? trim.map(spans[i + 1].a) : trim.map(spans[i].b);
+        layerSpans.push({ a: la, b: lb, names: spans[i].names });
+      }
+    }
+    var layers = params.layers === false ? { skipped: "turned off" } : addLayers(seq, layerSpans, frame);
     var durAfter = T.sec(seq.end);
-    var ok = !shifted.length && !linkBad.length && !linkProblems.length && Math.abs(durAfter - durBefore) < half && !layers.error;
+    var ok = !shifted.length && !linkBad.length && !linkProblems.length && Math.abs(durAfter - expectDur) < frame * 1.5 && !layers.error && !(trim && trim.problems.length);
     var text = spans.length + " answers: " + cuts + " cuts, " + raised + " pieces raised one track, " + skipped.length + " skipped; links " +
       (linkBad.length || linkProblems.length ? "NOT all intact" : "intact") + "; " + (shifted.length ? shifted.length + " pieces shifted in time" : "nothing shifted in time") +
-      "; length " + T.fmt(durAfter) + (Math.abs(durAfter - durBefore) < half ? " (unchanged)" : " (was " + T.fmt(durBefore) + ")") +
+      (trim ? "; " + trim.gaps + " dead bits removed (" + T.fmt(trim.removed) + "), " + trim.markersMoved + " markers moved with them" + (trim.problems.length ? ", " + trim.problems.length + " problems" : "") : "") +
+      "; length " + T.fmt(durAfter) + (trim ? " (was " + T.fmt(durBefore) + ")" : Math.abs(durAfter - durBefore) < half ? " (unchanged)" : " (was " + T.fmt(durBefore) + ")") +
       "; " + (layers.error ? "adjustment layers: " + layers.error : layers.skipped ? "no adjustment layers (" + layers.skipped + ")" :
         layers.placed + " adjustment layers named on " + layers.track) + ".";
     var details = { sequence: String(seq.name), spansFrom: spans.byChapter ? "question markers" : "answer markers", layers: layers, answers: spans.length, joined: 0, cuts: cuts, relinkedGroups: relinked, raised: raised, raisedPiecesFound: up,
       skipped: skipped, unmatched: notUp, linkProblems: linkProblems.concat(linkBad), shifted: shifted,
-      durationBefore: durBefore, durationAfter: durAfter, cutLogSample: cutLog.slice(0, 5) };
+      durationBefore: durBefore, durationAfter: durAfter, cutLogSample: cutLog.slice(0, 5),
+      trim: trim ? { gaps: trim.gaps, removed: trim.removed, keptTotal: trim.keptTotal, markersMoved: trim.markersMoved, relinked: trim.relinked,
+        holes: trim.holes, problems: trim.problems.slice(0, 20), extractNote: trim.note } : null };
     for (i = 0; i < spans.length; i++) if (spans[i].names.length > 1) details.joined++;
     return ok ? T.ok(text, details) : T.fail(text, details);
+  }
+
+  // Extracts every stretch outside the answer (Comment) markers, last first, then checks:
+  // length = answers' total, no holes, every piece shows the same source frames as before
+  // (just earlier), linked pieces relinked, markers moved to their answers' new times.
+  function trimDead(seq, q, spans, frame, orig) {
+    var half = frame / 2, i, j, list = markerList(seq), kept = [], dur = T.sec(seq.end), res = { problems: [] };
+    for (i = 0; i < list.length; i++) if (list[i].type !== "Chapter" && list[i].comments && list[i].end - list[i].start > frame) kept.push({ a: list[i].start, b: list[i].end });
+    if (!kept.length) for (i = 0; i < spans.length; i++) kept.push({ a: spans[i].a, b: spans[i].b });
+    kept.sort(function (x, y) { return x.a - y.a; });
+    var merged = [];
+    for (i = 0; i < kept.length; i++) {
+      var p = merged[merged.length - 1];
+      if (p && kept[i].a <= p.b + half) { if (kept[i].b > p.b) p.b = kept[i].b; } else merged.push({ a: kept[i].a, b: kept[i].b });
+    }
+    var gaps = [], prev = 0;
+    for (i = 0; i < merged.length; i++) { if (merged[i].a - prev > half) gaps.push({ a: prev, b: merged[i].a }); prev = merged[i].b; }
+    if (dur - prev > half) gaps.push({ a: prev, b: dur });
+    var removed = 0;
+    for (i = 0; i < gaps.length; i++) removed += gaps[i].b - gaps[i].a;
+    res.gaps = gaps.length; res.removed = removed; res.keptTotal = dur - removed;
+    res.map = function (t) {
+      var r = t;
+      for (var g = 0; g < gaps.length; g++) {
+        if (gaps[g].b <= t + half) r -= gaps[g].b - gaps[g].a;
+        else if (gaps[g].a < t) r -= t - gaps[g].a;
+      }
+      return r;
+    };
+    // Pieces and markers before.
+    var before = allPieces(seq), oldMarkers = [], m = seq.markers.getFirstMarker();
+    while (m) { oldMarkers.push({ start: m.start.seconds, end: m.end.seconds, name: String(m.name), type: String(m.type) }); m = seq.markers.getNextMarker(m); }
+    // Extract, last gap first. The out point is the last frame of the gap (Premiere's out is inclusive).
+    for (i = gaps.length - 1; i >= 0; i--) {
+      var d0 = T.sec(seq.end);
+      q.extract(tcOf(seq, gaps[i].a), tcOf(seq, gaps[i].b - frame));
+      var cut = d0 - T.sec(seq.end);
+      if (Math.abs(cut - (gaps[i].b - gaps[i].a)) > half) {
+        res.problems.push("extract " + T.fmt(gaps[i].a) + "-" + T.fmt(gaps[i].b) + " removed " + cut.toFixed(3) + " s, not " + (gaps[i].b - gaps[i].a).toFixed(3));
+        if (res.problems.length > 3) { res.note = "stopped after repeated extract errors"; break; }
+      }
+    }
+    // Markers: put each back on its answer's new time (whether or not Premiere moved it).
+    var cur = [], moved = 0;
+    m = seq.markers.getFirstMarker();
+    while (m) { cur.push(m); m = seq.markers.getNextMarker(m); }
+    for (i = 0; i < oldMarkers.length; i++) {
+      var om = oldMarkers[i], hit = null;
+      for (j = 0; j < cur.length && !hit; j++) if (String(cur[j].name) === om.name && String(cur[j].type) === om.type &&
+        (Math.abs(cur[j].start.seconds - om.start) < half || Math.abs(cur[j].start.seconds - res.map(om.start)) < half)) hit = cur[j];
+      if (!hit) { res.problems.push("marker " + om.name + " not found after the trim"); continue; }
+      var na = res.map(om.start), nb = res.map(om.end);
+      if (Math.abs(hit.start.seconds - na) >= half || Math.abs(hit.end.seconds - nb) >= half) {
+        try { hit.start = na; } catch (e1) {}
+        try { setEnd(hit, nb); } catch (e2) {}
+        moved++;
+      }
+      if (Math.abs(hit.start.seconds - na) >= half || Math.abs(hit.end.seconds - nb) >= half) res.problems.push("marker " + om.name + " at " + T.fmt(hit.start.seconds) + " should be at " + T.fmt(na));
+    }
+    res.markersMoved = moved;
+    // Pieces: each must be part of a piece from before, on the same track, at the mapped time.
+    var after = allPieces(seq), groups = {};
+    for (i = 0; i < after.length; i++) {
+      var x = after[i], src = null;
+      for (j = 0; j < before.length && !src; j++) {
+        var b0 = before[j];
+        if (b0.track === x.track && b0.name === x.name && x.item.inPoint.seconds >= b0.item.inPoint.seconds - half &&
+            x.item.inPoint.seconds <= b0.item.inPoint.seconds + (b0.b - b0.a) + half &&
+            Math.abs(res.map(b0.a + (x.item.inPoint.seconds - b0.item.inPoint.seconds)) - x.a) < half) src = b0;
+      }
+      if (!src) { res.problems.push(x.track + " " + T.fmt(x.a) + " " + x.name + ": not where its source frames should be"); continue; }
+      // Link group as before the trim (by the pieces' common start and end).
+      var key = String(src.a.toFixed(2)) + "|" + String(src.b.toFixed(2)) + "|" + Math.round(x.a / frame) + "|" + Math.round(x.b / frame);
+      (groups[key] = groups[key] || []).push(x);
+    }
+    res.relinked = 0;
+    for (var k in groups) {
+      if (!groups.hasOwnProperty(k) || groups[k].length < 2) continue;
+      var grp = groups[k], need = false;
+      for (j = 0; j < grp.length; j++) if (T.linkedNodeIds(grp[j].item).length < grp.length) need = true;
+      if (!need) continue;
+      T.deselectAll(seq);
+      for (j = 0; j < grp.length; j++) grp[j].item.setSelected(true, true);
+      seq.linkSelection();
+      T.deselectAll(seq);
+      res.relinked++;
+      for (j = 0; j < grp.length; j++) if (T.linkedNodeIds(grp[j].item).length < grp.length) res.problems.push(grp[j].track + " " + T.fmt(grp[j].a) + " linked to " + T.linkedNodeIds(grp[j].item).length + " of " + grp.length);
+    }
+    // Holes: every moment of the new length must have something on some track.
+    after.sort(function (x, y) { return x.a - y.a; });
+    var reach = 0, holes = [];
+    for (i = 0; i < after.length; i++) { if (after[i].a - reach > half) holes.push(T.fmt(reach) + "-" + T.fmt(after[i].a)); if (after[i].b > reach) reach = after[i].b; }
+    if (T.sec(seq.end) - reach > half) holes.push(T.fmt(reach) + "-" + T.fmt(T.sec(seq.end)));
+    res.holes = holes;
+    if (holes.length) res.problems.push(holes.length + " holes left, e.g. " + holes[0]);
+    return res;
   }
 
   // The project's adjustment layer item (Lee's projects have one called "Adjustment Layer";
