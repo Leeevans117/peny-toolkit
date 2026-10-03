@@ -277,5 +277,5 @@ module.exports = function (api) {
     return api.evalSkill(p).then(function (r) { api.status(r.ok ? r.summary : r.error); return r; });
   }
 
-  return { actions: { find: find, cutraise: cutraise, cancel: cancel } };
+  return { actions: { find: find, cutraise: cutraise, cancel: cancel }, busy: function () { return children.length ? children.length + " child process(es)" : null; } };
 };

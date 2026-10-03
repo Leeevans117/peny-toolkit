@@ -14,7 +14,12 @@
  *
  * Test hook: /tmp/peny-toolkit/inbox/run.json {"skill", "action" (optional), "params", "id"}
  * runs through the same runAction() as the buttons. The result is written to
- * /tmp/peny-toolkit/result.json and, when an id is given, result-<id>.json. */
+ * /tmp/peny-toolkit/result.json and, when an id is given, result-<id>.json.
+ *
+ * Loaded by loader.js, which can run this file again in the same page (soft reload),
+ * so everything is inside one function and window.PenyApp.stop() undoes what it set up. */
+
+(function () {
 
 function nodeRequire(name) {
   if (typeof require !== "undefined") return require(name);
@@ -32,10 +37,10 @@ var HOOK_INBOX = path.join(HOOK_DIR, "inbox");
 var HOOK_RUN = path.join(HOOK_INBOX, "run.json");
 // Reloading a CEP page can leave the old page running invisibly (seen 2 Oct 2026:
 // hidden copies kept polling the hook and took requests they could never finish).
-// Each page writes its own id here when it starts; a page whose id is no longer the
-// current one stops polling.
+// Each page writes its own id here when it starts (loader.js does it, once per page);
+// a page whose id is no longer the current one stops polling.
 var INSTANCE_FILE = path.join(HOOK_DIR, "instance");
-var INSTANCE_ID = Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+var INSTANCE_ID = (window.PenyLoader && window.PenyLoader.instanceId) || (Date.now() + "-" + Math.random().toString(36).slice(2, 8));
 var hookTimer = null;
 var HOOK_RESULT = path.join(HOOK_DIR, "result.json");
 var LOG_FILE = path.join(os.homedir(), "Library", "Logs", "PenyToolkit.log");
@@ -521,6 +526,7 @@ function writeHookResult(result, id) {
 }
 
 // ---- Start ----
+var startError = null;
 (function start() {
   try {
     clearToolkitModules();
@@ -529,12 +535,42 @@ function writeHookResult(result, id) {
     drawSkills();
     showView(null);
     try { fs.mkdirSync(HOOK_INBOX, { recursive: true }); } catch (e) {}
-    fs.writeFileSync(INSTANCE_FILE, INSTANCE_ID, "utf-8");
+    if (!window.PenyLoader) fs.writeFileSync(INSTANCE_FILE, INSTANCE_ID, "utf-8");
     hookTimer = setInterval(pollHook, HOOK_POLL_MS);
     document.getElementById("status").textContent = skills.filter(function (s) { return !s.hidden; }).length + " apps";
     log("Panel open (instance " + INSTANCE_ID + "), " + skills.length + " skills: " + skills.map(function (s) { return s.id; }).join(", "));
   } catch (e) {
+    startError = e.message;
     document.getElementById("status").textContent = "Error: " + e.message;
     log("Start failed: " + e.message, "err");
   }
+}());
+
+// ---- Soft reload (loader.js) ----
+// Busy: an action running, or a skill module saying it still has work (a render pool,
+// a child process). loader.js waits while this returns something.
+function isBusy() {
+  if (running) return running;
+  for (var i = 0; i < skills.length; i++) {
+    var m = skills[i].module;
+    var b = m && typeof m.busy === "function" ? m.busy() : null;
+    if (b) return skills[i].id + ": " + b;
+  }
+  return null;
+}
+
+// Undo what this file set up in the page: the hook timer is its only timer; its click
+// handlers sit on elements loader.js throws away.
+function stop() {
+  if (hookTimer) { clearInterval(hookTimer); hookTimer = null; }
+  skills = [];
+}
+
+window.PenyApp = {
+  stop: stop,
+  isBusy: isBusy,
+  error: startError,
+  skillsCount: function () { return skills.length; }
+};
+
 }());
