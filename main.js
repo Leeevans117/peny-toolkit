@@ -166,9 +166,25 @@ function progressText(p) {
   if (p.event === "none") return "Nothing to render" + (p.already ? " (" + p.already + " already have proxies)" : "");
   return p.finished + " of " + p.total + " proxies done · " + p.percent.toFixed(p.percent % 1 ? 1 : 0) + "%";
 }
+// "About 12 min left (8 of 30 done)"; empty when the run is over or cancelled.
+function etaText(p) {
+  var e = p && p.eta;
+  if (!e || p.event === "none" || p.event === "finished") return "";
+  var done = " (" + p.finished + " of " + p.total + " done)";
+  if (e.state === "paused") return "Paused" + done;
+  if (e.state === "estimating") return "Estimating time left…" + done;
+  if (e.state !== "ok") return "";
+  var m = Math.round(e.seconds / 60), t;
+  if (e.seconds < 60) t = "Less than a minute left";
+  else if (m < 60) t = "About " + m + " min left";
+  else t = "About " + Math.floor(m / 60) + " h" + (m % 60 ? " " + m % 60 + " min" : "") + " left";
+  return t + done;
+}
 function showProgress(p) {
   if (!p) return;
-  var line = "Proxy progress: " + progressText(p) + " (" + p.event + ", " + p.running + " running" +
+  var eta = etaText(p);
+  var line = "Proxy progress: " + progressText(p) + (eta ? " · " + eta : "") +
+    (p.eta && p.eta.state === "ok" ? " [eta " + p.eta.seconds + " s, raw " + p.eta.raw + " s]" : "") + " (" + p.event + ", " + p.running + " running" +
     (p.failed ? ", " + p.failed + " failed" : "") + (p.cancelled ? ", cancelled" : "") + ")";
   if (p.event === "tick") {
     if (Date.now() - lastProgressFileAt >= 3000) {
@@ -214,6 +230,7 @@ function drawProgress(p) {
   if (!p) {
     count.textContent = "No proxy run yet";
     fill.style.width = "0%";
+    document.getElementById("peta").textContent = "";
     sub.textContent = "";
     box.className = "glass";
   } else {
@@ -221,6 +238,7 @@ function drawProgress(p) {
     count.innerHTML = p.event === "none" ? "Nothing to render" :
       "<b>" + p.finished + "</b> of <b>" + p.total + "</b> · <b>" + pct + "%</b>";
     fill.style.width = (p.fraction * 100) + "%";
+    document.getElementById("peta").textContent = etaText(p);
     var bits = [];
     if (p.running) bits.push(p.running + " rendering");
     if (p.queued) bits.push(p.queued + " queued");

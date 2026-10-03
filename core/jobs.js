@@ -18,6 +18,15 @@
  * one: REDline logs "Export Job frame complete. <n> <fraction>" per frame, ffmpeg logs
  * "Duration:" once and "time=" as it goes. opts.onProgress gets it on every start/finish
  * (event "job-start"/"job-done") and at most every 500 ms in between (event "tick").
+ *
+ * ETA (progress().eta): each job may carry a weight (proxy-automation passes source bytes)
+ * and a kind ("r3d"/"ffmpeg": REDline is far slower per byte). Seconds-per-weight is
+ * measured per kind from the jobs' own run times (finished jobs, plus running ones past
+ * 10% of their render), so it already includes the slow-down of 4 renders at once and is
+ * not thrown by pauses. The remaining jobs are then laid out on maxConcurrent lanes, so
+ * the tail (fewer than 4 left) is counted right. "Estimating" until a job has finished,
+ * or while a kind still to render has no measurement. The finish time is smoothed
+ * (15 s time constant, less near the end) so the number does not jump about.
  */
 
 var childProcess = require("child_process");
@@ -75,6 +84,7 @@ function JobPool(opts) {
   this.started = false;
   this.waiters = [];
   this.watchTimer = null;
+  this.eta = null; // { finishAt, firstAt, firstSec } once estimated
 }
 
 JobPool.prototype.add = function (job) {
@@ -119,7 +129,65 @@ JobPool.prototype.progress = function () {
   var fraction = s.total ? Math.min((finished + partial) / s.total, 1) : 1;
   return { total: s.total, finished: finished, ok: s.ok, failed: s.failed + s.killed, running: s.running,
     queued: s.queued, notStarted: s.notStarted, cancelled: s.cancelled, paused: s.paused,
-    fraction: fraction, percent: Math.floor(fraction * 1000) / 10 };
+    fraction: fraction, percent: Math.floor(fraction * 1000) / 10, eta: this._estimate(s) };
+};
+
+// Seconds per weight unit for each kind, from finished ok jobs and running jobs past 10%.
+JobPool.prototype._rates = function (now) {
+  var acc = {}, self = this;
+  function add(kind, sec, w) { var a = acc[kind] = acc[kind] || { sec: 0, w: 0 }; a.sec += sec; a.w += w; }
+  this.done.forEach(function (j) { if (j.state === "ok" && j.exactSeconds > 0) add(j.kind || "job", j.exactSeconds, jobWeight(j)); });
+  Object.keys(this.running).forEach(function (k) {
+    var j = self.running[k];
+    if (j.progress >= 0.1) add(j.kind || "job", (now - j.launchedAt) / 1000, jobWeight(j) * j.progress);
+  });
+  var rates = {};
+  Object.keys(acc).forEach(function (k) { if (acc[k].w > 0) rates[k] = acc[k].sec / acc[k].w; });
+  return rates;
+};
+
+function jobWeight(j) { return j.weight > 0 ? j.weight : 1; }
+
+// { state: "estimating"|"ok"|"paused"|"cancelled"|"done", seconds?, finishAt? }
+JobPool.prototype._estimate = function (s) {
+  if (s.cancelled) return { state: "cancelled" };
+  if (!s.queued && !s.running) return { state: "done" };
+  if (s.paused) return { state: "paused" };
+  var now = Date.now(), self = this, rates = this._rates(now);
+  if (!this.done.some(function (j) { return j.state === "ok"; })) return { state: "estimating" };
+  var lanes = [], missing = false;
+  function cost(j, frac) {
+    var r = rates[j.kind || "job"];
+    if (r === undefined) { missing = true; return 0; }
+    return jobWeight(j) * frac * r;
+  }
+  Object.keys(this.running).forEach(function (k) {
+    var j = self.running[k], f = Math.min(Math.max(j.progress || 0, 0), 0.99);
+    var left = cost(j, 1 - f);
+    // No progress output: its run so far counts, never below 0.
+    if (!(j.progress > 0)) left = Math.max(left - (now - j.launchedAt) / 1000, left * 0.1);
+    lanes.push(left);
+  });
+  var n = Math.max(this.opts.maxConcurrent, 1);
+  while (lanes.length < n) lanes.push(0);
+  this.queue.forEach(function (j) {
+    var i = 0;
+    for (var x = 1; x < lanes.length; x++) if (lanes[x] < lanes[i]) i = x;
+    lanes[i] += cost(j, 1);
+  });
+  if (missing) return { state: "estimating" };
+  var raw = now + Math.max.apply(null, lanes) * 1000;
+  var e = this.eta;
+  if (!e) {
+    e = this.eta = { finishAt: raw, at: now, firstAt: now, firstSec: (raw - now) / 1000 };
+  } else {
+    var tau = Math.min(15000, Math.max(3000, (raw - now) / 4)); // short runs settle faster
+    var a = 1 - Math.exp(-(now - e.at) / tau);
+    e.finishAt += a * (raw - e.finishAt);
+    e.at = now;
+  }
+  return { state: "ok", seconds: Math.max(0, Math.round((e.finishAt - now) / 1000)), finishAt: Math.round(e.finishAt),
+    raw: Math.round((raw - now) / 1000) };
 };
 
 JobPool.prototype._emitProgress = function (event) {
@@ -139,8 +207,8 @@ JobPool.prototype.start = function () {
   this._fill();
 };
 
-JobPool.prototype.pause = function () { this.paused = true; this.log("Pool paused: no new jobs will start; running jobs carry on."); this.onChange(); };
-JobPool.prototype.resume = function () { this.paused = false; this.log("Pool resumed."); this._fill(); this.onChange(); };
+JobPool.prototype.pause = function () { this.paused = true; this.log("Pool paused: no new jobs will start; running jobs carry on."); this.onChange(); this._emitProgress("paused"); };
+JobPool.prototype.resume = function () { this.paused = false; this.log("Pool resumed."); this._fill(); this.onChange(); this._emitProgress("resumed"); };
 
 JobPool.prototype.cancel = function () {
   this.cancelled = true;
@@ -179,7 +247,8 @@ JobPool.prototype._launch = function (job) {
   this.log("Start: " + job.label);
   job.child = childProcess.exec(job.cmd, { maxBuffer: this.opts.maxBuffer }, function (error, stdout, stderr) {
     delete self.running[job.key];
-    job.seconds = Math.round((Date.now() - job.launchedAt) / 1000);
+    job.exactSeconds = (Date.now() - job.launchedAt) / 1000;
+    job.seconds = Math.round(job.exactSeconds);
     if (job.killReason) {
       job.state = "killed";
       job.reason = job.killReason;

@@ -30,6 +30,19 @@ function firstExisting(list) { for (var i = 0; i < list.length; i++) if (fs.exis
 function q(s) { return '"' + String(s).replace(/(["\\$`])/g, "\\$1") + '"'; }
 function extOf(p) { var d = p.lastIndexOf("."); return d === -1 ? "" : p.substring(d + 1).toLowerCase(); }
 function stripExt(n) { var d = n.lastIndexOf("."); return d > -1 ? n.substring(0, d) : n; }
+// Source bytes, the ETA's work measure. A RED clip is _001.R3D, _002.R3D... in one folder.
+function sourceBytes(p) {
+  try {
+    var m = /^(.*)_\d{3}\.r3d$/i.exec(path.basename(p));
+    if (!m) return fs.statSync(p).size;
+    var dir = path.dirname(p), pre = m[1].toLowerCase() + "_", total = 0;
+    fs.readdirSync(dir).forEach(function (n) {
+      var l = n.toLowerCase();
+      if (l.indexOf(pre) === 0 && /_\d{3}\.r3d$/.test(l)) { try { total += fs.statSync(path.join(dir, n)).size; } catch (e) {} }
+    });
+    return total || fs.statSync(p).size;
+  } catch (e) { return 0; }
+}
 function commonPrefix(a, b) { var i = 0, n = Math.min(a.length, b.length); while (i < n && a.charAt(i) === b.charAt(i)) i++; return i; }
 
 module.exports = function (api) {
@@ -198,22 +211,40 @@ module.exports = function (api) {
         onProgress: function (pr) { pr.already = p.done.length; api.progress(pr); }
       });
       var noCmd = [];
+      // ETA: REDline is timed separately from ffmpeg, so if both kinds are queued, start one
+      // of the later kind in the first wave instead of after all the others.
+      var firstR3d = -1, firstOther = -1;
+      p.render.forEach(function (r, i) {
+        if (extOf(r.mediaPath) === "r3d") { if (firstR3d < 0) firstR3d = i; } else if (firstOther < 0) firstOther = i;
+      });
+      var late = Math.max(firstR3d, firstOther);
+      if (firstR3d >= 0 && firstOther >= 0 && late > 1) p.render.splice(1, 0, p.render.splice(late, 1)[0]);
       p.render.forEach(function (r) {
         try { fs.mkdirSync(path.dirname(r.outputPath), { recursive: true }); } catch (e) {}
         var cmd = encodeCommand(r);
         if (!cmd) { r.reason = "no " + (extOf(r.mediaPath) === "r3d" ? "REDline" : "ffmpeg") + " found"; noCmd.push(r); return; }
-        pool.add({ key: r.outputPath, cmd: cmd, outputPath: r.outputPath, label: r.binPath + "/" + r.name });
+        pool.add({ key: r.outputPath, cmd: cmd, outputPath: r.outputPath, label: r.binPath + "/" + r.name,
+          weight: sourceBytes(r.mediaPath), kind: extOf(r.mediaPath) === "r3d" ? "r3d" : "ffmpeg" });
       });
+      var startedAt = Date.now();
       pool.start();
       return pool.wait().then(function (s) {
         var pr = pool.progress(); pr.event = "finished"; pr.already = p.done.length; api.progress(pr);
+        // First ETA vs the real finish, for checking the estimate (log + result details).
+        var e = pool.eta, etaCheck = null;
+        if (e) {
+          etaCheck = { firstEstimateAfterSec: Math.round((e.firstAt - startedAt) / 1000), firstEstimateLeftSec: Math.round(e.firstSec),
+            actualLeftSec: Math.round((Date.now() - e.firstAt) / 1000), totalSec: Math.round((Date.now() - startedAt) / 1000) };
+          api.log("ETA check: first estimate " + etaCheck.firstEstimateAfterSec + " s in said " + etaCheck.firstEstimateLeftSec +
+            " s left; it took " + etaCheck.actualLeftSec + " s (whole run " + etaCheck.totalSec + " s).");
+        }
         pool = null;
         var summary = s.ok + " of " + s.total + " rendered and checked complete" +
           (s.failed + s.killed ? ", " + (s.failed + s.killed) + " failed or killed" : "") +
           (s.cancelled ? " (cancelled)" : "") + ". " + p.done.length + " already had proxies, " + p.skipped.length + " skipped.";
         return { ok: s.failed + s.killed === 0 && !s.cancelled && !noCmd.length, summary: summary, error: summary, details: {
           scope: res.details.scope, jobs: s.jobs, done: brief(p.done), shared: brief(p.shared),
-          skipped: brief(p.skipped, 500), noCommand: brief(noCmd) } };
+          skipped: brief(p.skipped, 500), noCommand: brief(noCmd), eta: etaCheck } };
       });
     });
   };
