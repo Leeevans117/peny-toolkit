@@ -407,13 +407,13 @@
     var text = spans.length + " answers: " + cuts + " cuts, " + raised + " pieces raised one track, " + skipped.length + " skipped; links " +
       (linkBad.length || linkProblems.length ? "NOT all intact" : "intact") + "; " + (shifted.length ? shifted.length + " pieces shifted in time" : "nothing shifted in time") +
       (trim ? "; " + trim.gaps + " dead bits removed (" + T.fmt(trim.removed) + "), " + trim.markersMoved + " markers moved with them" + (trim.problems.length ? ", " + trim.problems.length + " problems" : "") : "") +
-      "; length " + T.fmt(durAfter) + (trim ? " (was " + T.fmt(durBefore) + ")" : Math.abs(durAfter - durBefore) < half ? " (unchanged)" : " (was " + T.fmt(durBefore) + ")") +
+      "; length " + T.fmt(durAfter) + (trim || Math.abs(durAfter - durBefore) >= half ? " (was " + T.fmt(durBefore) + ")" : " (unchanged)") +
       "; " + (layers.error ? "adjustment layers: " + layers.error : layers.skipped ? "no adjustment layers (" + layers.skipped + ")" :
         layers.placed + " adjustment layers named on " + layers.track) + ".";
     var details = { sequence: String(seq.name), spansFrom: spans.byChapter ? "question markers" : "answer markers", layers: layers, answers: spans.length, joined: 0, cuts: cuts, relinkedGroups: relinked, raised: raised, raisedPiecesFound: up,
       skipped: skipped, unmatched: notUp, linkProblems: linkProblems.concat(linkBad), shifted: shifted,
       durationBefore: durBefore, durationAfter: durAfter, cutLogSample: cutLog.slice(0, 5),
-      trim: trim ? { gaps: trim.gaps, removed: trim.removed, keptTotal: trim.keptTotal, markersMoved: trim.markersMoved, relinked: trim.relinked,
+      trim: trim ? { gaps: trim.gaps, removed: trim.removed, keptTotal: trim.keptTotal, markersMoved: trim.markersMoved, markersRestored: trim.restored || 0, relinked: trim.relinked,
         holes: trim.holes, problems: trim.problems.slice(0, 20), extractNote: trim.note } : null };
     for (i = 0; i < spans.length; i++) if (spans[i].names.length > 1) details.joined++;
     return ok ? T.ok(text, details) : T.fail(text, details);
@@ -448,16 +448,28 @@
     };
     // Pieces and markers before.
     var before = allPieces(seq), oldMarkers = [], m = seq.markers.getFirstMarker();
-    while (m) { oldMarkers.push({ start: m.start.seconds, end: m.end.seconds, name: String(m.name), type: String(m.type) }); m = seq.markers.getNextMarker(m); }
-    // Extract, last gap first. The out point is the last frame of the gap (Premiere's out is inclusive).
+    while (m) { oldMarkers.push({ start: m.start.seconds, end: m.end.seconds, name: String(m.name), type: String(m.type), comments: String(m.comments) }); m = seq.markers.getNextMarker(m); }
+    // Extract, last gap first. QE extract(in, out) removes in..out with out exclusive
+    // (an out of the gap's last frame left one frame behind, 3 Oct 2026). Any wrong amount
+    // stops the trim, and only what was really removed is counted.
+    var done = 0, doneGaps = [];
     for (i = gaps.length - 1; i >= 0; i--) {
       var d0 = T.sec(seq.end);
-      q.extract(tcOf(seq, gaps[i].a), tcOf(seq, gaps[i].b - frame));
+      q.extract(tcOf(seq, gaps[i].a), tcOf(seq, gaps[i].b));
       var cut = d0 - T.sec(seq.end);
       if (Math.abs(cut - (gaps[i].b - gaps[i].a)) > half) {
-        res.problems.push("extract " + T.fmt(gaps[i].a) + "-" + T.fmt(gaps[i].b) + " removed " + cut.toFixed(3) + " s, not " + (gaps[i].b - gaps[i].a).toFixed(3));
-        if (res.problems.length > 3) { res.note = "stopped after repeated extract errors"; break; }
+        res.problems.push("extract " + T.fmt(gaps[i].a) + "-" + T.fmt(gaps[i].b) + " removed " + cut.toFixed(3) + " s, not " + (gaps[i].b - gaps[i].a).toFixed(3) + "; trim stopped there");
+        if (cut > half) { done++; doneGaps.push({ a: gaps[i].a, b: gaps[i].a + cut }); }
+        break;
       }
+      done++;
+      doneGaps.push(gaps[i]);
+    }
+    if (done < gaps.length) {
+      gaps = doneGaps.sort(function (x, y) { return x.a - y.a; });
+      removed = 0;
+      for (i = 0; i < gaps.length; i++) removed += gaps[i].b - gaps[i].a;
+      res.gaps = gaps.length; res.removed = removed; res.keptTotal = dur - removed;
     }
     // Markers: put each back on its answer's new time (whether or not Premiere moved it).
     var cur = [], moved = 0;
@@ -467,7 +479,17 @@
       var om = oldMarkers[i], hit = null;
       for (j = 0; j < cur.length && !hit; j++) if (String(cur[j].name) === om.name && String(cur[j].type) === om.type &&
         (Math.abs(cur[j].start.seconds - om.start) < half || Math.abs(cur[j].start.seconds - res.map(om.start)) < half)) hit = cur[j];
-      if (!hit) { res.problems.push("marker " + om.name + " not found after the trim"); continue; }
+      if (!hit) {
+        // Extract drops a marker that starts exactly where a removed stretch ends (seen on
+        // Chapter markers, 3 Oct 2026): put it back from what it was.
+        try {
+          hit = seq.markers.createMarker(res.map(om.start));
+          hit.name = om.name;
+          hit.comments = om.comments;
+          if (om.type === "Chapter") hit.setTypeAsChapter();
+          res.restored = (res.restored || 0) + 1;
+        } catch (eR) { res.problems.push("marker " + om.name + " lost in the trim and could not be put back: " + eR); continue; }
+      }
       var na = res.map(om.start), nb = res.map(om.end);
       if (Math.abs(hit.start.seconds - na) >= half || Math.abs(hit.end.seconds - nb) >= half) {
         try { hit.start = na; } catch (e1) {}
