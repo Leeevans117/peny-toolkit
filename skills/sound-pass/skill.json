@@ -1,0 +1,21 @@
+{
+  "id": "sound-pass",
+  "name": "Sound Pass",
+  "description": "Levels the interview voice in the active sequence the way Lee did in Assembly V1 (a Hard Limiter on every voice clip, top at -6 dB on the meters), but clip by clip so speech sits around -6 dB with the body between -12 and -6, even from clip to clip. Works on a safe copy; measured from Premiere's own render.",
+  "order": 7,
+  "icon": "icon.svg",
+  "tint": ["#1c1c1e", "#000000"],
+  "entry": "premiere.jsx",
+  "panel": "panel.js",
+  "inputs": [
+    { "id": "tracks", "label": "Voice tracks (optional)", "placeholder": "e.g. A1; empty = every clip playing a .wav (wireless) on an unmuted track" }
+  ],
+  "actions": [
+    {
+      "id": "run",
+      "label": "Level interview audio",
+      "style": "primary",
+      "confirm": "Level the interview voice on a safe copy of this sequence? Each voice clip gets one Hard Limiter (Lee's V1 settings, ceiling -6 dB on the meters) with its own input boost, measured from Premiere renders of the voice tracks. Only the TOOLKIT COPY changes; clip gain, Volume and faders are left as they are, and nothing is saved."
+    }
+  ]
+}
