@@ -1,5 +1,33 @@
 # Setting up a new Mac
 
+Lee can just tell Claude on the new Mac: "Set up the Peny Toolkit from
+github.com/Leeevans117/peny-toolkit". Claude follows "For Claude" below and only stops
+for the steps that need Lee (marked **Lee**).
+
+## For Claude
+
+Run these in order. Use full paths (`/opt/homebrew/bin/...`); stop and ask Lee only at
+the **Lee** steps.
+
+1. `command -v brew || ls /opt/homebrew/bin/brew` - if missing, **Lee** installs Homebrew
+   (needs the Mac password): give the command from https://brew.sh.
+2. `/opt/homebrew/bin/brew install gh` if `gh` is missing.
+3. `/opt/homebrew/bin/gh auth status` - if not signed in, **Lee** runs
+   `/opt/homebrew/bin/gh auth login --hostname github.com --git-protocol https --web`
+   in Terminal and signs in as Leeevans117. Then `/opt/homebrew/bin/gh auth setup-git`.
+4. If `$HOME/PenyToolkit/com.peny.toolkit` is missing:
+   `mkdir -p $HOME/PenyToolkit && /opt/homebrew/bin/gh repo clone Leeevans117/peny-toolkit $HOME/PenyToolkit/com.peny.toolkit`.
+   Otherwise `git -C $HOME/PenyToolkit/com.peny.toolkit pull`.
+5. `$HOME/PenyToolkit/com.peny.toolkit/setup.sh` (run in the background: the first run
+   downloads about 22 GB of models). Safe to repeat.
+6. Report the MISSING lines. Only **Lee** can do: REDline (REDCINE-X PRO from
+   https://www.red.com/download), Effects panel menu > Import Presets with
+   `<home>/PenyToolkit-scratch/colour/Peny LUT Presets.prfpset` (give the full path),
+   and opening Window > Extensions > Peny Toolkit (a brand-new panel may need a
+   Premiere restart).
+
+## By hand
+
 1. Install Adobe Premiere Pro and Homebrew (https://brew.sh).
 2. Sign in to GitHub on the Mac (the repo is private), e.g. `brew install gh && gh auth login`.
 3. Clone and run setup:
