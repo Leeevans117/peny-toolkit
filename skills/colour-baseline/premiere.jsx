@@ -116,7 +116,7 @@
   function finish(params) {
     var seq = T.findSequenceById(params.id);
     if (!seq) return T.fail("The imported sequence " + params.id + " is not in the project.");
-    var base = String(params.base).replace(/\s*(\(\d+\)\s*)?TOOLKIT COPY$/, "").replace(/\s+$/, "");
+    var base = String(params.base).replace(/\s*(\(\d+\)\s*)?(GRADED\s+)?TOOLKIT COPY$/, "").replace(/\s+$/, "");
     var wanted = base + " " + GRADED;
     for (var n = 2; T.sequenceNameExists(wanted) && String(seq.name) !== wanted && n < 100; n++) wanted = base + " (" + n + ") " + GRADED;
     seq.name = wanted;

@@ -236,7 +236,10 @@ module.exports = function (api) {
       writeSettings(settings);
       var clips = [], missing = [];
       cams.forEach(function (cam) {
-        var pick = choices.hasOwnProperty(cam.camera) ? choices[cam.camera] : NO_LUT;
+        // The LUT Detect shows: the saved choice, else the suggestion (Lee's preset naming the
+        // brand). Suggestions are only shown, not saved, so Apply must work them out the same
+        // way (bug 3 Oct: Detect showed CANON LUT / RED LUT, Apply used no LUT).
+        var pick = choices.hasOwnProperty(cam.camera) ? choices[cam.camera] : suggest(cam.camera, presetsInfo.names);
         if (pick && presetsInfo.names.indexOf(pick) === -1) missing.push(cam.camera + " -> " + pick);
         cam.pick = pick;
         cam.full.forEach(function (cl) {
