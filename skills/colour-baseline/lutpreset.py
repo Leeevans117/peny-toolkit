@@ -411,8 +411,8 @@ def _copy_objects(parts, next_id, instance_name, comp_id=None):
 def grade(project_in, project_out, plan):
     """plan: {"sequence": uid, "newSequence": uid, "newName", "oldName", "presets": prfpset path,
     "adjustments": preset name, "clips": [{"track", "index", "start" (ticks), "lut": preset or null,
-    "adjustments": bool}]}. Adds the effects above the clip's first Lumetri (or at the end), so the
-    stack reads Adjustments, LUT, then whatever the clip had. Returns a report."""
+    "adjustments": bool}]}. Appends [LUT, Adjustments] to each clip's chain, so Effect Controls
+    reads Adjustments, LUT, then whatever the clip had (see below). Returns a report."""
     import gzip
     raw = open(project_in, "rb").read()
     x = (gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw).decode("utf-8")
@@ -450,22 +450,23 @@ def grade(project_in, project_out, plan):
         chain_id = re.search(r'<Components ObjectRef="(\d+)"/>', ti).group(1)
         chain = objs[chain_id]
         refs = [r for i, r in re.findall(r'<Component Index="(\d+)" ObjectRef="(\d+)"/>', chain)]
-        # Each effect in a chain has its own <ID>; in Premiere's own files they count down from
-        # the top of the stack (e.g. Motion 1, then Lumetri 7, 6, 5), and Effect Controls shows
-        # them in that order. Equal IDs made Premiere show the LUT above Adjustments (Lee, 3 Oct),
-        # so: Adjustments = highest, LUT next, both above the clip's existing effects.
+        # Premiere renders a clip's effects from the END of the chain upwards, and Effect Controls
+        # lists them in that order (top = first). trackItem.components and QE list the chain in
+        # file order, i.e. upside down. Proven 3 Oct 2026 by render: B&W LUT + Adjustments with
+        # Temperature +100 came out grey only with the chain written [LUT, Adjustments]. So the
+        # new effects go at the end of the chain as [LUT, Adjustments]: Effect Controls shows
+        # Adjustments, then the LUT, then whatever the clip already had. Each gets its own <ID>.
         top = max([int(i) for r in refs for i in re.findall(r"<ID>(\d+)</ID>", objs.get(r, ""))[:1]] + [1])
         add = []
-        if c.get("adjustments"):
-            cid, o, next_id = _copy_objects(presets[plan["adjustments"]], next_id, plan["adjustments"], top + 2)
-            add.append(cid); new_objs.extend(o)
         if c.get("lut"):
             cid, o, next_id = _copy_objects(presets[c["lut"]], next_id, c["lut"], top + 1)
             add.append(cid); new_objs.extend(o)
+        if c.get("adjustments"):
+            cid, o, next_id = _copy_objects(presets[plan["adjustments"]], next_id, plan["adjustments"], top + 2)
+            add.append(cid); new_objs.extend(o)
         if not add:
             continue
-        pos = next((k for k, r in enumerate(refs) if "AE.ADBE Lumetri" in objs.get(r, "")), len(refs))
-        refs = refs[:pos] + add + refs[pos:]
+        refs = refs + add
         lines = "".join('\t\t\t\t<Component Index="%d" ObjectRef="%s"/>\n' % (k, r) for k, r in enumerate(refs))
         if "<Components Version=" in chain:
             new_chain = re.sub(r'(<Components Version="\d+">\n)[\s\S]*?(\t\t\t</Components>)', lambda m: m.group(1) + lines + m.group(2), chain, count=1)

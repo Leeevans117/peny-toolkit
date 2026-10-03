@@ -1,6 +1,9 @@
 // Colour baseline, Premiere side. The panel (panel.js) calls this with params.action:
 //   "scan"       - the active sequence's video clips that play a media file (read only), with each
-//                  clip's Lumetri effects (instance names, top to bottom).
+//                  clip's Lumetri effects by instance name: "lumetri" in trackItem.components order
+//                  (bottom-up), "shown" as Effect Controls lists them (top = rendered first).
+//                  trackItem.components (and QE) list a clip's effects in the reverse of
+//                  Effect Controls / render order (proven 3 Oct 2026 by a B&W LUT render test).
 //   "exportproj" - writes the active sequence to a .prproj file (Sequence.exportAsProject; the
 //                  sequence itself is not changed).
 //   "importseq"  - imports sequences from a .prproj (Project.importSequences) and lists the
@@ -36,6 +39,7 @@
     if (action === "frame") return frame(seq, params);
     if (action === "setparam") return setParam(seq, params);
     if (action === "addplain") return addPlain(seq, params);
+    if (action === "qeorder") return qeOrder(seq, params);
     return T.fail("Unknown action: " + action);
   };
 
@@ -70,7 +74,7 @@
         try { pm = String(pi.getProjectMetadata()); } catch (e2) {}
         clips.push({ track: t, nodeId: String(it.nodeId), item: String(pi.nodeId), name: String(it.name), start: it.start.seconds,
           startTicks: String(it.start.ticks), path: p, codec: metaField(pm, "PropertyText\\.Codec"),
-          videoInfo: metaField(pm, "Intrinsic\\.VideoInfo"), lumetri: lumetris(it.components) });
+          videoInfo: metaField(pm, "Intrinsic\\.VideoInfo"), lumetri: lumetris(it.components), shown: lumetris(it.components).reverse() });
       }
     }
     // Nested sequences on audio tracks too (they come in as copies with the graded sequence).
@@ -151,6 +155,28 @@
       return T.ok(String(pr.displayName) + ": " + before + " -> " + it.components[c].properties[params.prop].getValue(), {});
     }
     return T.fail("No Lumetri #" + params.lumetri);
+  }
+  // QE's component list for a clip, with each component's Saturation (used to tell two Lumetri
+  // effects apart after a marker value is set on one of them through the DOM).
+  function qeOrder(seq, params) {
+    var it = trackItem(seq, params.track, params.nodeId);
+    if (!it) return T.fail("Clip not found.");
+    app.enableQE();
+    var qs = qe.project.getActiveSequence(), qt = qs.getVideoTrackAt(params.track), want = String(it.start.ticks), qi = null;
+    for (var i = 0; i < qt.numItems; i++) { var x = qt.getItemAt(i); if (x && String(x.type) === "Clip" && String(x.start.ticks) === want) { qi = x; break; } }
+    if (!qi) return T.fail("QE item not found.");
+    var qe_ = [], dom = [];
+    for (var k = 0; k < qi.numComponents; k++) {
+      var qc = qi.getComponentAt(k), sat = null;
+      try { sat = String(qc.getParamValue("Saturation", "00:00:00:00")); } catch (e) { sat = "-"; }
+      qe_.push(String(qc.name) + " sat=" + sat);
+    }
+    for (var c = 0; c < it.components.numItems; c++) {
+      var cm = it.components[c], s2 = "-";
+      if (isLumetri(cm)) { try { s2 = String(cm.properties[16].getValue()); } catch (e2) {} }
+      dom.push(String(cm.displayName) + (instName(cm) ? " (" + instName(cm) + ")" : "") + " sat=" + s2);
+    }
+    return T.ok("QE: " + qe_.join(" | ") + " || DOM: " + dom.join(" | "), { qe: qe_, dom: dom });
   }
   // A plain Lumetri Color added with QE (goes at the bottom). TOOLKIT COPY only.
   function addPlain(seq, params) {

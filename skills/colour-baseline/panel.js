@@ -277,8 +277,10 @@ module.exports = function (api) {
     function verify(fin, extra) {
       var after = fin.details.clips, bad = [], ok = 0, lutAdded = 0, adjAdded = 0;
       scan0.clips.forEach(function (cl, i) {
-        var b = after[i], want = (cl.plan.adjustments ? [adj] : []).concat(cl.plan.lut ? [cl.plan.lut] : []);
-        want = want.concat(cl.lumetri); // new effects go above the clip's first Lumetri
+        // trackItem.components lists effects bottom-up (file order); Effect Controls shows the
+        // reverse. Expected in that list: what the clip had, then the LUT, then Adjustments last
+        // = Adjustments on top in Effect Controls.
+        var b = after[i], want = cl.lumetri.concat(cl.plan.lut ? [cl.plan.lut] : []).concat(cl.plan.adjustments ? [adj] : []);
         var same = b && b.track === cl.track && b.startTicks === cl.startTicks && b.item === cl.item && JSON.stringify(b.lumetri) === JSON.stringify(want);
         if (same) { ok++; if (cl.plan.lut) lutAdded++; if (cl.plan.adjustments) adjAdded++; }
         else bad.push({ name: cl.name, track: "V" + (cl.track + 1), expected: want, found: b ? b.lumetri : null });
