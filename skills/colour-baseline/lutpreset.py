@@ -345,6 +345,147 @@ def inject(project_xml, out_xml, chain_id, lut, adjustments):
     return {"chain": chain_id, "components": len(refs) + 1, "lut": name, "lutComponent": comp_id, "adjustmentsComponent": plain_ref}
 
 
+
+# ---- grade: add effects from a preset file to clips of an exported sequence ----
+def load_presets(prfpset):
+    """Lumetri presets in an effect preset file: {name: [component xml, param xml...]} with every
+    value filled in (Premiere stores repeated values once, later uses carry only BinaryHash)."""
+    with open(prfpset, "r", encoding="utf-8") as f:
+        x = f.read()
+    pool = {}
+    for m in re.finditer(r'<StartKeyframeValue Encoding="base64" BinaryHash="([^"]+)">[^<]*</StartKeyframeValue>', x):
+        pool.setdefault(m.group(1), m.group(0))
+    objs = {}
+    for m in re.finditer(r'\t<(\w+) ObjectID="(\d+)"[\s\S]*?\n\t</\1>', x):
+        objs[m.group(2)] = m.group(0)
+    out = {}
+    for t in [o for o in objs.values() if o.startswith("\t<TreeItem ")]:
+        dm, nm = re.search(r'<Data ObjectRef="(\d+)"/>', t), re.search(r"<Name>([^<]*)</Name>", t)
+        if not dm or not nm:
+            continue
+        m = (dm.group(1), nm.group(1))
+        item = objs.get(m[0], "")
+        pm = re.search(r'<FilterPreset Index="0" ObjectRef="(\d+)"/>', item)
+        if not pm:
+            continue
+        preset = objs.get(pm.group(1), "")
+        if "<FilterMatchName>AE.ADBE Lumetri</FilterMatchName>" not in preset:
+            continue
+        cid = re.search(r'<Component ObjectRef="(\d+)"/>', preset).group(1)
+        comp = objs[cid]
+        parts = [comp]
+        for i, r in re.findall(r'<Param Index="(\d+)" ObjectRef="(\d+)"/>', comp):
+            o = objs[r]
+            ref = re.search(r'<StartKeyframeValue Encoding="base64" BinaryHash="([^"]+)"/>', o)
+            if ref and ref.group(1) in pool:
+                o = o.replace(ref.group(0), pool[ref.group(1)])
+            parts.append(o)
+        name = m[1].replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+        out[name] = parts
+    return out
+
+
+def _copy_objects(parts, next_id, instance_name):
+    comp = parts[0]
+    old_cid = re.search(r'ObjectID="(\d+)"', comp).group(1)
+    remap = {old_cid: str(next_id)}
+    next_id += 1
+    for i, r in re.findall(r'<Param Index="(\d+)" ObjectRef="(\d+)"/>', comp):
+        remap[r] = str(next_id)
+        next_id += 1
+    out = []
+    c = re.sub(r'ObjectID="\d+"', 'ObjectID="%s"' % remap[old_cid], comp, count=1)
+    c = re.sub(r'(<Param Index="\d+" ObjectRef=")(\d+)("/>)', lambda m: m.group(1) + remap[m.group(2)] + m.group(3), c)
+    c = re.sub(r"\s*<InstanceName>[^<]*</InstanceName>", "", c)
+    c = c.replace("</DisplayName>", "</DisplayName>\n\t\t\t<InstanceName>%s</InstanceName>" % _xml_text(instance_name), 1)
+    out.append(c)
+    for o in parts[1:]:
+        oid = re.search(r'ObjectID="(\d+)"', o).group(1)
+        out.append(re.sub(r'ObjectID="\d+"', 'ObjectID="%s"' % remap[oid], o, count=1))
+    return remap[old_cid], out, next_id
+
+
+def grade(project_in, project_out, plan):
+    """plan: {"sequence": uid, "newSequence": uid, "newName", "oldName", "presets": prfpset path,
+    "adjustments": preset name, "clips": [{"track", "index", "start" (ticks), "lut": preset or null,
+    "adjustments": bool}]}. Adds the effects above the clip's first Lumetri (or at the end), so the
+    stack reads Adjustments, LUT, then whatever the clip had. Returns a report."""
+    import gzip
+    raw = open(project_in, "rb").read()
+    x = (gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw).decode("utf-8")
+    presets = load_presets(plan["presets"]) if plan.get("presets") else {}
+    if plan["adjustments"] not in presets:
+        with open(os.path.join(HERE, "plain.xml"), "r", encoding="utf-8") as f:
+            presets[plan["adjustments"]] = [o[2] for o in _objects(f.read())]
+    need = set([plan["adjustments"]] + [c["lut"] for c in plan["clips"] if c.get("lut")])
+    missing = [n for n in need if n not in presets]
+    if missing:
+        raise LutError("not in the preset file: " + ", ".join(sorted(missing)))
+    objs = {}
+    for m in re.finditer(r'\t<(\w+) Object(?:U)?ID="([^"]+)"[\s\S]*?\n\t</\1>', x):
+        objs[m.group(2)] = m.group(0)
+    seq = objs[plan["sequence"]]
+    vgroup = None
+    for r in re.findall(r'<TrackGroup Index="\d+">[\s\S]*?ObjectRef="(\d+)"', seq) + re.findall(r'ObjectRef="(\d+)"', seq):
+        if objs.get(r, "").startswith("\t<VideoTrackGroup "):
+            vgroup = objs[r]
+            break
+    if not vgroup:
+        raise LutError("video track group not found")
+    tracks = dict((int(i), u) for i, u in re.findall(r'<Track Index="(\d+)" ObjectURef="([^"]+)"/>', vgroup))
+    next_id = max(int(i) for i in re.findall(r'ObjectID="(\d+)"', x)) + 1000
+    new_objs, done, problems, seen_hash = [], 0, [], set(re.findall(r'BinaryHash="([^"]+)">', x))
+    for c in plan["clips"]:
+        track = objs.get(tracks.get(c["track"], ""), "")
+        items = re.findall(r'<TrackItem Index="(\d+)" ObjectRef="(\d+)"/>', track)
+        # The XML lists clips per track in time order, like the DOM; check the start too.
+        cand = [r for i, r in items if int(re.search(r"<Start>(-?\d+)</Start>", objs[r]).group(1) if "<Start>" in objs[r].split("</TrackItem>")[0] else 0) == int(c["start"])]
+        if len(cand) != 1:
+            problems.append({"clip": c, "reason": "%d track items at that start" % len(cand)})
+            continue
+        ti = objs[cand[0]]
+        chain_id = re.search(r'<Components ObjectRef="(\d+)"/>', ti).group(1)
+        chain = objs[chain_id]
+        refs = [r for i, r in re.findall(r'<Component Index="(\d+)" ObjectRef="(\d+)"/>', chain)]
+        add = []
+        if c.get("adjustments"):
+            cid, o, next_id = _copy_objects(presets[plan["adjustments"]], next_id, plan["adjustments"])
+            add.append(cid); new_objs.extend(o)
+        if c.get("lut"):
+            cid, o, next_id = _copy_objects(presets[c["lut"]], next_id, c["lut"])
+            add.append(cid); new_objs.extend(o)
+        if not add:
+            continue
+        pos = next((k for k, r in enumerate(refs) if "AE.ADBE Lumetri" in objs.get(r, "")), len(refs))
+        refs = refs[:pos] + add + refs[pos:]
+        lines = "".join('\t\t\t\t<Component Index="%d" ObjectRef="%s"/>\n' % (k, r) for k, r in enumerate(refs))
+        if "<Components Version=" in chain:
+            new_chain = re.sub(r'(<Components Version="\d+">\n)[\s\S]*?(\t\t\t</Components>)', lambda m: m.group(1) + lines + m.group(2), chain, count=1)
+        elif "<ComponentChain Version=" in chain:
+            new_chain = re.sub(r'(<ComponentChain Version="\d+">\n)', lambda m: m.group(1) + '\t\t\t<Components Version="1">\n' + lines + '\t\t\t</Components>\n', chain, count=1)
+        else:
+            raise LutError("unexpected component chain: " + chain[:200])
+        x = x.replace(chain, new_chain, 1)
+        objs[chain_id] = new_chain
+        done += 1
+    # Store each value once: later copies of the same value only carry its BinaryHash.
+    final = []
+    for o in new_objs:
+        def shrink(m):
+            h = m.group(1)
+            if h in seen_hash:
+                return '<StartKeyframeValue Encoding="base64" BinaryHash="%s"/>' % h
+            seen_hash.add(h)
+            return m.group(0)
+        final.append(re.sub(r'<StartKeyframeValue Encoding="base64" BinaryHash="([^"]+)">[^<]*</StartKeyframeValue>', shrink, o))
+    x = x.replace("</PremiereData>", "\n".join(final) + "\n</PremiereData>")
+    x = x.replace(plan["sequence"], plan["newSequence"])
+    x = x.replace(">%s<" % _xml_text(plan["oldName"]), ">%s<" % _xml_text(plan["newName"]))
+    with open(project_out, "wb") as f:
+        f.write(gzip.compress(x.encode("utf-8"), 6))
+    return {"clips": done, "problems": problems}
+
+
 def main(argv):
     if argv[0] == "presets":
         # presets <out.prfpset> <spec.json>: {"bin", "entries": [...], "paths": [...], "adjustments"}
@@ -363,6 +504,10 @@ def main(argv):
                     entries.append(e)
         results = write_presets(argv[1], spec.get("bin", "Peny LUTs"), entries)
         print(json.dumps({"results": results, "skipped": skipped}))
+    elif argv[0] == "grade":
+        print(json.dumps(grade(argv[1], argv[2], json.load(open(argv[3])))))
+    elif argv[0] == "list":
+        print(json.dumps(sorted(load_presets(argv[1]).keys())))
     elif argv[0] == "inject":
         print(json.dumps(inject(argv[1], argv[2], argv[3], argv[4], argv[5] if len(argv) > 5 else "Adjustments")))
     else:
