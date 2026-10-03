@@ -115,11 +115,15 @@ done
 # --- LUT presets -------------------------------------------------------------
 step "LUT presets (Colour)"
 LUTS="$HOME/PenyToolkit-scratch/colour/Peny LUT Presets.prfpset"
+GH="$(command -v gh || ls "$BREW_BIN/gh" 2>/dev/null)"
 if [ -f "$LUTS" ]; then ok "Peny LUT Presets.prfpset"
+elif [ $CHECK = 0 ] && [ -n "$GH" ] && mkdir -p "$(dirname "$LUTS")" \
+  && "$GH" release download presets -R Leeevans117/peny-toolkit -p "Peny.LUT.Presets.prfpset" -O "$LUTS" 2>/dev/null; then
+  ok "Peny LUT Presets.prfpset (downloaded to $(dirname "$LUTS"))"
+  echo "           In Premiere: Effects panel menu > Import Presets > choose that file (once per Mac)."
 else
-  todo "Peny LUT Presets.prfpset - too big for git (78 MB). Get it from the repo's Releases page"
-  echo "           (or: gh release download presets -R Leeevans117/peny-toolkit -D \"$(dirname "$LUTS")\")"
-  echo "           then in Premiere: Effects panel menu > Import Presets."
+  todo "Peny LUT Presets.prfpset - from https://github.com/Leeevans117/peny-toolkit/releases/tag/presets"
+  echo "           save as $LUTS, then in Premiere: Effects panel menu > Import Presets."
 fi
 
 # --- The panel ---------------------------------------------------------------

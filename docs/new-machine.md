@@ -10,9 +10,9 @@
 
 4. Install REDline by hand: REDCINE-X PRO from https://www.red.com/download (only
    needed for R3D proxies and camera detection).
-5. LUT presets: download `Peny LUT Presets.prfpset` from the repo's Releases page
-   (`gh release download presets -R Leeevans117/peny-toolkit -D ~/PenyToolkit-scratch/colour`),
-   then in Premiere: Effects panel menu > Import Presets.
+5. LUT presets: setup.sh downloads `Peny LUT Presets.prfpset` (78 MB, kept on the repo's
+   Releases page, too big for git) into `~/PenyToolkit-scratch/colour/`. Import it once in
+   Premiere: Effects panel menu > Import Presets.
 6. Open Premiere: Window > Extensions > Peny Toolkit.
 
 `setup.sh --check` lists what is missing without installing anything.
