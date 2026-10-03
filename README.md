@@ -65,16 +65,20 @@ one app tile per skill; tapping a tile opens that skill's view (< returns home).
 5. Install and reload:
 
    ```bash
-   cd ~/PenyToolkit/com.peny.toolkit
-   rsync -a --delete --exclude .git --exclude .gitignore ./ \
-     "$HOME/Library/Application Support/Adobe/CEP/extensions/com.peny.toolkit/"
+   /Users/penymini1/PenyToolkit/com.peny.toolkit/install.sh
    ```
 
-   `premiere.jsx` changes take effect on the next run (it is reloaded every time).
-   New skills or `main.js`/`panel.js` changes need the panel closed and reopened
-   (Window > Extensions > Peny Toolkit). Do not reload the page in place through the
-   debug port: afterwards Node's fs.promises never resolves and replies from Premiere
-   go missing.
+   It copies the panel into CEP (rsync, without .git and __pycache__), then asks the
+   open panel to soft-reload (loader.js swaps main.js, skills and core.jsx in place;
+   the page itself never reloads) and prints one line:
+   `OK` / `DEFERRED (busy: ...)` (reloads by itself when the running action ends) /
+   `ERROR ...` / `NO PANEL` (installed; it loads when the panel is opened). Exit 0 only on OK.
+
+   `premiere.jsx` changes take effect on the next run anyway (it is reloaded every time).
+   Changes to `loader.js` or `CSXS/manifest.xml` still need the panel closed and reopened
+   (Window > Extensions > Peny Toolkit); a manifest change may need a Premiere restart
+   (unverified). Do not reload the page in place through the debug port: afterwards
+   Node's fs.promises never resolves and replies from Premiere go missing.
 
 6. Commit: `git add -A && git commit -m "..."`.
 
