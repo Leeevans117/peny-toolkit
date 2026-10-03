@@ -126,6 +126,53 @@ else
   echo "           save as $LUTS, then in Premiere: Effects panel menu > Import Presets."
 fi
 
+# --- Automatic updates ------------------------------------------------------
+# Every commit on main is pushed to GitHub (git hook), and every hour this Mac pulls
+# new commits and installs them (launchd agent running auto-update.sh).
+step "Automatic updates"
+HOOK_FILE="$SRC/.git/hooks/post-commit"
+if [ ! -d "$SRC/.git" ]; then todo "not a git checkout - clone the repo to get updates"
+elif grep -q "Peny Toolkit: push" "$HOOK_FILE" 2>/dev/null; then ok "push on commit (git hook)"
+elif [ -e "$HOOK_FILE" ]; then todo "push on commit: $HOOK_FILE already exists, left alone"
+elif [ $CHECK = 1 ]; then todo "push on commit (git hook)"
+else
+  cat > "$HOOK_FILE" <<'HOOK'
+#!/bin/bash
+# Peny Toolkit: push every commit on main to GitHub (installed by setup.sh).
+[ "$(git rev-parse --abbrev-ref HEAD)" = main ] || exit 0
+mkdir -p "$HOME/Library/Logs"
+mkdir -p "$HOME/Library/Logs"
+( git push -q origin main >> "$HOME/Library/Logs/PenyToolkit-update.log" 2>&1 & )
+HOOK
+  chmod +x "$HOOK_FILE" && ok "push on commit (git hook installed)"
+fi
+
+LABEL=com.peny.toolkit.update
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+WANT="$(cat <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>$SRC/auto-update.sh</string></array>
+  <key>StartInterval</key><integer>3600</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardErrorPath</key><string>$HOME/Library/Logs/PenyToolkit-update.log</string>
+</dict>
+</plist>
+PL
+)"
+if [ -f "$PLIST" ] && [ "$(cat "$PLIST")" = "$WANT" ]; then ok "hourly update ($PLIST)"
+elif [ $CHECK = 1 ]; then todo "hourly update ($PLIST)"
+elif [ "${PENY_NO_LAUNCHD:-0}" = 1 ]; then
+  mkdir -p "$(dirname "$PLIST")" && printf '%s\n' "$WANT" > "$PLIST" && ok "hourly update (plist written, not loaded: test mode)"
+else
+  mkdir -p "$(dirname "$PLIST")" && printf '%s\n' "$WANT" > "$PLIST"
+  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null
+  launchctl bootstrap "gui/$(id -u)" "$PLIST" && ok "hourly update (loaded)" || todo "hourly update (launchctl bootstrap failed)"
+fi
+
 # --- The panel ---------------------------------------------------------------
 step "Peny Toolkit panel"
 DEST="$HOME/Library/Application Support/Adobe/CEP/extensions/com.peny.toolkit"

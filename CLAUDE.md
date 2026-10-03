@@ -13,4 +13,6 @@ When Lee starts work on a Mac, run the steps in `docs/new-machine.md` under
 never upgrades or overwrites). Then report what `setup.sh` says is still MISSING and
 which of those only Lee can do.
 
-After changing code: `./install.sh`, commit, push.
+After changing code: `./install.sh`, then commit on `main` (the git hook pushes it; the
+other Mac installs it within the hour). Never leave work uncommitted: the hourly update
+skips a checkout with uncommitted changes.

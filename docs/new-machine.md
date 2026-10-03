@@ -58,8 +58,18 @@ qwen2.5:32b ~20 GB).
 | PlayerDebugMode 1 for CSXS 11 and 12 | macOS defaults | lets Premiere load the unsigned panel |
 | The panel | `~/Library/Application Support/Adobe/CEP/extensions/com.peny.toolkit/` | Premiere |
 
-## Updates
+## Updates (automatic)
 
-```bash
-cd ~/PenyToolkit/com.peny.toolkit && git pull && ./install.sh
-```
+setup.sh turns these on:
+
+- **Push on commit**: a git hook pushes every commit on `main` to GitHub.
+- **Hourly update**: the launchd agent `com.peny.toolkit.update` runs `auto-update.sh`
+  every hour and at log-in. It pulls new commits (fast-forward only) and runs
+  `install.sh`, so the open panel soft-reloads (or waits until a running action ends).
+  It also pushes any commit the hook could not (offline). It skips a checkout with
+  uncommitted changes or on another branch, and stops if both Macs changed the toolkit
+  at once (log says "needs a merge by hand").
+
+Log: `~/Library/Logs/PenyToolkit-update.log`. Update now by hand:
+`~/PenyToolkit/com.peny.toolkit/auto-update.sh`. Turn the hourly update off:
+`launchctl bootout gui/$(id -u)/com.peny.toolkit.update`.
