@@ -31,7 +31,13 @@
   var lastStamp = readStamp();
   var deferredStamp = null;
 
-  function stamp() { return new Date().toISOString().replace("T", " ").slice(0, 23); }
+  // Local time, same format as main.js's log lines.
+  function stamp() {
+    var d = new Date();
+    function p(n, w) { n = String(n); while (n.length < (w || 2)) n = "0" + n; return n; }
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" +
+      p(d.getMinutes()) + ":" + p(d.getSeconds()) + "." + p(d.getMilliseconds(), 3);
+  }
   function log(msg) {
     try { fs.appendFileSync(LOG_FILE, stamp() + " [loader] " + msg + "\n"); } catch (e) {}
     var el = document.getElementById("log");
