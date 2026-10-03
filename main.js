@@ -472,6 +472,12 @@ function drawSkills() {
       var cl = document.createElement("div"); cl.className = "controls-label"; cl.textContent = "While running";
       card.appendChild(cl); card.appendChild(ctl);
     }
+    // A skill module can draw its own controls under the buttons (e.g. Colour's camera list).
+    if (s.module && typeof s.module.mount === "function") {
+      var slot = document.createElement("div"); slot.className = "skill-slot";
+      card.appendChild(slot);
+      try { s.module.mount(slot); } catch (eM) { log("Could not draw " + s.id + ": " + eM.message, "err"); }
+    }
     var st = document.createElement("div"); st.className = "status"; st.setAttribute("data-skill", s.id);
     card.appendChild(st);
     view.appendChild(card);

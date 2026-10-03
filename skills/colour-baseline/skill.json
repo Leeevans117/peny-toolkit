@@ -1,0 +1,27 @@
+{
+  "id": "colour-baseline",
+  "name": "Colour",
+  "description": "Sets up a grade on a safe copy of the active sequence. Detect cameras lists the cameras in the sequence with a Lumetri preset (LUT) for each. Apply baseline grade adds, on every video clip, the camera's LUT Lumetri and an \"Adjustments\" Lumetri above it, so you grade by selecting Adjustments. Uses Premiere's Lumetri presets, because a script cannot load a .cube file into Lumetri. Nothing is saved.",
+  "order": 8,
+  "icon": "icon.svg",
+  "tint": [
+    "#1c1c1e",
+    "#000000"
+  ],
+  "entry": "premiere.jsx",
+  "panel": "panel.js",
+  "inputs": [],
+  "actions": [
+    {
+      "id": "detect",
+      "label": "Detect cameras",
+      "style": "secondary"
+    },
+    {
+      "id": "apply",
+      "label": "Apply baseline grade",
+      "style": "primary",
+      "confirm": "Add the baseline grade on a safe copy of this sequence? Every video clip gets its camera's LUT preset as a Lumetri Color, and a Lumetri Color called \"Adjustments\" above it. Clips that already have them are skipped. Only the TOOLKIT COPY changes; nothing is saved."
+    }
+  ]
+}
