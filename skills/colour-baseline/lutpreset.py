@@ -385,7 +385,8 @@ def load_presets(prfpset):
     return out
 
 
-def _copy_objects(parts, next_id, instance_name):
+def _copy_objects(parts, next_id, instance_name, comp_id=None):
+    """Copies an effect with fresh ObjectIDs; comp_id sets the component's <ID> in its chain."""
     comp = parts[0]
     old_cid = re.search(r'ObjectID="(\d+)"', comp).group(1)
     remap = {old_cid: str(next_id)}
@@ -398,6 +399,8 @@ def _copy_objects(parts, next_id, instance_name):
     c = re.sub(r'(<Param Index="\d+" ObjectRef=")(\d+)("/>)', lambda m: m.group(1) + remap[m.group(2)] + m.group(3), c)
     c = re.sub(r"\s*<InstanceName>[^<]*</InstanceName>", "", c)
     c = c.replace("</DisplayName>", "</DisplayName>\n\t\t\t<InstanceName>%s</InstanceName>" % _xml_text(instance_name), 1)
+    if comp_id is not None:
+        c = re.sub(r"<ID>\d+</ID>", "<ID>%d</ID>" % comp_id, c, count=1)
     out.append(c)
     for o in parts[1:]:
         oid = re.search(r'ObjectID="(\d+)"', o).group(1)
@@ -447,12 +450,17 @@ def grade(project_in, project_out, plan):
         chain_id = re.search(r'<Components ObjectRef="(\d+)"/>', ti).group(1)
         chain = objs[chain_id]
         refs = [r for i, r in re.findall(r'<Component Index="(\d+)" ObjectRef="(\d+)"/>', chain)]
+        # Each effect in a chain has its own <ID>; in Premiere's own files they count down from
+        # the top of the stack (e.g. Motion 1, then Lumetri 7, 6, 5), and Effect Controls shows
+        # them in that order. Equal IDs made Premiere show the LUT above Adjustments (Lee, 3 Oct),
+        # so: Adjustments = highest, LUT next, both above the clip's existing effects.
+        top = max([int(i) for r in refs for i in re.findall(r"<ID>(\d+)</ID>", objs.get(r, ""))[:1]] + [1])
         add = []
         if c.get("adjustments"):
-            cid, o, next_id = _copy_objects(presets[plan["adjustments"]], next_id, plan["adjustments"])
+            cid, o, next_id = _copy_objects(presets[plan["adjustments"]], next_id, plan["adjustments"], top + 2)
             add.append(cid); new_objs.extend(o)
         if c.get("lut"):
-            cid, o, next_id = _copy_objects(presets[c["lut"]], next_id, c["lut"])
+            cid, o, next_id = _copy_objects(presets[c["lut"]], next_id, c["lut"], top + 1)
             add.append(cid); new_objs.extend(o)
         if not add:
             continue
