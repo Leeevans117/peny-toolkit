@@ -21,12 +21,17 @@
  *
  * ETA (progress().eta): each job may carry a weight (proxy-automation passes source bytes)
  * and a kind ("r3d"/"ffmpeg": REDline is far slower per byte). Seconds-per-weight is
- * measured per kind from the jobs' own run times (finished jobs, plus running ones past
- * 10% of their render), so it already includes the slow-down of 4 renders at once and is
- * not thrown by pauses. The remaining jobs are then laid out on maxConcurrent lanes, so
- * the tail (fewer than 4 left) is counted right. "Estimating" until a job has finished,
- * or while a kind still to render has no measurement. The finish time is smoothed
- * (15 s time constant, less near the end) so the number does not jump about.
+ * measured per kind from the jobs' own run times (see _rates: recency-weighted, first
+ * wave discounted, plus the rate saved from earlier runs in opts.etaHistoryFile), so it
+ * already includes the slow-down of 4 renders at once and is not thrown by pauses. A
+ * running job's time left blends that rate with its own pace (time so far / share done).
+ * The rest of the run is then played forward with up to maxConcurrent jobs at once and
+ * each job slower the more run together (ETA_SHARE), so the tail is counted right. "Estimating" only while a kind still to render has no
+ * measurement and no saved rate. The finish time is smoothed (up to 10 s time constant)
+ * so the number does not jump about. eta.jobs lists each running job with its own
+ * fraction and seconds left (Jobs in progress panel).
+ * Replay check (12 Oct 2026 Komodo runs: 44 clips warm and cold, 2 huge clips): mean
+ * error 4-7% (old: 5%, 28%, and 7 min of "Estimating" then 65% high on the 2 clips).
  */
 
 var childProcess = require("child_process");
@@ -38,7 +43,8 @@ var DEFAULTS = {
   timeoutMs: 4 * 60 * 60 * 1000,
   stallGraceMs: 5 * 60 * 1000,
   stallCheckMs: 10 * 60 * 1000,
-  watchMs: 5000
+  watchMs: 5000,
+  etaHistoryFile: null // JSON file keeping each kind's render rate between runs (ETA)
 };
 
 // A missing file counts as 0 bytes, as in the original panel, so a job that never
@@ -132,62 +138,182 @@ JobPool.prototype.progress = function () {
     fraction: fraction, percent: Math.floor(fraction * 1000) / 10, eta: this._estimate(s) };
 };
 
-// Seconds per weight unit for each kind, from finished ok jobs and running jobs past 10%.
+// Render speed depends on how many jobs run at once: on the 12 Oct 2026 2-clip run the
+// big clip sped up 1.65x when the other finished (2 at once -> alone). Each job's time per
+// byte is taken to grow as (jobs at once)^ETA_SHARE; 0.55 replayed best across the 44-clip
+// and 2-clip runs. Rates below are "solo" seconds per weight unit (as if the job ran
+// alone); each job's average concurrency (j.cInt / run time) turns its measured rate into
+// a solo one.
+var ETA_SHARE = 0.55;
+function share(c) { return Math.pow(Math.max(c, 1), ETA_SHARE); }
+
+// Adds running-count x time to each running job since the last call (for its average
+// concurrency). Called before every launch/exit and before each estimate.
+JobPool.prototype._accrue = function (now) {
+  var self = this, keys = Object.keys(this.running), c = keys.length;
+  var dt = this._accruedAt ? (now - this._accruedAt) / 1000 : 0;
+  if (dt > 0) keys.forEach(function (k) { var j = self.running[k]; j.cInt = (j.cInt || 0) + c * dt; });
+  this._accruedAt = now;
+};
+function avgConc(j, sec) { return sec > 0 && j.cInt > 0 ? j.cInt / sec : 1; }
+
+// Solo seconds per weight unit, per group (job.group: the camera, e.g. Komodo vs Nikon ZR
+// R3D, 10 vs 5 s/GB on 12 Oct 2026) and per kind ("r3d"/"ffmpeg") as the fallback.
+// Sources, newest counting most:
+//  - finished ok jobs (real run time) and running jobs past 3% / 10 s (time so far over
+//    the share done), each weighted by recency (half-life ETA_HALF_LIFE jobs), so the
+//    slow first wave of a run (cold start: 11-14 s/GB against 8-9 later) fades out;
+//    the first wave counts at ETA_FIRST_WAVE once later jobs or a saved rate exist;
+//  - a prior counted as ETA_PRIOR_JOBS average-sized jobs: for a group, its saved rate
+//    (opts.etaHistoryFile) or else its kind's rate; for a kind, its saved rate. So there
+//    is an estimate from the start and the first few jobs do not throw it.
+// A fixed ETA_OVERHEAD seconds per job (tool start-up) is taken off before dividing.
+// Tuned by replaying the 12 Oct 2026 Komodo runs (44 clips cold and warm, 2 huge clips)
+// and real renders of 28-30 Komodo/ZR/Canon clips.
+var ETA_HALF_LIFE = 8, ETA_PRIOR_JOBS = 4, ETA_OVERHEAD = 1, ETA_FIRST_WAVE = 0.1;
+function groupOf(j) { return j.group ? (j.kind || "job") + "|" + j.group : (j.kind || "job"); }
 JobPool.prototype._rates = function (now) {
-  var acc = {}, self = this;
-  function add(kind, sec, w) { var a = acc[kind] = acc[kind] || { sec: 0, w: 0 }; a.sec += sec; a.w += w; }
-  this.done.forEach(function (j) { if (j.state === "ok" && j.exactSeconds > 0) add(j.kind || "job", j.exactSeconds, jobWeight(j)); });
-  Object.keys(this.running).forEach(function (k) {
-    var j = self.running[k];
-    if (j.progress >= 0.1) add(j.kind || "job", (now - j.launchedAt) / 1000, jobWeight(j) * j.progress);
+  var self = this, newest = 0, obs = [];
+  this.done.forEach(function (j) {
+    if (j.state === "ok" && j.exactSeconds > 0)
+      obs.push({ k: j.kind || "job", g: groupOf(j), sec: Math.max(j.exactSeconds - ETA_OVERHEAD, 0.1) / share(avgConc(j, j.exactSeconds)), w: jobWeight(j), n: j.order || 0 });
   });
-  var rates = {};
-  Object.keys(acc).forEach(function (k) { if (acc[k].w > 0) rates[k] = acc[k].sec / acc[k].w; });
+  Object.keys(this.running).forEach(function (k) {
+    var j = self.running[k], el = (now - j.launchedAt) / 1000;
+    if (j.progress >= 0.03 && el >= 10)
+      obs.push({ k: j.kind || "job", g: groupOf(j), sec: Math.max(el - ETA_OVERHEAD, 0.1) / share(avgConc(j, el)), w: jobWeight(j) * j.progress, n: j.order || 0 });
+  });
+  var wave = this.opts.maxConcurrent, later = false, hist = this.etaHistory || {};
+  var hasPrior = Object.keys(hist).length > 0;
+  obs.forEach(function (o) { if (o.n > newest) newest = o.n; if (o.n >= wave) later = true; });
+  var byKind = {}, byGroup = {};
+  function add(map, key, sec, w) { var a = map[key] = map[key] || { sec: 0, w: 0 }; a.sec += sec; a.w += w; }
+  obs.forEach(function (o) {
+    var m = Math.pow(0.5, (newest - o.n) / ETA_HALF_LIFE) * ((later || hasPrior) && o.n < wave ? ETA_FIRST_WAVE : 1);
+    add(byKind, o.k, m * o.sec, m * o.w);
+    if (o.g !== o.k) add(byGroup, o.g, m * o.sec, m * o.w);
+  });
+  var avgW = this._avgWeight || {}, rates = {};
+  function prior(map, key, r) { if (r > 0 && avgW[key] > 0) add(map, key, r * ETA_PRIOR_JOBS * avgW[key], ETA_PRIOR_JOBS * avgW[key]); }
+  Object.keys(avgW).forEach(function (key) { if (key.indexOf("|") === -1) prior(byKind, key, hist[key]); });
+  Object.keys(byKind).forEach(function (k) { if (byKind[k].w > 0) rates[k] = byKind[k].sec / byKind[k].w; });
+  Object.keys(avgW).forEach(function (key) {
+    if (key.indexOf("|") === -1) return;
+    prior(byGroup, key, hist[key] > 0 ? hist[key] : rates[key.split("|")[0]]);
+  });
+  Object.keys(byGroup).forEach(function (g) { if (byGroup[g].w > 0) rates[g] = byGroup[g].sec / byGroup[g].w; });
   return rates;
 };
 
 function jobWeight(j) { return j.weight > 0 ? j.weight : 1; }
+
+// Called once the queue is filled: numbers the jobs, the average weight per kind (for
+// the saved-rate prior) and loads the saved rates.
+JobPool.prototype._runStarted = function () {
+  var sum = {}, cnt = {}, self = this;
+  this.queue.forEach(function (j, i) {
+    j.order = i;
+    [j.kind || "job", groupOf(j)].forEach(function (k, x) {
+      if (x && k === (j.kind || "job")) return;
+      sum[k] = (sum[k] || 0) + jobWeight(j); cnt[k] = (cnt[k] || 0) + 1;
+    });
+  });
+  this._avgWeight = {};
+  Object.keys(sum).forEach(function (k) { self._avgWeight[k] = sum[k] / cnt[k]; });
+  this.etaHistory = {};
+  if (this.opts.etaHistoryFile) {
+    try { var h = JSON.parse(fs.readFileSync(this.opts.etaHistoryFile, "utf-8")); if (h && h.rates) this.etaHistory = h.rates; } catch (e) {}
+  }
+};
+
+// After a run: saves this run's steady rate per kind (recency-weighted, so mostly the
+// later jobs) for the next run's first estimate.
+JobPool.prototype._saveRates = function () {
+  if (!this.opts.etaHistoryFile || this.cancelled) return;
+  var save = this.etaHistory, had = false, self = this;
+  this.etaHistory = {}; // this run's own jobs only
+  var rates = this._rates(Date.now());
+  this.etaHistory = save;
+  var out = { rates: {}, updated: new Date().toISOString() };
+  Object.keys(save || {}).forEach(function (k) { out.rates[k] = save[k]; });
+  Object.keys(rates).forEach(function (k) {
+    var n = self.done.filter(function (j) { return j.state === "ok" && (groupOf(j) === k || (j.kind || "job") === k); }).length;
+    if (n >= 2) { out.rates[k] = rates[k]; had = true; }
+  });
+  if (!had) return;
+  try {
+    fs.mkdirSync(require("path").dirname(this.opts.etaHistoryFile), { recursive: true });
+    fs.writeFileSync(this.opts.etaHistoryFile + ".tmp", JSON.stringify(out, null, 1));
+    fs.renameSync(this.opts.etaHistoryFile + ".tmp", this.opts.etaHistoryFile);
+  } catch (e) {}
+};
 
 // { state: "estimating"|"ok"|"paused"|"cancelled"|"done", seconds?, finishAt? }
 JobPool.prototype._estimate = function (s) {
   if (s.cancelled) return { state: "cancelled" };
   if (!s.queued && !s.running) return { state: "done" };
   if (s.paused) return { state: "paused" };
-  var now = Date.now(), self = this, rates = this._rates(now);
-  if (!this.done.some(function (j) { return j.state === "ok"; })) return { state: "estimating" };
-  var lanes = [], missing = false;
-  function cost(j, frac) {
-    var r = rates[j.kind || "job"];
+  var now = Date.now(), self = this;
+  this._accrue(now);
+  var rates = this._rates(now);
+  var missing = false, perJob = [], c0 = Math.max(Object.keys(this.running).length, 1);
+  function solo(j, frac) { // solo seconds for frac of job j
+    var r = rates[groupOf(j)];
     if (r === undefined) { missing = true; return 0; }
-    return jobWeight(j) * frac * r;
+    return (ETA_OVERHEAD + jobWeight(j) * r) * frac;
   }
+  // Each running job's remaining work in solo seconds: from the rate, blended with its
+  // own pace (time so far / share done, at today's concurrency) as it gets further in.
+  var active = [];
   Object.keys(this.running).forEach(function (k) {
-    var j = self.running[k], f = Math.min(Math.max(j.progress || 0, 0), 0.99);
-    var left = cost(j, 1 - f);
-    // No progress output: its run so far counts, never below 0.
-    if (!(j.progress > 0)) left = Math.max(left - (now - j.launchedAt) / 1000, left * 0.1);
-    lanes.push(left);
+    var j = self.running[k], f = Math.min(Math.max(j.progress || 0, 0), 0.99), el = (now - j.launchedAt) / 1000;
+    var w = solo(j, 1 - f);
+    if (f >= 0.03 && el >= 5) {
+      var own = el * (1 - f) / f / share(avgConc(j, el)), b = Math.min(1, f / 0.3);
+      w = rates[groupOf(j)] === undefined ? own : b * own + (1 - b) * w;
+    } else if (!(j.progress > 0)) w = Math.max(w - el / share(c0), w * 0.1); // no progress output
+    active.push({ j: j, work: w, f: f, el: el });
   });
-  var n = Math.max(this.opts.maxConcurrent, 1);
-  while (lanes.length < n) lanes.push(0);
-  this.queue.forEach(function (j) {
-    var i = 0;
-    for (var x = 1; x < lanes.length; x++) if (lanes[x] < lanes[i]) i = x;
-    lanes[i] += cost(j, 1);
+  var queued = this.queue.map(function (j) { return { j: j, work: solo(j, 1) }; });
+  // Plays the rest of the run forward: up to maxConcurrent at once, each moving at
+  // 1/share(running) solo seconds per second; a finished job's lane takes the next one.
+  var n = Math.max(this.opts.maxConcurrent, 1), t = 0, run = active.slice(), qi = 0, finish = {};
+  while (run.length < n && qi < queued.length) run.push(queued[qi++]);
+  var guard = 0;
+  while (run.length && guard++ < 100000) {
+    var sp = 1 / share(run.length), first = 0;
+    for (var x = 1; x < run.length; x++) if (run[x].work < run[first].work) first = x;
+    var dt = Math.max(run[first].work, 0) / sp;
+    t += dt;
+    run.forEach(function (r) { r.work -= dt * sp; });
+    var left = [];
+    run.forEach(function (r) { if (r.work <= 1e-9) finish[r.j.key] = t; else left.push(r); });
+    run = left;
+    while (run.length < n && qi < queued.length) run.push(queued[qi++]);
+  }
+  active.forEach(function (a) { perJob.push({ key: a.j.key, label: a.j.label, fraction: a.f, elapsed: Math.round(a.el), left: finish[a.j.key] || 0 }); });
+  var raw = now + t * 1000;
+  // Each running job's own time left, smoothed the same way as the total.
+  var js = this.jobEta = this.jobEta || {};
+  var jobsOut = perJob.map(function (r) {
+    if (missing && !(r.fraction >= 0.03 && r.elapsed >= 5)) return { label: r.label, fraction: r.fraction, elapsed: r.elapsed, seconds: null };
+    var at = now + r.left * 1000, e = js[r.key];
+    if (!e) e = js[r.key] = { finishAt: at, at: now };
+    else { var a = 1 - Math.exp(-(now - e.at) / 3000); e.finishAt += a * (at - e.finishAt); e.at = now; }
+    return { label: r.label, fraction: r.fraction, elapsed: r.elapsed, seconds: Math.max(0, Math.round((e.finishAt - now) / 1000)) };
   });
-  if (missing) return { state: "estimating" };
-  var raw = now + Math.max.apply(null, lanes) * 1000;
+  if (missing) return { state: "estimating", jobs: jobsOut };
   var e = this.eta;
   if (!e) {
     e = this.eta = { finishAt: raw, at: now, firstAt: now, firstSec: (raw - now) / 1000 };
   } else {
-    var tau = Math.min(15000, Math.max(3000, (raw - now) / 4)); // short runs settle faster
+    var tau = Math.min(10000, Math.max(2000, (raw - now) / 10)); // short runs settle faster
     var a = 1 - Math.exp(-(now - e.at) / tau);
     e.finishAt += a * (raw - e.finishAt);
     e.at = now;
   }
   return { state: "ok", seconds: Math.max(0, Math.round((e.finishAt - now) / 1000)), finishAt: Math.round(e.finishAt),
-    raw: Math.round((raw - now) / 1000) };
+    raw: Math.round((raw - now) / 1000), jobs: jobsOut };
 };
 
 JobPool.prototype._emitProgress = function (event) {
@@ -202,6 +328,7 @@ JobPool.prototype._emitProgress = function (event) {
 JobPool.prototype.start = function () {
   if (this.started) return;
   this.started = true;
+  this._runStarted();
   var self = this;
   this.watchTimer = setInterval(function () { self._watch(); }, this.opts.watchMs);
   this._fill();
@@ -239,6 +366,7 @@ JobPool.prototype._fill = function () {
 JobPool.prototype._launch = function (job) {
   var self = this;
   var now = Date.now();
+  this._accrue(now);
   job.state = "running";
   job.launchedAt = now;
   job.lastSizeCheckAt = now;
@@ -246,6 +374,7 @@ JobPool.prototype._launch = function (job) {
   this.running[job.key] = job;
   this.log("Start: " + job.label);
   job.child = childProcess.exec(job.cmd, { maxBuffer: this.opts.maxBuffer }, function (error, stdout, stderr) {
+    self._accrue(Date.now());
     delete self.running[job.key];
     job.exactSeconds = (Date.now() - job.launchedAt) / 1000;
     job.seconds = Math.round(job.exactSeconds);
@@ -317,6 +446,7 @@ JobPool.prototype._maybeFinish = function () {
   if (this.queue.length > 0 && !this.cancelled && !this.paused) return;
   if (this.queue.length > 0 && this.paused) return; // paused with work left: not finished
   if (this.watchTimer) { clearInterval(this.watchTimer); this.watchTimer = null; }
+  if (!this.ratesSaved) { this.ratesSaved = true; this._saveRates(); }
   var waiters = this.waiters, s = this.summary();
   this.waiters = [];
   waiters.forEach(function (w) { w(s); });

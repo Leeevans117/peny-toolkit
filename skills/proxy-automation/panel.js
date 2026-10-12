@@ -43,6 +43,18 @@ function sourceBytes(p) {
     return total || fs.statSync(p).size;
   } catch (e) { return 0; }
 }
+// Camera model from the first 256 KB of the file ("KOMODO-X 6K S35", "NIKON ZR",
+// "Canon EOS R5m2"): the ETA times each camera separately, as their render speed per byte
+// differs a lot (Komodo 10 s/GB, Nikon ZR R3D 5 s/GB, 12 Oct 2026). "" if none found.
+var CAMERA_RE = /(KOMODO[-\w]*(?: \w+)*?(?= S35|\b)|V-RAPTOR[-\w ]*?(?=\x00|$)|RAPTOR|MONSTRO|HELIUM|GEMINI|DRAGON[-\w]*|NIKON Z\w+|Canon EOS [\w-]+|ILME-\w+|ILCE-\w+|DC-\w+|BMPCC\w*|URSA[\w ]*)/;
+function cameraOf(p) {
+  try {
+    var fd = fs.openSync(p, "r"), buf = Buffer.alloc(262144), n;
+    try { n = fs.readSync(fd, buf, 0, buf.length, 0); } finally { fs.closeSync(fd); }
+    var m = CAMERA_RE.exec(buf.toString("latin1", 0, n));
+    return m ? m[1].trim() : "";
+  } catch (e) { return ""; }
+}
 function commonPrefix(a, b) { var i = 0, n = Math.min(a.length, b.length); while (i < n && a.charAt(i) === b.charAt(i)) i++; return i; }
 
 module.exports = function (api) {
@@ -200,6 +212,8 @@ module.exports = function (api) {
 
       pool = new jobs.JobPool({
         maxConcurrent: params.maxConcurrent || 4,
+        // Render speed per kind kept between runs, so the time left is right from the start.
+        etaHistoryFile: params.etaHistoryFile || path.join(require("os").homedir(), ".peny-toolkit", "proxy-eta.json"),
         log: api.log,
         onChange: function () {
           var s = pool.summary();
@@ -211,20 +225,22 @@ module.exports = function (api) {
         onProgress: function (pr) { pr.already = p.done.length; api.progress(pr); }
       });
       var noCmd = [];
-      // ETA: REDline is timed separately from ffmpeg, so if both kinds are queued, start one
-      // of the later kind in the first wave instead of after all the others.
-      var firstR3d = -1, firstOther = -1;
-      p.render.forEach(function (r, i) {
-        if (extOf(r.mediaPath) === "r3d") { if (firstR3d < 0) firstR3d = i; } else if (firstOther < 0) firstOther = i;
+      // ETA: each camera is timed separately, so the first wave starts one clip of each
+      // camera (in order of first appearance) instead of leaving some until the end.
+      var seenCam = {}, firsts = [];
+      p.render.forEach(function (r, i) { r.camera = cameraOf(r.mediaPath) || extOf(r.mediaPath); if (!seenCam[r.camera]) { seenCam[r.camera] = 1; firsts.push(i); } });
+      var waveN = params.maxConcurrent || 4;
+      firsts.slice(0, waveN).forEach(function (idx, slot) {
+        var at = p.render.indexOf(p.render.filter(function (r) { return r.camera === p.render[idx].camera; })[0]);
+        if (at > slot) p.render.splice(slot, 0, p.render.splice(at, 1)[0]);
       });
-      var late = Math.max(firstR3d, firstOther);
-      if (firstR3d >= 0 && firstOther >= 0 && late > 1) p.render.splice(1, 0, p.render.splice(late, 1)[0]);
       p.render.forEach(function (r) {
         try { fs.mkdirSync(path.dirname(r.outputPath), { recursive: true }); } catch (e) {}
         var cmd = encodeCommand(r);
         if (!cmd) { r.reason = "no " + (extOf(r.mediaPath) === "r3d" ? "REDline" : "ffmpeg") + " found"; noCmd.push(r); return; }
         pool.add({ key: r.outputPath, cmd: cmd, outputPath: r.outputPath, label: r.binPath + "/" + r.name,
-          weight: sourceBytes(r.mediaPath), kind: extOf(r.mediaPath) === "r3d" ? "r3d" : "ffmpeg" });
+          weight: sourceBytes(r.mediaPath), kind: extOf(r.mediaPath) === "r3d" ? "r3d" : "ffmpeg",
+          group: r.camera });
       });
       var startedAt = Date.now();
       pool.start();

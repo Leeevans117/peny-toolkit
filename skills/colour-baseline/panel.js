@@ -91,6 +91,18 @@ function fileModel(file) {
   });
 }
 
+var StepTask = require(path.join(__dirname, "..", "..", "core", "steps.js")).StepTask;
+// Apply's steps for the progress bar and time left; a + b x clips seconds each, from Lee's
+// two runs on 12 Oct 2026 (784 clips: 3-5 s, 7-8 s, 47-91 s, 133-177 s, 4-6 s). Learned
+// from each run after that (~/.peny-toolkit/colour-eta.json).
+var APPLY_STEPS = [
+  { id: "scan", label: "Reading the sequence and cameras" },
+  { id: "export", label: "Exporting the sequence" },
+  { id: "grade", label: "Adding Adjustments and LUTs" },
+  { id: "import", label: "Importing the graded copy" },
+  { id: "finish", label: "Checking every clip" }];
+var APPLY_DEFAULTS = { scan: { a: 1, b: 0.004 }, export: { a: 2, b: 0.007 }, grade: { a: 3, b: 0.084 }, import: { a: 5, b: 0.19 }, finish: { a: 1, b: 0.005 } };
+
 module.exports = function (api) {
   var busy = null;
   var state = { cameras: null, presets: null, userPresets: null, sequence: null };
@@ -222,10 +234,14 @@ module.exports = function (api) {
     var work = path.join("/tmp/peny-toolkit/colour", new Date().toISOString().replace(/[:.]/g, "-"));
     fs.mkdirSync(work, { recursive: true });
     var src = path.join(work, "source.prproj"), out = path.join(work, "graded.prproj");
-    var scan0, cams, plan, presetsInfo, t0 = Date.now();
+    var scan0, cams, plan, presetsInfo, t0 = Date.now(), task = null;
+    // The bar starts once the clip count is known (the scan is a couple of seconds).
     return jsx({ action: "scan" }).then(function (scan) {
       if (!scan.ok) throw new Error(scan.error);
       scan0 = scan.details;
+      task = new StepTask({ title: "Colour", steps: APPLY_STEPS, size: scan0.clips.length, defaults: APPLY_DEFAULTS,
+        historyFile: path.join(os.homedir(), ".peny-toolkit", "colour-eta.json"), onProgress: api.progress });
+      task.step("scan");
       if (!scan0.clips.length) throw new Error("No video clips with media files in \"" + scan0.sequence + "\".");
       return listPresets();
     }).then(function (pr) {
@@ -253,18 +269,22 @@ module.exports = function (api) {
         presets: presetsInfo.file, adjustments: adj, clips: clips };
       fs.writeFileSync(path.join(work, "plan.json"), JSON.stringify(plan));
       api.status("Colour: exporting \"" + scan0.sequence + "\"…");
+      task.step("export");
       return jsx({ action: "exportproj", path: src });
     }).then(function (ex) {
       if (!ex.ok) throw new Error(ex.error);
       api.status("Colour: adding Adjustments and LUTs to " + plan.clips.length + " clip(s)…");
+      task.step("grade");
       return runPy(["grade", src, out, path.join(work, "plan.json")]);
     }).then(function (g) {
       if (g.problems.length) throw new Error(g.problems.length + " clip(s) could not be matched in the exported project; nothing was imported. First: " + JSON.stringify(g.problems[0]).slice(0, 200));
       api.status("Colour: importing the graded copy…");
+      task.step("import");
       return jsx({ action: "importseq", path: out, ids: [plan.newSequence] });
     }).then(function (im) {
       if (!im.ok) throw new Error(im.error);
       var extra = im.details.added.filter(function (s) { return s.id !== plan.newSequence; });
+      task.step("finish");
       return jsx({ action: "finish", id: plan.newSequence, base: scan0.sequence }).then(function (fin) {
         if (!fin.ok) throw new Error(fin.error);
         return verify(fin, extra);
@@ -272,7 +292,12 @@ module.exports = function (api) {
     }).then(function (r) {
       r.details.work = work;
       r.summary += " Took " + Math.round((Date.now() - t0) / 1000) + " s.";
+      // A read-back mismatch still went through every step, so its timings count.
+      if (task) task.done(true);
       return r;
+    }, function (e) {
+      if (task) task.done(false);
+      throw e;
     });
 
     // Every clip of the new sequence against the original: same clip, time and master clip, and

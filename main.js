@@ -157,16 +157,38 @@ function runAction(skillId, actionId, params, source) {
   });
 }
 
-// ---- Proxy progress ----
-// Fed by the render pool (core/jobs.js via proxy-automation): real job starts/exits plus
-// each running render's own fraction. Start/finish events go to the log; ticks are
-// written to the log file at most every 3 s.
+// ---- Progress ----
+// Each skill reports through api.progress: proxies from the render pool (core/jobs.js:
+// real job starts/exits plus each render's own fraction), Colour from its steps
+// (core/steps.js, unit "steps"). tasks[skill id] keeps the latest report of each.
+// Start/finish events go to the log; ticks are written to the log file at most every 3 s.
 var lastProgressFileAt = 0;
+var tasks = {};
 function progressText(p) {
   if (p.event === "none") return "Nothing to render" + (p.already ? " (" + p.already + " already have proxies)" : "");
-  return p.finished + " of " + p.total + " proxies done · " + p.percent.toFixed(p.percent % 1 ? 1 : 0) + "%";
+  return p.finished + " of " + p.total + " " + (p.unit || "proxies") + " done · " + p.percent.toFixed(p.percent % 1 ? 1 : 0) + "%";
 }
-// "About 12 min left (8 of 30 done)"; empty when the run is over or cancelled.
+// Time left as text, as close as the estimate allows: to 5 s under 90 s, to 10 s under
+// 10 min, then minutes. "" for null.
+function leftText(sec) {
+  if (sec === null || sec === undefined || !isFinite(sec)) return "";
+  if (sec < 5) return "A few seconds left";
+  if (sec < 90) return "About " + Math.round(sec / 5) * 5 + " s left";
+  if (sec < 600) {
+    var r = Math.round(sec / 10) * 10, m = Math.floor(r / 60), x = r % 60;
+    return "About " + m + " min" + (x ? " " + x + " s" : "") + " left";
+  }
+  var mm = Math.round(sec / 60);
+  if (mm < 60) return "About " + mm + " min left";
+  return "About " + Math.floor(mm / 60) + " h" + (mm % 60 ? " " + mm % 60 + " min" : "") + " left";
+}
+// Clock time the run should finish ("13:05"), from the smoothed finish time.
+function doneByText(e) {
+  if (!e || !e.finishAt || e.seconds < 60) return "";
+  var d = new Date(e.finishAt);
+  return "done by " + ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+}
+// "About 3 min 20 s left · done by 13:05 (8 of 30 done)"; empty when over or cancelled.
 function etaText(p) {
   var e = p && p.eta;
   if (!e || p.event === "none" || p.event === "finished") return "";
@@ -174,16 +196,16 @@ function etaText(p) {
   if (e.state === "paused") return "Paused" + done;
   if (e.state === "estimating") return "Estimating time left…" + done;
   if (e.state !== "ok") return "";
-  var m = Math.round(e.seconds / 60), t;
-  if (e.seconds < 60) t = "Less than a minute left";
-  else if (m < 60) t = "About " + m + " min left";
-  else t = "About " + Math.floor(m / 60) + " h" + (m % 60 ? " " + m % 60 + " min" : "") + " left";
-  return t + done;
+  var by = doneByText(e);
+  return leftText(e.seconds) + (by ? " · " + by : "") + done;
 }
-function showProgress(p) {
+function showProgress(p, skill) {
   if (!p) return;
+  p.skillId = skill ? skill.id : "proxy-automation";
+  p.updatedAt = Date.now();
+  tasks[p.skillId] = p;
   var eta = etaText(p);
-  var line = "Proxy progress: " + progressText(p) + (eta ? " · " + eta : "") +
+  var line = (p.title || "Proxy") + " progress: " + progressText(p) + (eta ? " · " + eta : "") +
     (p.eta && p.eta.state === "ok" ? " [eta " + p.eta.seconds + " s, raw " + p.eta.raw + " s]" : "") + " (" + p.event + ", " + p.running + " running" +
     (p.failed ? ", " + p.failed + " failed" : "") + (p.cancelled ? ", cancelled" : "") + ")";
   if (p.event === "tick") {
@@ -194,7 +216,78 @@ function showProgress(p) {
   } else {
     log(line);
   }
-  drawProgress(p);
+  drawProgress();
+  drawJobs();
+}
+
+// ---- Jobs in progress ----
+// Dock at the bottom of every screen while anything runs: one card per task (which app,
+// x of y, overall bar, time left), with a small bar per clip rendering (or the step
+// running) and its own time left. The header minimises it to one line; the choice is
+// remembered. A finished task stays 10 s, then goes; the dock hides when none are left.
+var JOB_KEEP_MS = 10000;
+function jobsMinimised() { try { return localStorage.getItem("penytoolkit.jobs.min") === "1"; } catch (e) { return false; } }
+function clipName(label) { return String(label || "").split("/").pop().replace(/\.(r3d|mp4|mxf|mov|braw|crm)$/i, ""); }
+function esc(t) { return String(t).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+function padViews() {
+  var dock = document.getElementById("jobs"), h = dock.classList.contains("hidden") ? 0 : dock.offsetHeight + 16;
+  var vs = document.querySelectorAll(".view");
+  for (var i = 0; i < vs.length; i++) vs[i].style.paddingBottom = (16 + h) + "px";
+}
+function taskOver(p) {
+  return p.event === "finished" || p.event === "cancelled" || (p.eta && (p.eta.state === "done" || p.eta.state === "cancelled"));
+}
+var jobsTimer = null;
+function drawJobs() {
+  var dock = document.getElementById("jobs"), now = Date.now();
+  var list = Object.keys(tasks).map(function (k) { return tasks[k]; }).filter(function (p) {
+    return p.event !== "none" && (!taskOver(p) || now - p.updatedAt < JOB_KEEP_MS);
+  });
+  clearTimeout(jobsTimer);
+  if (list.some(taskOver)) jobsTimer = setTimeout(drawJobs, 1000);
+  if (!list.length) { dock.classList.add("hidden"); padViews(); return; }
+  var running = 0, longest = null, h = "";
+  list.forEach(function (p) {
+    var over = taskOver(p), e = p.eta || {};
+    // A proxy run started by another app (Ingest + proxies) carries that app's name.
+    var host = runningSkill && runningSkill !== p.skillId && !tasks[runningSkill] ? findSkill(runningSkill) : null;
+    var skill = p.skillId === "proxy-automation" && host && host.progress ? host : findSkill(p.skillId);
+    var title = p.title || (skill ? skill.name : "Proxies");
+    var pct = p.percent.toFixed(p.percent % 1 ? 1 : 0) + "%";
+    var left = over ? (p.cancelled ? "Cancelled" : p.failed ? (p.unit === "steps" ? "Stopped with an error" : p.failed + " failed") : "Finished") :
+      e.state === "paused" ? "Paused" : e.state === "estimating" ? "Estimating time left…" : e.state === "ok" ? leftText(e.seconds) : "";
+    if (!over) { running += p.unit === "steps" ? 1 : p.running; if (e.state === "ok" && (longest === null || e.seconds > longest)) longest = e.seconds; }
+    var by = !over && e.state === "ok" ? doneByText(e) : "";
+    h += '<div class="jtask' + (over && (p.failed || p.cancelled) ? " failed" : "") + '"><div class="jrow"><span class="jname">' + esc(title) +
+      '</span><span class="jval">' + p.finished + " of " + p.total + (p.unit === "steps" ? " steps" : "") + " · " + pct +
+      '</span></div><div class="bar"><div class="fill" style="width:' + (p.fraction * 100).toFixed(1) + '%"></div></div><div class="jeta">' +
+      esc(left + (by ? " · " + by : "")) + "</div>";
+    if (!over) (e.jobs || []).forEach(function (j) {
+      var jl = j.seconds === null || j.seconds === undefined ? "Estimating…" : leftText(j.seconds);
+      h += '<div class="jclip"><div class="jrow"><span class="jname">' + esc(clipName(j.label)) + '</span><span class="jval">' +
+        Math.floor(j.fraction * 100) + "% · " + esc(jl) + '</span></div><div class="bar"><div class="fill" style="width:' +
+        (j.fraction * 100).toFixed(1) + '%"></div></div></div>';
+    });
+    var more = [];
+    if (!over && p.queued && p.unit !== "steps") more.push(p.queued + " queued");
+    if (p.already) more.push(p.already + " already had proxies");
+    if (more.length) h += '<div class="jmore">' + esc(more.join(" · ")) + "</div>";
+    h += "</div>";
+  });
+  document.getElementById("jobs-sum").textContent = running ? running + " running" + (longest !== null ? " · " + leftText(longest) : "") :
+    list.length + " finished";
+  document.getElementById("jobs-body").innerHTML = h;
+  dock.className = "glass" + (jobsMinimised() ? " min" : "");
+  padViews();
+}
+function initJobsDock() {
+  window.addEventListener("resize", padViews);
+  document.getElementById("jobs-head").addEventListener("click", function () {
+    var dock = document.getElementById("jobs"), min = !dock.classList.contains("min");
+    dock.classList.toggle("min", min);
+    try { localStorage.setItem("penytoolkit.jobs.min", min ? "1" : "0"); } catch (e) {}
+    padViews();
+  });
 }
 
 // ---- UI ----
@@ -204,7 +297,6 @@ function showProgress(p) {
 // bar sit under every view; the bar shows in views whose skill.json has "progress": true.
 var currentView = null; // skill id, or null on the home screen
 var runningSkill = null;
-var lastProgress = null;
 
 function setButtons() {
   var bs = document.querySelectorAll("button[data-action]");
@@ -222,13 +314,19 @@ function setStatus(skill, text) {
   if (el) el.textContent = text || "";
 }
 
-function drawProgress(p) {
-  if (p) lastProgress = p;
-  p = lastProgress;
+// The bar in an app's view: that app's own task, else (Ingest + proxies) the proxy run.
+function viewTask(skill) {
+  if (!skill || !skill.progress) return null;
+  return tasks[skill.id] || (skill.id !== "colour-baseline" ? tasks["proxy-automation"] : null) || null;
+}
+function drawProgress() {
+  var skill = currentView ? findSkill(currentView) : null;
+  var p = viewTask(skill);
   var box = document.getElementById("progress");
+  box.querySelector(".ptitle").textContent = p && p.title ? p.title : skill && skill.id === "colour-baseline" ? "Colour" : "Proxies";
   var count = document.getElementById("pcount"), fill = document.getElementById("pfill"), sub = document.getElementById("psub");
   if (!p) {
-    count.textContent = "No proxy run yet";
+    count.textContent = skill && skill.id === "colour-baseline" ? "Not run yet" : "No proxy run yet";
     fill.style.width = "0%";
     document.getElementById("peta").textContent = "";
     sub.textContent = "";
@@ -240,8 +338,9 @@ function drawProgress(p) {
     fill.style.width = (p.fraction * 100) + "%";
     document.getElementById("peta").textContent = etaText(p);
     var bits = [];
-    if (p.running) bits.push(p.running + " rendering");
-    if (p.queued) bits.push(p.queued + " queued");
+    if (p.unit === "steps") { if (p.running && p.eta && p.eta.jobs && p.eta.jobs[0]) bits.push(p.eta.jobs[0].label + "…"); }
+    else if (p.running) bits.push(p.running + " rendering");
+    if (p.queued && p.unit !== "steps") bits.push(p.queued + " queued");
     if (p.failed) bits.push(p.failed + " failed");
     if (p.paused) bits.push("paused");
     if (p.cancelled) bits.push("cancelled");
@@ -249,7 +348,6 @@ function drawProgress(p) {
     sub.textContent = bits.join(" · ");
     box.className = "glass" + (p.failed || p.cancelled ? " failed" : p.fraction >= 1 ? " complete" : "");
   }
-  var skill = currentView ? findSkill(currentView) : null;
   if (!(skill && skill.progress)) box.classList.add("hidden");
 }
 
@@ -278,7 +376,7 @@ function showView(id) {
     var log = document.getElementById("log");
     log.scrollTop = log.scrollHeight;
   }
-  drawProgress(null);
+  drawProgress();
 }
 
 // Glass sheet instead of window.confirm. Resolves true for the OK button.
@@ -346,7 +444,7 @@ function loadSkills() {
           jobs: jobs,
           log: log,
           status: function (text) { setStatus(s, text); },
-          progress: showProgress,
+          progress: function (p) { showProgress(p, s); },
           // Run another skill's action directly (used by multi-step skills).
           skillAction: function (skillId, actionId, params) {
             var other = findSkill(skillId);
@@ -557,6 +655,7 @@ var startError = null;
     jobs = nodeRequire(path.join(extRoot, "core", "jobs.js"));
     loadSkills();
     drawSkills();
+    initJobsDock();
     showView(null);
     try { fs.mkdirSync(HOOK_INBOX, { recursive: true }); } catch (e) {}
     if (!window.PenyLoader) fs.writeFileSync(INSTANCE_FILE, INSTANCE_ID, "utf-8");

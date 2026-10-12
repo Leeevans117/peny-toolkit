@@ -138,6 +138,30 @@
            color: rgba(235, 240, 250, 0.75); }
     .ok { color: #ffffff !important; } .err { color: #ff6961 !important; } .warn { color: rgba(255, 255, 255, 0.55) !important; }
 
+    /* Jobs in progress: dock at the bottom of every screen while something renders; the
+       header minimises it to one line (remembered). */
+    #jobs { position: fixed; left: 10px; right: 10px; bottom: 10px; z-index: 5; border-radius: 20px;
+            background: rgba(18, 18, 18, 0.82); display: flex; flex-direction: column; max-height: 48vh; }
+    #jobs .jhead { display: flex; align-items: center; gap: 8px; width: 100%; padding: 11px 14px; background: none; border: 0;
+                   color: var(--text); font: inherit; cursor: pointer; text-align: left; }
+    #jobs .jtitle { font-size: 13px; font-weight: 600; white-space: nowrap; }
+    #jobs .jsum { flex: 1; min-width: 0; font-size: 12.5px; color: var(--dim); text-align: right; font-variant-numeric: tabular-nums;
+                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #jobs .jchev { width: 14px; height: 14px; flex: 0 0 auto; transition: transform 0.2s; }
+    #jobs.min .jchev { transform: rotate(180deg); }
+    #jobs.min .jbody { display: none; }
+    #jobs .jbody { overflow-y: auto; padding: 0 14px 12px; }
+    #jobs .jtask { padding: 10px 12px; border-radius: 14px; background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255,255,255,0.08); margin-bottom: 8px; }
+    #jobs .jrow { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+    #jobs .jname { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    #jobs .jval { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    #jobs .jeta { margin-top: 5px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+    #jobs .jclip { padding: 6px 2px 4px; }
+    #jobs .jclip .jname { font-weight: 500; color: var(--dim); }
+    #jobs .jclip .bar { height: 5px; border-radius: 3px; }
+    #jobs .jmore { font-size: 12px; color: var(--faint); padding: 4px 2px 0; }
+    #jobs .jtask.failed .fill { background: linear-gradient(90deg, var(--orange), var(--red)); }
+
     /* Sheet (replaces window.confirm) */
     #sheet { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: rgba(5, 8, 15, 0.55); display: flex;
              align-items: center; justify-content: center; padding: 18px; z-index: 10;
@@ -174,6 +198,14 @@
     </div>
     <div id="log"></div>
   </section>
+
+  <div id="jobs" class="glass hidden">
+    <button class="jhead" id="jobs-head" title="Minimise / expand">
+      <span class="jtitle">Jobs in progress</span><span class="jsum" id="jobs-sum"></span>
+      <svg class="jchev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6l5 5 5-5"/></svg>
+    </button>
+    <div class="jbody" id="jobs-body"></div>
+  </div>
 
   <div id="sheet" class="hidden">
     <div class="glass">

@@ -5,8 +5,9 @@
 //   action "list"   -> video footage items in the scope, with bin paths and proxy state
 //   action "attach" -> params.pairs [{nodeId, path}]; each attach is read back
 //   action "detach" -> params.nodeIds; each detach is read back
-// Scope (list): params.bin = bin path from the project root ("Footage/Day 1"), or
-// "ALL" for the whole project; empty = the bins selected in the Project panel.
+// Scope (list): params.bin = bin path from the project root ("Footage/Day 1") or a
+// bin name that is unique in the project, or "ALL" for the whole project; empty = the
+// bins selected in the Project panel. binPath is always the full path from the root.
 // Nothing here deletes, renames or moves anything.
 (function (T) {
   var P = T.proxy = T.proxy || {};
@@ -66,6 +67,40 @@
     return bin;
   }
 
+  // Full bin path from the project root ("02 FOOTAGE/Korea / Seoul/Day2/Komodo"), so the
+  // proxy tree mirrors where the bin really sits, not just the selected bin's own name.
+  function binFullPath(target) {
+    var id = String(target.nodeId), st = [{ bin: app.project.rootItem, path: "" }];
+    while (st.length) {
+      var f = st.pop();
+      for (var c = 0; c < f.bin.children.numItems; c++) {
+        var ch = f.bin.children[c];
+        if (ch.type != ProjectItemType.BIN) continue;
+        var p = f.path === "" ? ch.name : f.path + "/" + ch.name;
+        if (String(ch.nodeId) === id) return p;
+        st.push({ bin: ch, path: p });
+      }
+    }
+    return String(target.name);
+  }
+
+  // Typed bin that is not a path from the root: accept it if exactly one bin has that
+  // name (or that full path, which matters when a bin name itself contains "/").
+  function findBinByName(text) {
+    var hits = [], st = [{ bin: app.project.rootItem, path: "" }];
+    while (st.length) {
+      var f = st.pop();
+      for (var c = 0; c < f.bin.children.numItems; c++) {
+        var ch = f.bin.children[c];
+        if (ch.type != ProjectItemType.BIN) continue;
+        var p = f.path === "" ? ch.name : f.path + "/" + ch.name;
+        if (ch.name === text || p === text) hits.push({ bin: ch, path: p });
+        st.push({ bin: ch, path: p });
+      }
+    }
+    return hits;
+  }
+
   function scopeRoots(params) {
     // A bin can also be given by nodeId (used by Ingest + proxies; bin names such as
     // "Korea / Seoul" contain "/" and cannot be written as a path).
@@ -76,7 +111,7 @@
         for (var q = 0; q < pb.children.numItems; q++) {
           var qc = pb.children[q];
           if (qc.type != ProjectItemType.BIN) continue;
-          if (String(qc.nodeId) === String(params.binNodeId)) return { roots: [{ bin: qc, path: qc.name }] };
+          if (String(qc.nodeId) === String(params.binNodeId)) return { roots: [{ bin: qc, path: binFullPath(qc) }] };
           st.push(qc);
         }
       }
@@ -86,13 +121,16 @@
     if (b === "ALL") return { roots: [{ bin: app.project.rootItem, path: "" }] };
     if (b !== "") {
       var bin = findBin(b);
-      if (!bin) return { error: "Bin not found: \"" + b + "\" (give the path from the project root, e.g. Footage/Day 1)." };
-      return { roots: [{ bin: bin, path: bin.name }] };
+      if (bin) return { roots: [{ bin: bin, path: binFullPath(bin) }] };
+      var hits = findBinByName(b);
+      if (hits.length === 1) return { roots: [hits[0]] };
+      if (hits.length > 1) return { error: hits.length + " bins are called \"" + b + "\"; give the path from the project root, or select the bin instead." };
+      return { error: "Bin not found: \"" + b + "\" (give the path from the project root, e.g. Footage/Day 1)." };
     }
     var sel = null;
     try { sel = app.getCurrentProjectViewSelection(); } catch (e) {}
     var roots = [];
-    if (sel) for (var i = 0; i < sel.length; i++) if (sel[i].type == ProjectItemType.BIN) roots.push({ bin: sel[i], path: sel[i].name });
+    if (sel) for (var i = 0; i < sel.length; i++) if (sel[i].type == ProjectItemType.BIN) roots.push({ bin: sel[i], path: binFullPath(sel[i]) });
     if (!roots.length) return { error: "No bin given and no bin selected in the Project panel. Select a bin (or type its path) first." };
     return { roots: roots };
   }
