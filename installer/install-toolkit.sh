@@ -18,7 +18,9 @@
 #   tools     HOME/Library/Application Support/PenyToolkit/{bin,lib,python,ollama}
 #   updater   HOME/Library/Application Support/PenyToolkit/update.sh (+ update.conf),
 #             launchd agent com.peny.toolkit.nas-update (every hour and at log-in)
-#   models    HOME/PenyToolkit-scratch/whisper-models, HOME/.ollama/models
+#   models    HOME/PenyToolkit-scratch/whisper-models, HOME/.ollama/models (copied from a
+#             "models" folder next to the installer folder, else the office server, else
+#             downloaded)
 #   presets   HOME/PenyToolkit-scratch/colour/Peny LUT Presets.prfpset
 #   settings  HOME/.peny-toolkit/colour-baseline.json (only if missing)
 set -u
@@ -143,17 +145,19 @@ if [ $UPDATE = 0 ]; then
   # --- 5. Models -------------------------------------------------------------------
   step "Step 5: AI models for the Interviews app (Whisper and Ollama)"
   NAS_MODELS=""
-  for d in "${PENY_MODELS:-/Volumes/ampdata/Peny/Claude/PenyToolkit/models}" "$P/../../models"; do
+  # A "models" folder carried next to the "Peny Toolkit Installer" folder (USB drive,
+  # copied folder) comes first, then the office server, then the internet.
+  for d in "$P/../../models" "${PENY_MODELS:-/Volumes/ampdata/Peny/Claude/PenyToolkit/models}"; do
     [ -d "$d" ] && { NAS_MODELS="$(cd "$d" && pwd)"; break; }
   done
-  [ -n "$NAS_MODELS" ] && echo "   using the copies in $NAS_MODELS where they are there"
+  [ -n "$NAS_MODELS" ] && echo "   using the model copies in $NAS_MODELS"
   fetch_whisper() { # file url size
     local f="$MODEL_DIR/$1"
     if [ "$(stat -f %z "$f" 2>/dev/null)" = "$3" ]; then done_ "Whisper model $1"; return; fi
     if [ $MODELS = 0 ]; then todo "Whisper model $1 (run the installer again without --no-models)"; return; fi
     mkdir -p "$MODEL_DIR"
     if [ -n "$NAS_MODELS" ] && [ "$(stat -f %z "$NAS_MODELS/whisper/$1" 2>/dev/null)" = "$3" ]; then
-      echo "   copying $1 ($(( $3 / 1048576 )) MB) from the office server"
+      echo "   copying $1 ($(( $3 / 1048576 )) MB) from $NAS_MODELS"
       copy "$NAS_MODELS/whisper/$1" "$f.part" && mv "$f.part" "$f" && { done_ "Whisper model $1 (copied)"; return; }
     fi
     echo "   downloading $1 ($(( $3 / 1048576 )) MB) from huggingface.co"
@@ -169,7 +173,7 @@ if [ $UPDATE = 0 ]; then
   if [ -f "$OM/$REL" ]; then done_ "Ollama model $OLLAMA_MODEL"
   elif [ $MODELS = 0 ]; then todo "Ollama model $OLLAMA_MODEL (about 20 GB; run the installer again without --no-models)"
   elif [ -n "$NAS_MODELS" ] && [ -f "$NAS_MODELS/ollama/$REL" ]; then
-    echo "   copying $OLLAMA_MODEL (about 20 GB) from the office server - this takes a while"
+    echo "   copying $OLLAMA_MODEL (about 20 GB) from $NAS_MODELS - this takes a while"
     ok=1
     for blob in $("$SUPPORT/bin/python3" -c "import json,sys; m=json.load(open(sys.argv[1])); print(' '.join(l['digest'].replace(':','-') for l in [m['config']]+m['layers']))" "$NAS_MODELS/ollama/$REL"); do
       mkdir -p "$OM/blobs"

@@ -19,13 +19,15 @@
  */
 var fs = require("fs");
 var path = require("path");
-// Tools put in place by the one-click installer (no Homebrew needed).
+// Tools put in place by the one-click installer (no Homebrew needed). Used first when
+// present: they are the versions the toolkit was tested with, and their python3 has numpy
+// (a Homebrew python3 without numpy would break Sync, Sound Pass and Colour).
 function BUNDLED(name) { return path.join(process.env.HOME || "", "Library", "Application Support", "PenyToolkit", "bin", name); }
 
 var PROXY_INFIX = "_Proxy";
 var LOOKUP_LEVELS_UP = 4;
 var SCALE_W = 1280, SCALE_H = 720;
-var FFMPEG = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", BUNDLED("ffmpeg")];
+var FFMPEG = [BUNDLED("ffmpeg"), "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"];
 var REDLINE = ["/Applications/REDCINE-X Professional/REDCINE-X PRO.app/Contents/MacOS/REDline"];
 
 function firstExisting(list) { for (var i = 0; i < list.length; i++) if (fs.existsSync(list[i])) return list[i]; return null; }

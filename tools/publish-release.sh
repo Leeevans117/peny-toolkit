@@ -15,6 +15,12 @@
 #                               every installed Mac (the 3 newest zips are kept)
 #   models/                     with --models
 # Nothing is uploaded anywhere else.
+#
+# A folder to carry to a Mac by hand (drive, AirDrop) instead of the server:
+#   PENY_SHARE="$HOME/Desktop/Peny Toolkit for Mac Studio" \
+#   PENY_RELEASES=/Volumes/ampdata/Peny/Claude/PenyToolkit/releases tools/publish-release.sh --models
+# (PENY_RELEASES keeps that Mac's updates pointed at the office server). The installer
+# takes the models from the "models" folder next to "Peny Toolkit Installer".
 set -eu
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SHARE="${PENY_SHARE:-/Volumes/ampdata/Peny/Claude/PenyToolkit}"
@@ -45,16 +51,20 @@ rm -rf "$SHARE/Peny Toolkit Installer.new" "$SHARE/Peny Toolkit Installer.old"
 
 if [ $MODELS = 1 ]; then
   echo "Copying models (only what is missing or different)"
+  # same size = already there; clone on the same disk (instant), plain copy otherwise
+  put() { [ "$(stat -f %z "$1")" = "$(stat -f %z "$2/$(basename "$1")" 2>/dev/null)" ] && return 0
+          echo "  $(basename "$1") ($(( $(stat -f %z "$1") / 1048576 )) MB)"
+          cp -c "$1" "$2/" 2>/dev/null || cp "$1" "$2/"; }
   mkdir -p "$SHARE/models/whisper"
   for f in ggml-large-v3-turbo.bin ggml-silero-v5.1.2.bin; do
-    rsync -a --progress "$HOME/PenyToolkit-scratch/whisper-models/$f" "$SHARE/models/whisper/"
+    put "$HOME/PenyToolkit-scratch/whisper-models/$f" "$SHARE/models/whisper"
   done
   M="$(sed -n 's/^var MODEL = "\(.*\)";.*/\1/p' "$REPO/skills/interview-selects/pipeline.js")"
   REL="manifests/registry.ollama.ai/library/${M%%:*}/${M#*:}"
   OM="$HOME/.ollama/models"
   mkdir -p "$SHARE/models/ollama/blobs" "$(dirname "$SHARE/models/ollama/$REL")"
   for blob in $(grep -o 'sha256:[0-9a-f]*' "$OM/$REL" | sort -u | tr : -); do
-    rsync -a --progress "$OM/blobs/$blob" "$SHARE/models/ollama/blobs/"
+    put "$OM/blobs/$blob" "$SHARE/models/ollama/blobs"
   done
   cp "$OM/$REL" "$SHARE/models/ollama/$REL"
 fi

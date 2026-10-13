@@ -11,12 +11,14 @@
  * Only on a TOOLKIT COPY sequence. Nothing is deleted, moved or renamed. */
 var fs = require("fs");
 var path = require("path");
-// Tools put in place by the one-click installer (no Homebrew needed).
+// Tools put in place by the one-click installer (no Homebrew needed). Used first when
+// present: they are the versions the toolkit was tested with, and their python3 has numpy
+// (a Homebrew python3 without numpy would break Sync, Sound Pass and Colour).
 function BUNDLED(name) { return path.join(process.env.HOME || "", "Library", "Application Support", "PenyToolkit", "bin", name); }
 var childProcess = require("child_process");
 
-var FFMPEG = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", BUNDLED("ffmpeg")];
-var PYTHON = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", BUNDLED("python3"), "/usr/bin/python3"];
+var FFMPEG = [BUNDLED("ffmpeg"), "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"];
+var PYTHON = [BUNDLED("python3"), "/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"];
 
 function firstExisting(list) { for (var i = 0; i < list.length; i++) if (fs.existsSync(list[i])) return list[i]; return null; }
 function q64(x) { return Math.round(x * 64) / 64; }
