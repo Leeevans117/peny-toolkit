@@ -481,7 +481,10 @@ def grade(project_in, project_out, plan):
         # Temperature +100 came out grey only with the chain written [LUT, Adjustments]. So the
         # new effects go at the end of the chain as [LUT, Adjustments]: Effect Controls shows
         # Adjustments, then the LUT, then whatever the clip already had. Each gets its own <ID>.
-        top = max([int(i) for r in refs for i in re.findall(r"<ID>(\d+)</ID>", objs.get(r, ""))[:1]] + [1])
+        # New <ID>s go above every ID in use, including the implicit Motion/Opacity ones (1 and 2):
+        # a clip with no effects yet otherwise got a LUT with ID 2, the same as Opacity.
+        defaults = [int(i) for i in re.findall(r"<Default(?:Motion|Opacity)ComponentID>(\d+)<", chain)]
+        top = max([int(i) for r in refs for i in re.findall(r"<ID>(\d+)</ID>", objs.get(r, ""))[:1]] + defaults + [1])
         add = []
         if c.get("lut"):
             cid, o, next_id = _copy_objects(presets[c["lut"]], next_id, lut_label(c["lut"]), top + 1)
@@ -496,7 +499,12 @@ def grade(project_in, project_out, plan):
         if "<Components Version=" in chain:
             new_chain = re.sub(r'(<Components Version="\d+">\n)[\s\S]*?(\t\t\t</Components>)', lambda m: m.group(1) + lines + m.group(2), chain, count=1)
         elif "<ComponentChain Version=" in chain:
-            new_chain = re.sub(r'(<ComponentChain Version="\d+">\n)', lambda m: m.group(1) + '\t\t\t<Components Version="1">\n' + lines + '\t\t\t</Components>\n', chain, count=1)
+            # A clip with no effects yet: <Components> goes at the END of <ComponentChain>, after
+            # <Node>, as Premiere writes it. Put before <Node>, importSequences silently imported
+            # nothing (13 Oct 2026, a sequence whose clips had no Lumetri).
+            new_chain = re.sub(r'(\n)(\t\t</ComponentChain>)', lambda m: m.group(1) + '\t\t\t<Components Version="1">\n' + lines + '\t\t\t</Components>\n' + m.group(2), chain, count=1)
+            if new_chain == chain:
+                raise LutError("could not place the effects in: " + chain[:200])
         else:
             raise LutError("unexpected component chain: " + chain[:200])
         x = x.replace(chain, new_chain, 1)
