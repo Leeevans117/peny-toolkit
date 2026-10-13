@@ -16,7 +16,7 @@ Peny Toolkit installer
 3. Open Premiere Pro: Window > Extensions > Peny Toolkit.
    If it is not in the list, quit Premiere and open it again.
 
-Updates arrive by themselves: every hour the Mac looks in the office server folder
+Updates arrive by themselves: every 5 minutes the Mac looks in the office server folder
 /Volumes/ampdata/Peny/Claude/PenyToolkit/releases and installs a newer version if there
 is one (it skips quietly when the server is not connected).
 

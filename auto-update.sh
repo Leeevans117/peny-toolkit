@@ -12,6 +12,9 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 mkdir -p "$(dirname "$LOG")"
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOG"; }
 cd "$REPO" || exit 1
+# Publish main to the office server for installer Macs if it is not there yet (does
+# nothing when the server is not connected).
+[ -x "$REPO/tools/auto-publish.sh" ] && "$REPO/tools/auto-publish.sh"
 
 branch="$(git rev-parse --abbrev-ref HEAD)"
 [ "$branch" = main ] || { log "skip: on branch $branch"; exit 0; }

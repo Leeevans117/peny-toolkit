@@ -17,7 +17,7 @@
 #   panel     HOME/Library/Application Support/Adobe/CEP/extensions/com.peny.toolkit
 #   tools     HOME/Library/Application Support/PenyToolkit/{bin,lib,python,ollama}
 #   updater   HOME/Library/Application Support/PenyToolkit/update.sh (+ update.conf),
-#             launchd agent com.peny.toolkit.nas-update (every hour and at log-in)
+#             launchd agent com.peny.toolkit.nas-update (every 5 minutes and at log-in)
 #   models    HOME/PenyToolkit-scratch/whisper-models, HOME/.ollama/models (copied from a
 #             "models" folder next to the installer folder, else the office server, else
 #             downloaded)
@@ -214,7 +214,7 @@ else
 <dict>
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key><array><string>/bin/bash</string><string>$SUPPORT/update.sh</string></array>
-  <key>StartInterval</key><integer>3600</integer>
+  <key>StartInterval</key><integer>300</integer>
   <key>RunAtLoad</key><true/>
   <key>StandardErrorPath</key><string>$HOME/Library/Logs/PenyToolkit-update.log</string>
 </dict>
@@ -223,8 +223,8 @@ PL
   if [ -n "$SANDBOX" ]; then done_ "test run: updater written to $PLIST (not started)"
   else
     launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null
-    launchctl bootstrap "gui/$(id -u)" "$PLIST" && done_ "checks $(sed -n 's/^PENY_RELEASES="\(.*\)"$/\1/p' "$SUPPORT/update.conf") every hour for a newer version" \
-      || todo "could not start the hourly updater (launchctl)"
+    launchctl bootstrap "gui/$(id -u)" "$PLIST" && done_ "checks $(sed -n 's/^PENY_RELEASES="\(.*\)"$/\1/p' "$SUPPORT/update.conf") every 5 minutes for a newer version" \
+      || todo "could not start the updater (launchctl)"
   fi
 fi
 

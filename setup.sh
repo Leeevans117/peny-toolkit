@@ -143,6 +143,8 @@ else
 mkdir -p "$HOME/Library/Logs"
 mkdir -p "$HOME/Library/Logs"
 ( git push -q origin main >> "$HOME/Library/Logs/PenyToolkit-update.log" 2>&1 & )
+# Peny Toolkit: publish to the office server for installer Macs (tools/auto-publish.sh).
+[ -x tools/auto-publish.sh ] && ( tools/auto-publish.sh >/dev/null 2>&1 & )
 HOOK
   chmod +x "$HOOK_FILE" && ok "push on commit (git hook installed)"
 fi

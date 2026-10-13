@@ -1,6 +1,6 @@
 #!/bin/bash
 # Peny Toolkit updater for Macs set up with the one-click installer (no git, no GitHub).
-# The launchd agent com.peny.toolkit.nas-update runs it every hour and at log-in; safe to
+# The launchd agent com.peny.toolkit.nas-update runs it every 5 minutes and at log-in; safe to
 # run by hand:
 #   "$HOME/Library/Application Support/PenyToolkit/update.sh"
 #
@@ -19,6 +19,8 @@ LOG="$HOME/Library/Logs/PenyToolkit-update.log"
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 mkdir -p "$(dirname "$LOG")"
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOG"; }
+# "Nothing to do" lines are logged only when they change (the check runs every 5 minutes).
+quiet() { [ "$(cat "$SUPPORT/.last-status" 2>/dev/null)" = "$1" ] || { log "$1"; printf '%s\n' "$1" > "$SUPPORT/.last-status"; }; }
 
 PENY_RELEASES=""
 [ -f "$SUPPORT/update.conf" ] && . "$SUPPORT/update.conf"
@@ -41,8 +43,8 @@ get() { # name -> $TMP/name
   esac
 }
 case "$R" in
-  http://*|https://*) get version.json 2>/dev/null || { log "release site $R not reachable - skipped"; exit 0; } ;;
-  *) [ -f "$R/version.json" ] || { log "release folder $R not reachable (office server not connected?) - skipped"; exit 0; }
+  http://*|https://*) get version.json 2>/dev/null || { quiet "release site $R not reachable - skipped"; exit 0; } ;;
+  *) [ -f "$R/version.json" ] || { quiet "release folder $R not reachable (office server not connected?) - skipped"; exit 0; }
      get version.json || { log "could not read $R/version.json"; exit 1; } ;;
 esac
 
@@ -52,9 +54,10 @@ ZIP="$(field zip "$TMP/version.json")"; SHA="$(field sha256 "$TMP/version.json")
 HAVE_BUILD="$(field build "$SUPPORT/installed.json")"; HAVE_BUILD="${HAVE_BUILD:-0}"
 case "$NEW_BUILD$HAVE_BUILD" in *[!0-9]*|"") log "unreadable version.json in $R"; exit 1 ;; esac
 if [ "$NEW_BUILD" -le "$HAVE_BUILD" ]; then
-  log "up to date ($(field version "$SUPPORT/installed.json"))"; exit 0
+  quiet "up to date ($(field version "$SUPPORT/installed.json"))"; exit 0
 fi
 
+rm -f "$SUPPORT/.last-status"
 log "installing $NEW_VERSION from $R"
 get "$ZIP" || { log "could not copy $R/$ZIP"; exit 1; }
 [ "$(shasum -a 256 "$TMP/$ZIP" | cut -d' ' -f1)" = "$SHA" ] || { log "$ZIP is damaged (checksum differs) - not installed"; exit 1; }
