@@ -65,7 +65,7 @@ git archive HEAD | tar -x -C "$P/panel"
 if [ $REUSE = 1 ]; then
 say "2/5 Tools (reused from $INSTALLED)"
 for d in bin lib python ollama LICENSES; do
-  ditto "$INSTALLED/$d" "$P/tools/$d"
+  rsync -a --exclude __pycache__ "$INSTALLED/$d/" "$P/tools/$d/"
 done
 else
 say "2/5 Tools (copying Homebrew programs and their libraries)"
