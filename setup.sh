@@ -51,14 +51,17 @@ BREW_BIN="$(dirname "$BREW")"
 # --- Command-line tools ----------------------------------------------------
 # formula : file it provides
 step "Tools (Homebrew)"
+# python@3.14 is checked by its own path: Homebrew links plain python3 only for its
+# default Python, which may be a newer one.
+PY="$(dirname "$BREW_BIN")/opt/python@3.14/bin/python3.14"
 for pair in ffmpeg:ffmpeg whisper-cpp:whisper-cli ollama:ollama python@3.14:python3; do
-  f="${pair%%:*}"; bin="${pair#*:}"
-  if [ -x "$BREW_BIN/$bin" ]; then ok "$bin"
+  f="${pair%%:*}"; bin="${pair#*:}"; path="$BREW_BIN/$bin"; [ "$bin" = python3 ] && path="$PY"
+  if [ -x "$path" ]; then ok "$bin"
   elif [ $CHECK = 1 ]; then todo "$bin (brew install $f)"
   else echo "  installing $f"; "$BREW" install "$f" >/dev/null && ok "$bin" || todo "$bin (brew install $f failed)"; fi
 done
 
-if "$BREW_BIN/python3" -c "import numpy" 2>/dev/null; then ok "numpy (for $BREW_BIN/python3)"
+if "$PY" -c "import numpy" 2>/dev/null; then ok "numpy (for $PY)"
 elif [ $CHECK = 1 ]; then todo "numpy (brew install numpy)"
 else echo "  installing numpy"; "$BREW" install numpy >/dev/null && ok "numpy" || todo "numpy (brew install numpy failed)"; fi
 

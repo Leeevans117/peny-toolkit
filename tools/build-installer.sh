@@ -26,7 +26,8 @@ OUT="${1:-$HOME/PenyToolkit-scratch/installer-build}"
 RELEASES="${PENY_RELEASES:-/Volumes/ampdata/Peny/Claude/PenyToolkit/releases}"
 LUTS="${PENY_LUTS:-$HOME/PenyToolkit-scratch/colour/Peny LUT Presets.prfpset}"
 BREW=/opt/homebrew
-PY=$BREW/bin/python3
+# python@3.14 by its own path: Homebrew links plain python3 only for its default Python.
+PY=$BREW/opt/python@3.14/bin/python3.14
 
 say() { printf '%s\n' "$*"; }
 [ "$(uname -m)" = arm64 ] || { say "Build on an Apple Silicon Mac."; exit 1; }
@@ -36,7 +37,8 @@ say() { printf '%s\n' "$*"; }
 # Mac without Homebrew can build too.
 INSTALLED="$HOME/Library/Application Support/PenyToolkit"
 REUSE="${PENY_REUSE_TOOLS:-0}"
-for t in ffmpeg ffprobe whisper-cli ollama python3; do [ -x "$BREW/bin/$t" ] || REUSE=1; done
+for t in ffmpeg ffprobe whisper-cli ollama; do [ -x "$BREW/bin/$t" ] || REUSE=1; done
+[ -x "$PY" ] || REUSE=1
 [ $REUSE = 1 ] || "$PY" -c "import numpy" 2>/dev/null || REUSE=1
 if [ $REUSE = 1 ]; then
   for t in ffmpeg ffprobe whisper-cli ollama python3; do
