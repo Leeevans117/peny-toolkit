@@ -11,7 +11,11 @@ SHARE="${PENY_SHARE:-/Volumes/ampdata/Peny/Claude/PenyToolkit}"
 LOG="$HOME/Library/Logs/PenyToolkit-publish.log"
 mkdir -p "$(dirname "$LOG")"
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOG"; }
-[ -d "$(dirname "$SHARE")" ] || exit 0
+if [ ! -d "$(dirname "$SHARE")" ]; then   # logged once per change of state
+  [ "$(tail -1 "$LOG" 2>/dev/null | cut -c21-)" = "office server not connected - will publish when it is" ] \
+    || log "office server not connected - will publish when it is"
+  exit 0
+fi
 [ "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" = "${PENY_PUBLISH_BRANCH:-main}" ] || exit 0
 LOCK="${TMPDIR:-/tmp}/peny-auto-publish.lock"
 mkdir "$LOCK" 2>/dev/null || exit 0   # a publish is running; it re-checks HEAD when done
