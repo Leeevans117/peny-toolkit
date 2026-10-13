@@ -18,7 +18,8 @@ want. So the updates run from the open Peny Toolkit panel instead (`core/updater
 programs it starts run as part of Premiere, which reads the server): the 5-minute release
 check on every Mac and, on the build machine, the hourly `auto-update.sh` (the checkout
 is named by `repo=` in `~/.peny-toolkit/publisher`). Commits made in a terminal publish
-straight away (the post-commit hook runs as the user).
+straight away (the post-commit hook runs as the user). Checked 13 Oct 2026 on the Mac Studio: the panel's
+update.sh read the server with no permission dialog and installed a new release.
 
 ## Make this Mac the build machine
 
