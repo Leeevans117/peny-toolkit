@@ -168,7 +168,13 @@ WANT="$(cat <<PL
 </plist>
 PL
 )"
-if [ -f "$PLIST" ] && [ "$(cat "$PLIST")" = "$WANT" ]; then ok "hourly update ($PLIST)"
+case "$SRC" in /Volumes/*) ON_SERVER=1 ;; *) ON_SERVER=0 ;; esac
+if [ $ON_SERVER = 1 ]; then
+  # launchd may not read a network volume (macOS: "Operation not permitted"); on the build
+  # machine the open panel runs auto-update.sh hourly instead (tools/become-builder.sh).
+  [ $CHECK = 1 ] || { launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null; rm -f "$PLIST"; }
+  ok "hourly update: not with launchd (checkout on a server; tools/become-builder.sh hands it to the panel)"
+elif [ -f "$PLIST" ] && [ "$(cat "$PLIST")" = "$WANT" ]; then ok "hourly update ($PLIST)"
 elif [ $CHECK = 1 ]; then todo "hourly update ($PLIST)"
 elif [ "${PENY_NO_LAUNCHD:-0}" = 1 ]; then
   mkdir -p "$(dirname "$PLIST")" && printf '%s\n' "$WANT" > "$PLIST" && ok "hourly update (plist written, not loaded: test mode)"

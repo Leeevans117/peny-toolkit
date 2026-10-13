@@ -11,7 +11,9 @@
 #     does nothing on any Mac without it, so only one Mac ever publishes
 #   - post-commit hook: push main to GitHub, then publish (tools/auto-publish.sh)
 #   - launchd agent com.peny.toolkit.update (auto-update.sh, every hour + at log-in): pulls
-#     GitHub, installs, and publishes what is not on the server yet
+#     GitHub, installs, and publishes what is not on the server yet. With the checkout on
+#     a server (/Volumes/...) launchd may not read it, so the open panel runs
+#     auto-update.sh every hour instead (core/updater.js, via "repo=" in the mark)
 # Only one Mac should be the build machine: run --off on the old one.
 set -u
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,7 +30,8 @@ fi
 
 git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || { echo "$REPO is not a git checkout."; exit 1; }
 mkdir -p "$(dirname "$MARK")"
-printf 'build machine since %s (%s)\n' "$(date '+%Y-%m-%d %H:%M')" "$(scutil --get ComputerName 2>/dev/null)" > "$MARK"
+# repo= tells the panel (core/updater.js) which checkout's auto-update.sh to run hourly.
+printf 'build machine since %s (%s)\nrepo=%s\n' "$(date '+%Y-%m-%d %H:%M')" "$(scutil --get ComputerName 2>/dev/null)" "$REPO" > "$MARK"
 echo "ok  publisher mark: $MARK"
 
 mkdir -p "$(dirname "$HOOK")"
@@ -62,13 +65,19 @@ WANT="$(cat <<PL
 </plist>
 PL
 )"
+case "$REPO" in
+  /Volumes/*)  # launchd may not read a network volume (macOS: "Operation not permitted")
+    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null; rm -f "$PLIST"
+    echo "ok  hourly catch-up runs from the open Peny Toolkit panel (checkout on $(echo "$REPO" | cut -d/ -f1-3), which launchd may not read)" ;;
+  *)
 if [ -f "$PLIST" ] && [ "$(cat "$PLIST")" = "$WANT" ]; then echo "ok  hourly agent $PLIST"
 else
   mkdir -p "$(dirname "$PLIST")" && printf '%s\n' "$WANT" > "$PLIST"
   if [ "${PENY_NO_LAUNCHD:-0}" = 1 ]; then echo "ok  hourly agent written (not loaded: test mode)"
   else launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null
        launchctl bootstrap "gui/$(id -u)" "$PLIST" && echo "ok  hourly agent loaded" || echo "MISSING hourly agent (launchctl failed)"; fi
-fi
+fi ;;
+esac
 
 if [ -d /Volumes/ampdata ]; then echo "ok  office server connected"
 else echo "NOTE office server not connected: publishing starts when /Volumes/ampdata is there"; fi

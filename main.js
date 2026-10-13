@@ -52,6 +52,7 @@ var extRoot = (function () {
 })();
 
 var jobs = null; // loaded in start(), after clearToolkitModules()
+var updates = null; // core/updater.js: release + build-machine updates run from the panel
 var skills = [];
 var running = null; // "<skill>/<action>" while a non-control action runs
 
@@ -660,6 +661,7 @@ var startError = null;
     try { fs.mkdirSync(HOOK_INBOX, { recursive: true }); } catch (e) {}
     if (!window.PenyLoader) fs.writeFileSync(INSTANCE_FILE, INSTANCE_ID, "utf-8");
     hookTimer = setInterval(pollHook, HOOK_POLL_MS);
+    updates = nodeRequire(path.join(extRoot, "core", "updater.js")).start({ log: log, isBusy: isBusy });
     document.getElementById("status").textContent = skills.filter(function (s) { return !s.hidden; }).length + " apps";
     log("Panel open (instance " + INSTANCE_ID + "), " + skills.length + " skills: " + skills.map(function (s) { return s.id; }).join(", "));
   } catch (e) {
@@ -682,10 +684,11 @@ function isBusy() {
   return null;
 }
 
-// Undo what this file set up in the page: the hook timer is its only timer; its click
-// handlers sit on elements loader.js throws away.
+// Undo what this file set up in the page: the hook timer and the updater's timers; its
+// click handlers sit on elements loader.js throws away.
 function stop() {
   if (hookTimer) { clearInterval(hookTimer); hookTimer = null; }
+  if (updates) { updates.stop(); updates = null; }
   skills = [];
 }
 

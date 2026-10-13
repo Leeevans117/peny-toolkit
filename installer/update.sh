@@ -1,7 +1,7 @@
 #!/bin/bash
 # Peny Toolkit updater for Macs set up with the one-click installer (no git, no GitHub).
-# The launchd agent com.peny.toolkit.nas-update runs it every 5 minutes and at log-in; safe to
-# run by hand:
+# The Peny Toolkit panel runs it every 5 minutes while it is open (core/updater.js; a
+# launchd agent may not read the office server). Safe to run by hand:
 #   "$HOME/Library/Application Support/PenyToolkit/update.sh"
 #
 # Looks in the release location set in update.conf next to this file:

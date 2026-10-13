@@ -16,8 +16,8 @@
 # Where things go (HOME = the user's home folder):
 #   panel     HOME/Library/Application Support/Adobe/CEP/extensions/com.peny.toolkit
 #   tools     HOME/Library/Application Support/PenyToolkit/{bin,lib,python,ollama}
-#   updater   HOME/Library/Application Support/PenyToolkit/update.sh (+ update.conf),
-#             launchd agent com.peny.toolkit.nas-update (every 5 minutes and at log-in)
+#   updater   HOME/Library/Application Support/PenyToolkit/update.sh (+ update.conf,
+#             panel-updates), run by the open panel every 5 minutes (core/updater.js)
 #   models    HOME/PenyToolkit-scratch/whisper-models, HOME/.ollama/models (copied from a
 #             "models" folder next to the installer folder, else the office server, else
 #             downloaded)
@@ -200,32 +200,25 @@ step "Step 6: Automatic updates from the office server"
 cp "$P/update.sh" "$SUPPORT/update.sh.new" && chmod +x "$SUPPORT/update.sh.new" && mv "$SUPPORT/update.sh.new" "$SUPPORT/update.sh"
 [ -f "$SUPPORT/update.conf" ] || cp "$P/update.conf.default" "$SUPPORT/update.conf"
 cp "$P/VERSION.json" "$SUPPORT/installed.json"
+# Updates are started by the Peny Toolkit panel (core/updater.js): it runs inside
+# Premiere, which may read the office server. A launchd agent may not (macOS answers
+# "Operation not permitted" on /Volumes/ampdata without Full Disk Access), so the agent
+# earlier versions installed is removed.
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+if [ -f "$PLIST" ]; then
+  # Not stopped during --update: that run may be the agent itself, and stopping it would
+  # kill this install; with its file gone it is not started again after the next log-in.
+  [ -n "$SANDBOX" ] || [ $UPDATE = 1 ] || launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null
+  rm -f "$PLIST"
+  touch "$SUPPORT/panel-updates"   # it was on, so it stays on (now from the panel)
+fi
 if [ $UPDATE = 1 ]; then
   done_ "version $VERSION recorded"
 elif [ $DEV = 1 ] && [ $NAS_UPDATES = 0 ]; then
   done_ "developer Mac: updates come from git (auto-update.sh); NAS updates not turned on"
 else
-  PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-  mkdir -p "$(dirname "$PLIST")"
-  cat > "$PLIST" <<PL
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>$LABEL</string>
-  <key>ProgramArguments</key><array><string>/bin/bash</string><string>$SUPPORT/update.sh</string></array>
-  <key>StartInterval</key><integer>300</integer>
-  <key>RunAtLoad</key><true/>
-  <key>StandardErrorPath</key><string>$HOME/Library/Logs/PenyToolkit-update.log</string>
-</dict>
-</plist>
-PL
-  if [ -n "$SANDBOX" ]; then done_ "test run: updater written to $PLIST (not started)"
-  else
-    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null
-    launchctl bootstrap "gui/$(id -u)" "$PLIST" && done_ "checks $(sed -n 's/^PENY_RELEASES="\(.*\)"$/\1/p' "$SUPPORT/update.conf") every 5 minutes for a newer version" \
-      || todo "could not start the updater (launchctl)"
-  fi
+  touch "$SUPPORT/panel-updates"
+  done_ "while the Peny Toolkit panel is open it checks $(sed -n 's/^PENY_RELEASES="\(.*\)"$/\1/p' "$SUPPORT/update.conf") every 5 minutes for a newer version"
 fi
 
 # --- Things only a person can do -------------------------------------------------------

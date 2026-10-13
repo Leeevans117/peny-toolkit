@@ -12,10 +12,13 @@ On the Mac Studio the checkout is on the server, at
 one-click installer treats it as an ordinary installer Mac (panel from the release, 5-minute
 updater on).
 
-launchd jobs (the 5-minute updater, the hourly `auto-update.sh`) are refused by macOS when
-they read `/Volumes/ampdata` ("Operation not permitted", seen 13 Oct 2026 on macOS 26.6)
-until **Lee** gives `/bin/bash` access in System Settings > Privacy & Security. Commits
-made in a terminal publish regardless (the post-commit hook runs as the user).
+macOS refuses launchd jobs that read `/Volumes/ampdata` ("Operation not permitted", seen
+13 Oct 2026 on macOS 26.6) unless `/bin/bash` gets Full Disk Access, which Lee does not
+want. So the updates run from the open Peny Toolkit panel instead (`core/updater.js`;
+programs it starts run as part of Premiere, which reads the server): the 5-minute release
+check on every Mac and, on the build machine, the hourly `auto-update.sh` (the checkout
+is named by `repo=` in `~/.peny-toolkit/publisher`). Commits made in a terminal publish
+straight away (the post-commit hook runs as the user).
 
 ## Make this Mac the build machine
 
@@ -37,8 +40,9 @@ Steps marked **Lee** need Lee at the Mac; Claude does the rest. Use full paths.
    (or `git -C "$HOME/PenyToolkit/com.peny.toolkit" pull` if it is already there).
 5. Turn it on: `"$HOME/PenyToolkit/com.peny.toolkit/tools/become-builder.sh"`. It writes
    the publisher mark, the post-commit hook (push to GitHub, then publish) and the
-   hourly launchd agent `com.peny.toolkit.update` (`auto-update.sh`: pull GitHub, install,
-   publish anything not on the server yet).
+   hourly `auto-update.sh` (pull GitHub, install, publish anything not on the server yet):
+   a launchd agent `com.peny.toolkit.update` for a checkout in the home folder, the open
+   panel for a checkout on a server.
 6. First publish, with the models (about 20 GB, once), with the server connected:
    `"$HOME/PenyToolkit/com.peny.toolkit/tools/publish-release.sh" --models`
 7. Check `/Volumes/ampdata/Peny/Claude/PenyToolkit/` now has `Peny Toolkit Installer/`,
@@ -46,8 +50,8 @@ Steps marked **Lee** need Lee at the Mac; Claude does the rest. Use full paths.
 8. On the previous build machine: `"$HOME/PenyToolkit/com.peny.toolkit/tools/become-builder.sh" --off`.
 
 With a checkout present the one-click installer treats the Mac as a developer Mac: the
-panel then comes from the checkout (`install.sh`); the installer's 5-minute updater stays
-on and installs the same releases this Mac publishes.
+panel then comes from the checkout (`install.sh`); NAS updates stay off unless the
+installer is run with `--nas-updates`.
 
 ## After that
 

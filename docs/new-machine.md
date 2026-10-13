@@ -29,7 +29,7 @@ What it installs (all in the user's own folders, so no admin password):
 | Peny LUT Presets.prfpset | `~/PenyToolkit-scratch/colour/` |
 | colour-baseline.json (camera -> LUT choices) | `~/.peny-toolkit/` (only if missing) |
 | PlayerDebugMode 1 for CSXS 11, 12, 13 | macOS defaults (lets Premiere load the unsigned panel) |
-| Hourly updater (launchd `com.peny.toolkit.nas-update`) | `~/Library/Application Support/PenyToolkit/update.sh` + `update.conf` |
+| Updater, run by the open panel every 5 minutes (older versions' launchd agent `com.peny.toolkit.nas-update` is removed) | `~/Library/Application Support/PenyToolkit/update.sh` + `update.conf` + `panel-updates` |
 
 Log: `~/Library/Logs/PenyToolkit-install.log`. Options (run
 `".../payload/install-toolkit.sh" --help`): `--no-models`, `--home DIR` (test run into a
@@ -56,7 +56,11 @@ spare folder), `--nas-updates` / `--panel-from-release` (developer Macs, below).
 
 ### Updates on installer Macs (live)
 
-Every 5 minutes (and at log-in) `update.sh` reads `PENY_RELEASES` from
+While the Peny Toolkit panel is open (30 s after it opens, then every 5 minutes, never
+during a running action) it runs `update.sh` (`core/updater.js`). Programs the panel
+starts run as part of Premiere, which may read the office server; a launchd agent may
+not without Full Disk Access, so no agent is used and no permission is needed. With
+Premiere closed nothing updates; the next panel open catches up. `update.sh` reads `PENY_RELEASES` from
 `~/Library/Application Support/PenyToolkit/update.conf` (default
 `/Volumes/ampdata/Peny/Claude/PenyToolkit/releases`; an `https://` address also works,
 for a web link later). If the server is not connected it does nothing (one log line when
