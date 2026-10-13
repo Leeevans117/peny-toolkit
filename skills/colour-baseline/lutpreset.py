@@ -77,8 +77,16 @@ def lut_hash(path):
 
 
 def embedded_blob(path):
-    size, dmin, dmax, vals = parse_cube(path)
     h = lut_hash(path)
+    with open(path, "rb") as f:
+        head = f.read(4)
+    if head == b"ITX3":
+        # Premiere's own binary LUT (.itx, e.g. the SL looks in its Creative folder) is already
+        # the embedded body: "ITX3", size, 3, flag, 6 f32 domain, floats (checked 13 Oct 2026).
+        with open(path, "rb") as f:
+            body = f.read()
+        return h + struct.pack("<I", len(body)) + body, h
+    size, dmin, dmax, vals = parse_cube(path)
     body = b"ITX3" + struct.pack("<III", size, 3, 0) + struct.pack("<6f", *(dmin + dmax)) + struct.pack("<%df" % len(vals), *vals)
     return h + struct.pack("<I", len(body)) + body, h
 
@@ -408,6 +416,13 @@ def _copy_objects(parts, next_id, instance_name, comp_id=None):
     return remap[old_cid], out, next_id
 
 
+def lut_label(v):
+    """Effect name for a LUT choice: a preset's own name, or a LUT file's name without extension."""
+    if v.startswith("file:"):
+        return os.path.splitext(os.path.basename(v[5:]))[0]
+    return v
+
+
 def grade(project_in, project_out, plan):
     """plan: {"sequence": uid, "newSequence": uid, "newName", "oldName", "presets": prfpset path,
     "adjustments": preset name, "clips": [{"track", "index", "start" (ticks), "lut": preset or null,
@@ -420,6 +435,12 @@ def grade(project_in, project_out, plan):
     if plan["adjustments"] not in presets:
         with open(os.path.join(HERE, "plain.xml"), "r", encoding="utf-8") as f:
             presets[plan["adjustments"]] = [o[2] for o in _objects(f.read())]
+    # A LUT given as "file:<path>" (.cube or .itx, e.g. Premiere's Creative folder) is built
+    # into a Lumetri here, named after the file, instead of copied from a preset.
+    for c in plan["clips"]:
+        v = c.get("lut")
+        if v and v.startswith("file:") and v not in presets:
+            presets[v] = lut_component(v[5:], lut_label(v), 1)[1]
     need = set([plan["adjustments"]] + [c["lut"] for c in plan["clips"] if c.get("lut")])
     missing = [n for n in need if n not in presets]
     if missing:
@@ -463,7 +484,7 @@ def grade(project_in, project_out, plan):
         top = max([int(i) for r in refs for i in re.findall(r"<ID>(\d+)</ID>", objs.get(r, ""))[:1]] + [1])
         add = []
         if c.get("lut"):
-            cid, o, next_id = _copy_objects(presets[c["lut"]], next_id, c["lut"], top + 1)
+            cid, o, next_id = _copy_objects(presets[c["lut"]], next_id, lut_label(c["lut"]), top + 1)
             add.append(cid); new_objs.extend(o)
         if c.get("adjustments"):
             cid, o, next_id = _copy_objects(presets[plan["adjustments"]], next_id, plan["adjustments"], top + 2)

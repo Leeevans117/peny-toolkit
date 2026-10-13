@@ -24,6 +24,31 @@ var SETTINGS = path.join(os.homedir(), ".peny-toolkit", "colour-baseline.json");
 var REDLINE = ["/usr/local/bin/REDline", "/Applications/REDCINE-X Professional/REDCINE-X PRO.app/Contents/MacOS/REDline"];
 var ADJUSTMENTS = "Adjustments";
 var NO_LUT = "";
+// Premiere's own Creative LUTs (Lee, 13 Oct 2026): offered in the LUT dropdown as "file:<path>"
+// choices; Apply builds the Lumetri from the file (lutpreset.py lut_component). .cube and the
+// binary .itx are supported; .look files are not LUTs and are left out.
+var CREATIVE_GLOB_ROOT = "/Applications";
+function creativeDir() {
+  try {
+    var apps = fs.readdirSync(CREATIVE_GLOB_ROOT).filter(function (n) { return /^Adobe Premiere Pro \d{4}$/.test(n); }).sort().reverse();
+    for (var i = 0; i < apps.length; i++) {
+      var d = path.join(CREATIVE_GLOB_ROOT, apps[i], apps[i] + ".app", "Contents", "Lumetri", "LUTs", "Creative");
+      if (fs.existsSync(d)) return d;
+    }
+  } catch (e) {}
+  return null;
+}
+function listCreative() {
+  var d = creativeDir();
+  if (!d) return [];
+  try {
+    return fs.readdirSync(d).filter(function (n) { return /\.(cube|itx)$/i.test(n); }).sort(function (a, b) { return a.localeCompare(b); })
+      .map(function (n) { return "file:" + path.join(d, n); });
+  } catch (e) { return []; }
+}
+function lutLabel(v) { return v && v.indexOf("file:") === 0 ? path.basename(v.slice(5)).replace(/\.[^.]+$/, "") : v; }
+// A saved choice still available: one of Lee's presets, or a LUT file that is still there.
+function choiceExists(v, names) { return v.indexOf("file:") === 0 ? fs.existsSync(v.slice(5)) : names.indexOf(v) !== -1; }
 
 function firstExisting(list) { for (var i = 0; i < list.length; i++) if (fs.existsSync(list[i])) return list[i]; return null; }
 function extOf(p) { var d = p.lastIndexOf("."); return d === -1 ? "" : p.substring(d + 1).toLowerCase(); }
@@ -210,12 +235,12 @@ module.exports = function (api) {
           cams.forEach(function (c) {
             if (!settings.choices.hasOwnProperty(c.camera)) c.suggested = suggest(c.camera, pr.names);
             c.choice = settings.choices.hasOwnProperty(c.camera) ? settings.choices[c.camera] : c.suggested;
-            if (c.choice && pr.names.indexOf(c.choice) === -1) c.choice = NO_LUT; // preset gone
+            if (c.choice && !choiceExists(c.choice, pr.names)) c.choice = NO_LUT; // preset or file gone
           });
           writeSettings(settings);
-          state = { cameras: cams, presets: pr.names, sequence: scan.details.sequence, nested: scan.details.nested };
+          state = { cameras: cams, presets: pr.names, creative: listCreative(), sequence: scan.details.sequence, nested: scan.details.nested };
           render();
-          var lines = cams.map(function (c) { return c.camera + ": " + c.clips.length + " clip(s)" + (c.choice ? " -> " + c.choice : " -> no LUT"); });
+          var lines = cams.map(function (c) { return c.camera + ": " + c.clips.length + " clip(s)" + (c.choice ? " -> " + lutLabel(c.choice) : " -> no LUT"); });
           return { ok: true, summary: cams.length + " camera(s) in \"" + scan.details.sequence + "\": " + lines.join("; ") + "." +
             (pr.names.length ? "" : " No Lumetri presets of yours found (Make LUT presets, then Effects panel > Import Presets)."),
             details: { sequence: scan.details.sequence, cameras: cams.map(function (c) {
@@ -256,7 +281,7 @@ module.exports = function (api) {
         // brand). Suggestions are only shown, not saved, so Apply must work them out the same
         // way (bug 3 Oct: Detect showed CANON LUT / RED LUT, Apply used no LUT).
         var pick = choices.hasOwnProperty(cam.camera) ? choices[cam.camera] : suggest(cam.camera, presetsInfo.names);
-        if (pick && presetsInfo.names.indexOf(pick) === -1) missing.push(cam.camera + " -> " + pick);
+        if (pick && !choiceExists(pick, presetsInfo.names)) missing.push(cam.camera + " -> " + lutLabel(pick));
         cam.pick = pick;
         cam.full.forEach(function (cl) {
           var hasLut = cl.lumetri.some(function (n) { return n !== "" && n !== adj; });
@@ -308,7 +333,7 @@ module.exports = function (api) {
         // trackItem.components lists effects bottom-up (file order); Effect Controls shows the
         // reverse. Expected in that list: what the clip had, then the LUT, then Adjustments last
         // = Adjustments on top in Effect Controls.
-        var b = after[i], want = cl.lumetri.concat(cl.plan.lut ? [cl.plan.lut] : []).concat(cl.plan.adjustments ? [adj] : []);
+        var b = after[i], want = cl.lumetri.concat(cl.plan.lut ? [lutLabel(cl.plan.lut)] : []).concat(cl.plan.adjustments ? [adj] : []);
         // Same media counts as the same clip: importSequences can relink a clip to another project
         // item of the same file (A045/A046 sit in two bins), which read back as 68 "wrong" clips on 12 Oct.
         var same = b && b.track === cl.track && b.startTicks === cl.startTicks && (b.item === cl.item || (b.path && b.path === cl.path)) &&
@@ -321,7 +346,7 @@ module.exports = function (api) {
           keptOwnLut: c.full.filter(function (x) { return !x.plan.lut && c.pick; }).length };
       });
       var summary = "\"" + fin.details.sequence + "\" made: Adjustments on " + adjAdded + " clip(s), LUT on " + lutAdded + " (" +
-        perCam.map(function (c) { return c.camera + ": " + (c.lut || "no LUT") + (c.keptOwnLut ? ", " + c.keptOwnLut + " kept their own LUT" : ""); }).join("; ") +
+        perCam.map(function (c) { return c.camera + ": " + (lutLabel(c.lut) || "no LUT") + (c.keptOwnLut ? ", " + c.keptOwnLut + " kept their own LUT" : ""); }).join("; ") +
         "); " + ok + " of " + scan0.clips.length + " clips read back right. \"" + scan0.sequence + "\" is unchanged." +
         (extra.length ? " Premiere also brought in copies of nested sequence(s) it uses: " + extra.map(function (s) { return s.name; }).join(", ") + "." : "");
       var details = { sequence: fin.details.sequence, sequenceId: plan.newSequence, from: scan0.sequence, cameras: perCam, readBack: { ok: ok, total: scan0.clips.length, wrong: bad.slice(0, 20) },
@@ -357,14 +382,19 @@ module.exports = function (api) {
       field.appendChild(el("span", "flabel", c.camera + " · " + c.clips.length + " clip" + (c.clips.length === 1 ? "" : "s") + (existing ? " · has " + existing : "")));
       var sel = el("select", "colour-select");
       var none = el("option", "", "No LUT (Adjustments only)"); none.value = NO_LUT; sel.appendChild(none);
-      state.presets.filter(function (n) { return n !== ADJUSTMENTS; }).forEach(function (n) { var o = el("option", "", n); o.value = n; sel.appendChild(o); });
+      var mine = el("optgroup"); mine.label = "Your LUT presets";
+      state.presets.filter(function (n) { return n !== ADJUSTMENTS; }).forEach(function (n) { var o = el("option", "", n); o.value = n; mine.appendChild(o); });
+      if (mine.children.length) sel.appendChild(mine);
+      var cre = el("optgroup"); cre.label = "Premiere Creative LUTs";
+      (state.creative || []).forEach(function (v) { var o = el("option", "", lutLabel(v)); o.value = v; cre.appendChild(o); });
+      if (cre.children.length) sel.appendChild(cre);
       sel.value = c.choice || NO_LUT;
       sel.addEventListener("change", function () {
         var s = readSettings();
         s.choices[c.camera] = sel.value;
         writeSettings(s);
         c.choice = sel.value;
-        api.log("Colour: " + c.camera + " -> " + (sel.value || "no LUT"));
+        api.log("Colour: " + c.camera + " -> " + (lutLabel(sel.value) || "no LUT"));
       });
       field.appendChild(sel);
       root.appendChild(field);
