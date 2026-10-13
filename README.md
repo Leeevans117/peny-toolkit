@@ -8,9 +8,6 @@ one app tile per skill; tapping a tile opens that skill's view (< returns home).
 - Source (git, local only): `~/PenyToolkit/com.peny.toolkit/`
 - Installed copy: `~/Library/Application Support/Adobe/CEP/extensions/com.peny.toolkit/`
 - Log: `~/Library/Logs/PenyToolkit.log`
-- Installing on another Mac (one double-click, no GitHub): `docs/new-machine.md`, "One-click install";
-  the installer is built by `tools/build-installer.sh` and published to the office server by
-  `tools/publish-release.sh`.
 
 ## Adding a skill
 
