@@ -510,43 +510,6 @@ def grade(project_in, project_out, plan):
         x = x.replace(chain, new_chain, 1)
         objs[chain_id] = new_chain
         done += 1
-    # Lee (13 Oct 2026): selecting a clip should target its Adjustments Lumetri, not the LUT under
-    # it. Each chain remembers its selected effect in MZ.ComponentChain.ActiveComponentID; point it
-    # at the Adjustments effect on every clip of the sequence (clips already done included).
-    adj_name = "<InstanceName>%s</InstanceName>" % _xml_text(plan["adjustments"])
-    new_by_id = dict((re.search(r'ObjectID="(\d+)"', o).group(1), o) for o in new_objs)
-    targeted = 0
-    for t_uid in tracks.values():
-        for i, r in re.findall(r'<TrackItem Index="(\d+)" ObjectRef="(\d+)"/>', objs.get(t_uid, "")):
-            if not objs.get(r, "").startswith("\t<VideoClipTrackItem "):
-                continue
-            m = re.search(r'<Components ObjectRef="(\d+)"/>', objs[r])
-            if not m:
-                continue
-            chain_id = m.group(1)
-            chain = objs[chain_id]
-            want = None
-            for cref in re.findall(r'<Component Index="\d+" ObjectRef="(\d+)"/>', chain):
-                o = objs.get(cref) or new_by_id.get(cref, "")
-                if adj_name in o:
-                    ids = re.findall(r"<ID>(\d+)</ID>", o)
-                    if ids:
-                        want = ids[0]
-            if not want:
-                continue
-            if "<MZ.ComponentChain.ActiveComponentID>" in chain:
-                new_chain = re.sub(r"<MZ.ComponentChain.ActiveComponentID>\d+<", "<MZ.ComponentChain.ActiveComponentID>%s<" % want, chain, count=1)
-            else:
-                # Never-selected clip: add the <Node> Premiere writes first in the chain.
-                node = ('\t\t\t<Node Version="1">\n\t\t\t\t<Properties Version="1">\n'
-                        '\t\t\t\t\t<MZ.ComponentChain.ActiveComponentID>%s</MZ.ComponentChain.ActiveComponentID>\n'
-                        '\t\t\t\t\t<MZ.ComponentChain.ActiveComponentParamIndex>4294967295</MZ.ComponentChain.ActiveComponentParamIndex>\n'
-                        '\t\t\t\t</Properties>\n\t\t\t</Node>\n') % want
-                new_chain = re.sub(r'(<ComponentChain Version="\d+">\n)', lambda m: m.group(1) + node, chain, count=1)
-            if new_chain != chain:
-                x = x.replace(chain, new_chain, 1)
-                objs[chain_id] = new_chain
-            targeted += 1
     # Store each value once: later copies of the same value only carry its BinaryHash.
     final = []
     for o in new_objs:
@@ -562,7 +525,7 @@ def grade(project_in, project_out, plan):
     x = x.replace(">%s<" % _xml_text(plan["oldName"]), ">%s<" % _xml_text(plan["newName"]))
     with open(project_out, "wb") as f:
         f.write(gzip.compress(x.encode("utf-8"), 6))
-    return {"clips": done, "problems": problems, "adjustmentsSelected": targeted}
+    return {"clips": done, "problems": problems}
 
 
 def main(argv):
