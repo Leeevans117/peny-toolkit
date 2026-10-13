@@ -12,8 +12,11 @@
    Premiere Pro: Window > Extensions > Peny Toolkit (if it is not listed, quit and reopen
    Premiere).
 
-Without the server: copy `Peny Toolkit Installer.zip` (same folder) to the Mac,
-double-click it to unzip, then double-click **Install Peny Toolkit.command** inside.
+Without the server: carry a folder made with `publish-release.sh` (see "Publishing",
+`PENY_SHARE=<folder>`) on a drive. It holds `Peny Toolkit Installer/` and `models/` side by
+side; copy the whole folder to the Mac (or run it from the drive) and double-click
+**Install Peny Toolkit.command** inside `Peny Toolkit Installer`. The models are taken from
+the `models` folder next to it (then the office server, then the internet).
 Running the installer again is safe (it repairs anything missing).
 
 What it installs (all in the user's own folders, so no admin password):
@@ -21,8 +24,8 @@ What it installs (all in the user's own folders, so no admin password):
 | Thing | Where |
 |---|---|
 | The panel | `~/Library/Application Support/Adobe/CEP/extensions/com.peny.toolkit/` |
-| ffmpeg, ffprobe, whisper-cli, ollama, python3 + numpy (copies of the Homebrew builds with their libraries; the skills use Homebrew's copy first if a Mac has one) | `~/Library/Application Support/PenyToolkit/bin` (+ `lib`, `python`, `ollama`) |
-| Whisper models, Ollama qwen2.5:32b | `~/PenyToolkit-scratch/whisper-models/`, `~/.ollama/models` - copied from `/Volumes/ampdata/Peny/Claude/PenyToolkit/models` when that is there, otherwise downloaded (about 22 GB) |
+| ffmpeg, ffprobe, whisper-cli, ollama, python3 + numpy (copies of the Homebrew builds with their libraries; the skills use these first, Homebrew's only if they are missing; Homebrew itself is not touched) | `~/Library/Application Support/PenyToolkit/bin` (+ `lib`, `python`, `ollama`) |
+| Whisper models, Ollama qwen2.5:32b | `~/PenyToolkit-scratch/whisper-models/`, `~/.ollama/models` - copied from a `models` folder next to the installer folder, else `/Volumes/ampdata/Peny/Claude/PenyToolkit/models`, else downloaded (about 22 GB) |
 | Peny LUT Presets.prfpset | `~/PenyToolkit-scratch/colour/` |
 | colour-baseline.json (camera -> LUT choices) | `~/.peny-toolkit/` (only if missing) |
 | PlayerDebugMode 1 for CSXS 11, 12, 13 | macOS defaults (lets Premiere load the unsigned panel) |
