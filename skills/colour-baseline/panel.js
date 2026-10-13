@@ -17,6 +17,8 @@
  * path, size and date. */
 var fs = require("fs");
 var path = require("path");
+// Tools put in place by the one-click installer (no Homebrew needed).
+function BUNDLED(name) { return path.join(process.env.HOME || "", "Library", "Application Support", "PenyToolkit", "bin", name); }
 var os = require("os");
 var childProcess = require("child_process");
 
@@ -194,7 +196,7 @@ module.exports = function (api) {
     } catch (e) {}
     return best;
   }
-  function python() { return firstExisting(["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]); }
+  function python() { return firstExisting(["/opt/homebrew/bin/python3", "/usr/local/bin/python3", BUNDLED("python3"), "/usr/bin/python3"]); }
   function runPy(args, timeout) {
     return new Promise(function (resolve, reject) {
       childProcess.execFile(python(), [path.join(api.skillDir, "lutpreset.py")].concat(args), { maxBuffer: 64 * 1024 * 1024, timeout: timeout || 600000 }, function (err, stdout, stderr) {

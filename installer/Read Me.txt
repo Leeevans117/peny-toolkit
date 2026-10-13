@@ -1,0 +1,24 @@
+Peny Toolkit installer
+======================
+
+1. Double-click "Install Peny Toolkit.command".
+   A Terminal window opens and shows each step. No password is needed.
+
+   If macOS says it cannot check the file for malicious software (this happens when the
+   installer came from a web download, email or AirDrop, not from the office server):
+   click Done, open System Settings > Privacy & Security, scroll down to the message
+   about "Install Peny Toolkit.command" and click Open Anyway, then double-click again.
+
+2. Read the summary at the end. "Still needs you" lists anything only you can do:
+   - Import the LUT presets once in Premiere (exact steps are shown).
+   - RED footage only: install REDCINE-X PRO from https://www.red.com/download.
+
+3. Open Premiere Pro: Window > Extensions > Peny Toolkit.
+   If it is not in the list, quit Premiere and open it again.
+
+Updates arrive by themselves: every hour the Mac looks in the office server folder
+/Volumes/ampdata/Peny/Claude/PenyToolkit/releases and installs a newer version if there
+is one (it skips quietly when the server is not connected).
+
+Running the installer again is safe; it repairs anything missing.
+Install log: Macintosh HD > Users > (your name) > Library > Logs > PenyToolkit-install.log

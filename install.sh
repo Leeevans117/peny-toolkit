@@ -7,7 +7,7 @@ DEST="$HOME/Library/Application Support/Adobe/CEP/extensions/com.peny.toolkit/"
 HOOK="${PENY_HOOK:-/tmp/peny-toolkit}"
 WAIT=60
 
-rsync -a --delete --exclude .git --exclude .gitignore --exclude __pycache__ --exclude /setup.sh --exclude /auto-update.sh --exclude /CLAUDE.md --exclude /docs --exclude /presets "$SRC/" "$DEST" || { echo "ERROR rsync failed"; exit 1; }
+rsync -a --delete --exclude .git --exclude .gitignore --exclude __pycache__ --exclude /setup.sh --exclude /auto-update.sh --exclude /CLAUDE.md --exclude /docs --exclude /presets --exclude /installer --exclude /tools "$SRC/" "$DEST" || { echo "ERROR rsync failed"; exit 1; }
 
 mkdir -p "$HOOK"
 # loader.js touches loader-alive every second; nothing in the last 5 s means no panel
@@ -24,16 +24,15 @@ state=""
 for _ in $(seq 1 $WAIT); do
   sleep 1
   [ -f "$HOOK/reloaded.json" ] || continue
-  out=$(/usr/bin/python3 - "$HOOK/reloaded.json" "$STAMP" <<'PY'
-import json, sys
-try: r = json.load(open(sys.argv[1]))
-except Exception: sys.exit(0)
-if r.get("stamp") != sys.argv[2]: sys.exit(0)
-if r.get("ok"): print("OK soft reload %s, %s skills" % (r["stamp"], r.get("skills")))
-elif r.get("deferred"): print("DEFERRED (busy: %s)" % r.get("busy"))
-else: print("ERROR %s" % r.get("error"))
-PY
-)
+  # plutil reads JSON and ships with macOS (/usr/bin/python3 can be a stub that asks to
+  # install the developer tools on a new Mac).
+  get() { plutil -extract "$1" raw -o - "$HOOK/reloaded.json" 2>/dev/null || plutil -extract "$1" json -o - "$HOOK/reloaded.json" 2>/dev/null; }
+  out=""
+  if [ "$(get stamp)" = "$STAMP" ]; then
+    if [ "$(get ok)" = true ]; then out="OK soft reload $STAMP, $(get skills) skills"
+    elif [ "$(get deferred)" = true ]; then out="DEFERRED (busy: $(get busy))"
+    else out="ERROR $(get error)"; fi
+  fi
   case "$out" in
     OK*) echo "$out"; exit 0 ;;
     ERROR*) echo "$out"; exit 1 ;;

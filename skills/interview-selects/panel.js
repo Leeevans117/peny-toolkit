@@ -9,13 +9,15 @@
  * Work files: /tmp/peny-toolkit/interview-selects/<sequence>-<time>/. Nothing is deleted. */
 var fs = require("fs");
 var path = require("path");
+// Tools put in place by the one-click installer (no Homebrew needed).
+function BUNDLED(name) { return path.join(process.env.HOME || "", "Library", "Application Support", "PenyToolkit", "bin", name); }
 var http = require("http");
 var childProcess = require("child_process");
 var pipeline = require("./pipeline.js");
 
-var FFMPEG = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"];
-var WHISPER = ["/opt/homebrew/bin/whisper-cli", "/usr/local/bin/whisper-cli"];
-var OLLAMA = ["/opt/homebrew/bin/ollama", "/usr/local/bin/ollama"];
+var FFMPEG = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", BUNDLED("ffmpeg")];
+var WHISPER = ["/opt/homebrew/bin/whisper-cli", "/usr/local/bin/whisper-cli", BUNDLED("whisper-cli")];
+var OLLAMA = ["/opt/homebrew/bin/ollama", "/usr/local/bin/ollama", BUNDLED("ollama")];
 var MODEL_DIRS = [path.join(process.env.HOME || "", "PenyToolkit-scratch", "whisper-models")];
 var WHISPER_MODEL = "ggml-large-v3-turbo.bin", VAD_MODEL = "ggml-silero-v5.1.2.bin";
 var WORK_ROOT = "/tmp/peny-toolkit/interview-selects";

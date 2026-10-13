@@ -14,10 +14,12 @@
  * (report.json and report.csv stay). Only the TOOLKIT COPY changes; nothing is saved. */
 var fs = require("fs");
 var path = require("path");
+// Tools put in place by the one-click installer (no Homebrew needed).
+function BUNDLED(name) { return path.join(process.env.HOME || "", "Library", "Application Support", "PenyToolkit", "bin", name); }
 var childProcess = require("child_process");
 
-var FFMPEG = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"];
-var PYTHON = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"];
+var FFMPEG = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", BUNDLED("ffmpeg")];
+var PYTHON = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", BUNDLED("python3"), "/usr/bin/python3"];
 var WORK_ROOT = "/tmp/peny-toolkit/sound-pass";
 
 // Targets, on Premiere's master meter (dBFS), calibrated on Lee's V1 interviews.
