@@ -66,28 +66,27 @@ open panel soft-reloads, or waits until its current job ends). Log:
 `~/Library/Logs/PenyToolkit-update.log`. Update now:
 `"$HOME/Library/Application Support/PenyToolkit/update.sh"`.
 
-On the Mac mini, every commit on `main` is published automatically: the post-commit hook
+On the build machine (`docs/build-machine.md`), every commit on `main` is published automatically: the post-commit hook
 (and the hourly `auto-update.sh`, to catch up after the server was disconnected) runs
 `tools/auto-publish.sh`, which runs `publish-release.sh` when the commit is not on the
 server yet. So a change reaches every connected installer Mac within about 6 minutes
 (about 1 minute to build, up to 5 to be picked up). Log:
 `~/Library/Logs/PenyToolkit-publish.log`.
 
-### Publishing a release (Data's Mac mini)
+### Publishing a release
 
-Commit first (the installer packs the last commit, never uncommitted changes), connect
-the office server, then:
+The build machine (`docs/build-machine.md`, the Mac Studio from 13 Oct 2026) publishes
+every commit on `main` by itself. By hand, with the office server connected:
 
 ```bash
-/Users/penymini1/PenyToolkit/com.peny.toolkit/tools/publish-release.sh            # build + publish
-/Users/penymini1/PenyToolkit/com.peny.toolkit/tools/publish-release.sh --models   # first time: also the ~20 GB of models
+"$HOME/PenyToolkit/com.peny.toolkit/tools/publish-release.sh"            # build + publish
+"$HOME/PenyToolkit/com.peny.toolkit/tools/publish-release.sh" --models   # first time: also the ~20 GB of models
 ```
 
 It runs `tools/build-installer.sh` (zip in `~/PenyToolkit-scratch/installer-build/`) and
 copies to `/Volumes/ampdata/Peny/Claude/PenyToolkit/`: `Peny Toolkit Installer/`,
 `Peny Toolkit Installer.zip`, `releases/version.json` + `releases/Peny-Toolkit-<version>.zip`
 (3 newest kept), and with `--models` a `models/` folder. Nothing goes to GitHub.
-Installer Macs pick the new version up within the hour.
 
 ## Developer Macs (git checkout)
 

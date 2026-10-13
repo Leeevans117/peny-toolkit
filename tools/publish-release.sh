@@ -1,6 +1,6 @@
 #!/bin/bash
 # Builds the installer and puts it on the office server for other Macs (run on the
-# Mac that has the toolkit source, e.g. Data's Mac mini):
+# build machine, see docs/build-machine.md):
 #
 #   tools/publish-release.sh             build + publish
 #   tools/publish-release.sh --models    also copy the Whisper and Ollama models

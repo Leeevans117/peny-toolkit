@@ -9,8 +9,8 @@ one app tile per skill; tapping a tile opens that skill's view (< returns home).
 - Installed copy: `~/Library/Application Support/Adobe/CEP/extensions/com.peny.toolkit/`
 - Log: `~/Library/Logs/PenyToolkit.log`
 - Installing on another Mac (one double-click, no GitHub): `docs/new-machine.md`, "One-click install";
-  the installer is built by `tools/build-installer.sh` and published to the office server by
-  `tools/publish-release.sh`.
+  the installer is built and published to the office server by the build machine
+  (`docs/build-machine.md`).
 
 ## Adding a skill
 
@@ -68,7 +68,7 @@ one app tile per skill; tapping a tile opens that skill's view (< returns home).
 5. Install and reload:
 
    ```bash
-   /Users/penymini1/PenyToolkit/com.peny.toolkit/install.sh
+   "$HOME/PenyToolkit/com.peny.toolkit/install.sh"
    ```
 
    It copies the panel into CEP (rsync, without .git and __pycache__), then asks the

@@ -9,7 +9,7 @@ Lee's Premiere Pro automation panel. Before any Premiere work:
 
 A Mac that only uses the toolkit (no GitHub login needed): run the one-click installer
 from the office server, see "One-click install" in `docs/new-machine.md`. Publishing a
-new installer: `tools/publish-release.sh` (same doc).
+new installer: the build machine does it on every commit, see `docs/build-machine.md`.
 
 On a developer Mac (git checkout):
 
