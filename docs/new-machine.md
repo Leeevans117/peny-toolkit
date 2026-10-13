@@ -1,6 +1,92 @@
 # Setting up a new Mac
 
-Lee can just tell Claude on the new Mac: "Set up the Peny Toolkit from
+## One-click install (any Apple Silicon Mac; no GitHub, git, Homebrew or password)
+
+1. Connect the office server (Finder > Go > Connect to Server) so
+   `/Volumes/ampdata` is there.
+2. In Finder go to ampdata > Peny > Claude > PenyToolkit > Peny Toolkit Installer
+   (`/Volumes/ampdata/Peny/Claude/PenyToolkit/Peny Toolkit Installer/`) and double-click
+   **Install Peny Toolkit.command**. A Terminal window shows each step and ends with a
+   summary: "Installed" and "Still needs you".
+3. Do what "Still needs you" lists (see "What still needs a person" below), then open
+   Premiere Pro: Window > Extensions > Peny Toolkit (if it is not listed, quit and reopen
+   Premiere).
+
+Without the server: copy `Peny Toolkit Installer.zip` (same folder) to the Mac,
+double-click it to unzip, then double-click **Install Peny Toolkit.command** inside.
+Running the installer again is safe (it repairs anything missing).
+
+What it installs (all in the user's own folders, so no admin password):
+
+| Thing | Where |
+|---|---|
+| The panel | `~/Library/Application Support/Adobe/CEP/extensions/com.peny.toolkit/` |
+| ffmpeg, ffprobe, whisper-cli, ollama, python3 + numpy (copies of the Homebrew builds with their libraries; the skills use Homebrew's copy first if a Mac has one) | `~/Library/Application Support/PenyToolkit/bin` (+ `lib`, `python`, `ollama`) |
+| Whisper models, Ollama qwen2.5:32b | `~/PenyToolkit-scratch/whisper-models/`, `~/.ollama/models` - copied from `/Volumes/ampdata/Peny/Claude/PenyToolkit/models` when that is there, otherwise downloaded (about 22 GB) |
+| Peny LUT Presets.prfpset | `~/PenyToolkit-scratch/colour/` |
+| colour-baseline.json (camera -> LUT choices) | `~/.peny-toolkit/` (only if missing) |
+| PlayerDebugMode 1 for CSXS 11, 12, 13 | macOS defaults (lets Premiere load the unsigned panel) |
+| Hourly updater (launchd `com.peny.toolkit.nas-update`) | `~/Library/Application Support/PenyToolkit/update.sh` + `update.conf` |
+
+Log: `~/Library/Logs/PenyToolkit-install.log`. Options (run
+`".../payload/install-toolkit.sh" --help`): `--no-models`, `--home DIR` (test run into a
+spare folder), `--nas-updates` / `--panel-from-release` (developer Macs, below).
+
+### What still needs a person
+
+- **Gatekeeper.** Opened from the office server the installer just runs (Finder does not
+  mark files copied from a server; unverified until tried on a second Mac). If the zip
+  came from a web download, email or AirDrop, macOS 15+ blocks it once: click Done, then
+  System Settings > Privacy & Security > Open Anyway next to "Install Peny Toolkit.command",
+  and double-click again. Only an Apple Developer ID signature + notarisation (paid Apple
+  Developer account) removes this. The installer clears the quarantine flag from its own
+  files so the bundled programs run.
+- **LUT presets** (Colour app): Premiere keeps user presets in one file it rewrites on quit
+  (`~/Documents/Adobe/Premiere Pro/<version>/Profile-<user>/Effect Presets and Custom
+  Items.prfpset`, same format as our .prfpset), so the installer does not write into it.
+  It checks whether "Peny LUTs" is already imported and, if not, prints the exact steps:
+  Effects panel menu > Import Presets... > the full path of `Peny LUT Presets.prfpset`.
+- **REDline** (RED .R3D footage only): RED's licence does not allow bundling it. Install
+  REDCINE-X PRO from https://www.red.com/download. The installer says if it is missing.
+- **Premiere Pro** itself (Creative Cloud), and an Apple Silicon Mac (the bundled
+  programs are arm64).
+
+### Updates on installer Macs
+
+Every hour (and at log-in) `update.sh` reads `PENY_RELEASES` from
+`~/Library/Application Support/PenyToolkit/update.conf` (default
+`/Volumes/ampdata/Peny/Claude/PenyToolkit/releases`; an `https://` address also works,
+for a web link later). If the server is not connected it logs one line and stops. If
+`version.json` there has a newer build than `installed.json`, it copies the zip, checks
+its sha256, and runs the installer with `--update` (tools + panel; the open panel
+soft-reloads, or waits until its current job ends). Log:
+`~/Library/Logs/PenyToolkit-update.log`. Update now:
+`"$HOME/Library/Application Support/PenyToolkit/update.sh"`.
+
+### Publishing a release (Data's Mac mini)
+
+Commit first (the installer packs the last commit, never uncommitted changes), connect
+the office server, then:
+
+```bash
+/Users/penymini1/PenyToolkit/com.peny.toolkit/tools/publish-release.sh            # build + publish
+/Users/penymini1/PenyToolkit/com.peny.toolkit/tools/publish-release.sh --models   # first time: also the ~20 GB of models
+```
+
+It runs `tools/build-installer.sh` (zip in `~/PenyToolkit-scratch/installer-build/`) and
+copies to `/Volumes/ampdata/Peny/Claude/PenyToolkit/`: `Peny Toolkit Installer/`,
+`Peny Toolkit Installer.zip`, `releases/version.json` + `releases/Peny-Toolkit-<version>.zip`
+(3 newest kept), and with `--models` a `models/` folder. Nothing goes to GitHub.
+Installer Macs pick the new version up within the hour.
+
+## Developer Macs (git checkout)
+
+The Macs that change the toolkit keep a git checkout and update through GitHub (below).
+The installer can still be run on them: it adds the bundled programs and settings but
+leaves the panel and updates to the checkout unless given `--panel-from-release` /
+`--nas-updates`.
+
+Lee can tell Claude on such a Mac: "Set up the Peny Toolkit from
 github.com/Leeevans117/peny-toolkit". Claude follows "For Claude" below and only stops
 for the steps that need Lee (marked **Lee**).
 
@@ -58,7 +144,7 @@ qwen2.5:32b ~20 GB).
 | PlayerDebugMode 1 for CSXS 11 and 12 | macOS defaults | lets Premiere load the unsigned panel |
 | The panel | `~/Library/Application Support/Adobe/CEP/extensions/com.peny.toolkit/` | Premiere |
 
-## Updates (automatic)
+## Updates on developer Macs (automatic)
 
 setup.sh turns these on:
 

@@ -11,6 +11,7 @@
 #   install-toolkit.sh --nas-updates    turn on NAS updates even on a developer Mac
 #   install-toolkit.sh --panel-from-release   on a developer Mac, install this release's
 #                                       panel instead of leaving the developer copy
+#                                       (or PENY_PANEL_FROM_RELEASE=1, e.g. through update.sh)
 #
 # Where things go (HOME = the user's home folder):
 #   panel     HOME/Library/Application Support/Adobe/CEP/extensions/com.peny.toolkit
@@ -22,7 +23,7 @@
 #   settings  HOME/.peny-toolkit/colour-baseline.json (only if missing)
 set -u
 P="$(cd "$(dirname "$0")" && pwd)"
-UPDATE=0; MODELS=1; SANDBOX=""; NAS_UPDATES=0; PANEL_FROM_RELEASE=0
+UPDATE=0; MODELS=1; SANDBOX=""; NAS_UPDATES=0; PANEL_FROM_RELEASE="${PENY_PANEL_FROM_RELEASE:-0}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --update) UPDATE=1; MODELS=0 ;;
@@ -30,7 +31,7 @@ while [ $# -gt 0 ]; do
     --home) SANDBOX="$2"; shift ;;
     --nas-updates) NAS_UPDATES=1 ;;
     --panel-from-release) PANEL_FROM_RELEASE=1 ;;
-    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,30p' "$0" | grep '^#'; exit 0 ;;
     *) echo "Unknown option $1"; exit 1 ;;
   esac
   shift

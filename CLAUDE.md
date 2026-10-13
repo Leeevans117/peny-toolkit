@@ -7,6 +7,12 @@ Lee's Premiere Pro automation panel. Before any Premiere work:
 
 ## Setting up or updating a Mac (Claude does this, not Lee)
 
+A Mac that only uses the toolkit (no GitHub login needed): run the one-click installer
+from the office server, see "One-click install" in `docs/new-machine.md`. Publishing a
+new installer: `tools/publish-release.sh` (same doc).
+
+On a developer Mac (git checkout):
+
 When Lee starts work on a Mac, run the steps in `docs/new-machine.md` under
 "For Claude". In short: if `~/PenyToolkit/com.peny.toolkit` is missing, clone it and run
 `setup.sh`; if it is there, `git pull` and run `setup.sh` again (it only fills gaps,
