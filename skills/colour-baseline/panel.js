@@ -309,7 +309,10 @@ module.exports = function (api) {
         // reverse. Expected in that list: what the clip had, then the LUT, then Adjustments last
         // = Adjustments on top in Effect Controls.
         var b = after[i], want = cl.lumetri.concat(cl.plan.lut ? [cl.plan.lut] : []).concat(cl.plan.adjustments ? [adj] : []);
-        var same = b && b.track === cl.track && b.startTicks === cl.startTicks && b.item === cl.item && JSON.stringify(b.lumetri) === JSON.stringify(want);
+        // Same media counts as the same clip: importSequences can relink a clip to another project
+        // item of the same file (A045/A046 sit in two bins), which read back as 68 "wrong" clips on 12 Oct.
+        var same = b && b.track === cl.track && b.startTicks === cl.startTicks && (b.item === cl.item || (b.path && b.path === cl.path)) &&
+          JSON.stringify(b.lumetri) === JSON.stringify(want);
         if (same) { ok++; if (cl.plan.lut) lutAdded++; if (cl.plan.adjustments) adjAdded++; }
         else bad.push({ name: cl.name, track: "V" + (cl.track + 1), expected: want, found: b ? b.lumetri : null });
       });

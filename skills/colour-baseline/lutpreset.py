@@ -439,9 +439,13 @@ def grade(project_in, project_out, plan):
     next_id = max(int(i) for i in re.findall(r'ObjectID="(\d+)"', x)) + 1000
     new_objs, done, problems, seen_hash = [], 0, [], set(re.findall(r'BinaryHash="([^"]+)">', x))
     for c in plan["clips"]:
+        if not c.get("lut") and not c.get("adjustments"):
+            continue  # nothing to add (12 Oct 2026: such a clip next to a transition stopped the whole run)
         track = objs.get(tracks.get(c["track"], ""), "")
         items = re.findall(r'<TrackItem Index="(\d+)" ObjectRef="(\d+)"/>', track)
         # The XML lists clips per track in time order, like the DOM; check the start too.
+        # Only clips: a transition starting with the clip has the same <Start> (12 Oct 2026, V4).
+        items = [(i, r) for i, r in items if objs.get(r, "").startswith("\t<VideoClipTrackItem ")]
         cand = [r for i, r in items if int(re.search(r"<Start>(-?\d+)</Start>", objs[r]).group(1) if "<Start>" in objs[r].split("</TrackItem>")[0] else 0) == int(c["start"])]
         if len(cand) != 1:
             problems.append({"clip": c, "reason": "%d track items at that start" % len(cand)})
