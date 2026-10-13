@@ -54,17 +54,24 @@ spare folder), `--nas-updates` / `--panel-from-release` (developer Macs, below).
 - **Premiere Pro** itself (Creative Cloud), and an Apple Silicon Mac (the bundled
   programs are arm64).
 
-### Updates on installer Macs
+### Updates on installer Macs (live)
 
-Every hour (and at log-in) `update.sh` reads `PENY_RELEASES` from
+Every 5 minutes (and at log-in) `update.sh` reads `PENY_RELEASES` from
 `~/Library/Application Support/PenyToolkit/update.conf` (default
 `/Volumes/ampdata/Peny/Claude/PenyToolkit/releases`; an `https://` address also works,
-for a web link later). If the server is not connected it logs one line and stops. If
-`version.json` there has a newer build than `installed.json`, it copies the zip, checks
-its sha256, and runs the installer with `--update` (tools + panel; the open panel
-soft-reloads, or waits until its current job ends). Log:
+for a web link later). If the server is not connected it does nothing (one log line when
+that changes). If `version.json` there has a newer build than `installed.json`, it copies
+the zip, checks its sha256, and runs the installer with `--update` (tools + panel; the
+open panel soft-reloads, or waits until its current job ends). Log:
 `~/Library/Logs/PenyToolkit-update.log`. Update now:
 `"$HOME/Library/Application Support/PenyToolkit/update.sh"`.
+
+On the Mac mini, every commit on `main` is published automatically: the post-commit hook
+(and the hourly `auto-update.sh`, to catch up after the server was disconnected) runs
+`tools/auto-publish.sh`, which runs `publish-release.sh` when the commit is not on the
+server yet. So a change reaches every connected installer Mac within about 6 minutes
+(about 1 minute to build, up to 5 to be picked up). Log:
+`~/Library/Logs/PenyToolkit-publish.log`.
 
 ### Publishing a release (Data's Mac mini)
 
