@@ -26,6 +26,7 @@ behind=$(git rev-list --count HEAD..origin/main)
 if [ "$behind" -gt 0 ]; then
   if git merge -q --ff-only origin/main 2>>"$LOG"; then
     log "pulled $behind commit(s) to $(git rev-parse --short HEAD); install: $("$REPO/install.sh" 2>&1 | tail -1)"
+    [ -x "$REPO/tools/auto-publish.sh" ] && "$REPO/tools/auto-publish.sh"
   else
     log "cannot fast-forward (both Macs changed the toolkit): needs a merge by hand"; exit 1
   fi

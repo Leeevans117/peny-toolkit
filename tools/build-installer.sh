@@ -30,10 +30,20 @@ PY=$BREW/bin/python3
 
 say() { printf '%s\n' "$*"; }
 [ "$(uname -m)" = arm64 ] || { say "Build on an Apple Silicon Mac."; exit 1; }
-for t in ffmpeg ffprobe whisper-cli ollama python3; do
-  [ -x "$BREW/bin/$t" ] || { say "Missing $BREW/bin/$t - run setup.sh first."; exit 1; }
-done
-"$PY" -c "import numpy" || { say "numpy missing for $PY"; exit 1; }
+# Tools come from Homebrew when it has all of them; otherwise (or with
+# PENY_REUSE_TOOLS=1) they are reused from this Mac's installed toolkit
+# (~/Library/Application Support/PenyToolkit, put there by the one-click installer), so a
+# Mac without Homebrew can build too.
+INSTALLED="$HOME/Library/Application Support/PenyToolkit"
+REUSE="${PENY_REUSE_TOOLS:-0}"
+for t in ffmpeg ffprobe whisper-cli ollama python3; do [ -x "$BREW/bin/$t" ] || REUSE=1; done
+[ $REUSE = 1 ] || "$PY" -c "import numpy" 2>/dev/null || REUSE=1
+if [ $REUSE = 1 ]; then
+  for t in ffmpeg ffprobe whisper-cli ollama python3; do
+    [ -x "$INSTALLED/bin/$t" ] || { say "No $t in Homebrew or in $INSTALLED/bin - run the one-click installer (or setup.sh) first."; exit 1; }
+  done
+  PY="$INSTALLED/bin/python3"
+fi
 
 cd "$REPO"
 COMMIT="$(git rev-parse --short HEAD)"
@@ -52,6 +62,12 @@ rm -rf "$STAGE"; mkdir -p "$P/panel" "$P/tools" "$P/presets"
 say "1/5 Panel (commit $COMMIT)"
 git archive HEAD | tar -x -C "$P/panel"
 
+if [ $REUSE = 1 ]; then
+say "2/5 Tools (reused from $INSTALLED)"
+for d in bin lib python ollama LICENSES; do
+  ditto "$INSTALLED/$d" "$P/tools/$d"
+done
+else
 say "2/5 Tools (copying Homebrew programs and their libraries)"
 PYFW="$(cd "$BREW/opt/python@3.14/Frameworks/Python.framework/Versions/3.14" && pwd -P)"
 PYSITE="$("$PY" -c "import numpy, os; print(os.path.dirname(os.path.dirname(numpy.__file__)))")"
@@ -93,6 +109,8 @@ ollama, Python 3.14, numpy), with library paths rewritten so they run without Ho
 Licences: ffmpeg GPL v3 (this build enables x264/x265), whisper.cpp/ggml MIT, ollama MIT,
 Python PSF, numpy BSD. Source: https://formulae.brew.sh (ffmpeg, whisper-cpp, ollama, python@3.14).
 TXT
+
+fi
 
 say "   checking the copied tools run"
 T="$P/tools/bin"

@@ -2,13 +2,16 @@
 # Publishes the toolkit to the office server whenever main has a commit that is not
 # published yet, so every installer Mac picks it up within 5 minutes (update.sh).
 # Run by the post-commit hook (in the background) and by auto-update.sh every hour
-# (catches up after the server was not connected). Does nothing when the server is not
-# connected, when this checkout is not on main, or when the commit is already published.
+# (catches up after the server was not connected). Does nothing unless this Mac is THE
+# build machine (~/.peny-toolkit/publisher, made by tools/become-builder.sh), when the
+# server is not connected, when this checkout is not on main, or when the commit is
+# already published.
 #   PENY_SHARE   server folder (default /Volumes/ampdata/Peny/Claude/PenyToolkit)
 set -u
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SHARE="${PENY_SHARE:-/Volumes/ampdata/Peny/Claude/PenyToolkit}"
 LOG="$HOME/Library/Logs/PenyToolkit-publish.log"
+[ -f "$HOME/.peny-toolkit/publisher" ] || exit 0   # only one Mac publishes
 mkdir -p "$(dirname "$LOG")"
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOG"; }
 if [ ! -d "$(dirname "$SHARE")" ]; then   # logged once per change of state
