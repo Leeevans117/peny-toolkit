@@ -7,6 +7,15 @@ minutes and installs anything newer. Only the Mac marked as the build machine pu
 
 From 13 Oct 2026 the build machine is **Lee's Mac Studio** (user `penypeople`, always on
 the office server). Data's Mac mini is not on the server and does not publish.
+On the Mac Studio the checkout is on the server, at
+`/Volumes/ampdata/Peny/Claude/peny-toolkit` (Lee's choice), not `$HOME/PenyToolkit`; so the
+one-click installer treats it as an ordinary installer Mac (panel from the release, 5-minute
+updater on).
+
+launchd jobs (the 5-minute updater, the hourly `auto-update.sh`) are refused by macOS when
+they read `/Volumes/ampdata` ("Operation not permitted", seen 13 Oct 2026 on macOS 26.6)
+until **Lee** gives `/bin/bash` access in System Settings > Privacy & Security. Commits
+made in a terminal publish regardless (the post-commit hook runs as the user).
 
 ## Make this Mac the build machine
 
