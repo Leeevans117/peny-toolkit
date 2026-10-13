@@ -123,7 +123,7 @@ if [ $UPDATE = 0 ]; then
   if [ -f "$HOME/.peny-toolkit/colour-baseline.json" ]; then done_ "camera LUT choices kept ($HOME/.peny-toolkit/colour-baseline.json)"
   else
     mkdir -p "$HOME/.peny-toolkit" && cp "$P/panel/presets/settings/colour-baseline.json" "$HOME/.peny-toolkit/" \
-      && done_ "Lee's camera LUT choices copied to $HOME/.peny-toolkit/colour-baseline.json"
+      && done_ "Peny camera LUT choices copied to $HOME/.peny-toolkit/colour-baseline.json"
   fi
   LUTS="$SCRATCH/colour/Peny LUT Presets.prfpset"
   if [ -f "$P/presets/Peny LUT Presets.prfpset" ]; then

@@ -2,7 +2,7 @@
 # Double-click this file to install (or repair) the Peny Toolkit for Premiere Pro.
 # Everything it needs is in the "payload" folder next to it; nothing comes from GitHub.
 DIR="$(cd "$(dirname "$0")" && pwd)"
-clear
+clear 2>/dev/null
 cat <<'TXT'
   Peny Toolkit installer
   ----------------------
