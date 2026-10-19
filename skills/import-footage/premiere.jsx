@@ -18,11 +18,16 @@
   // importFiles stores /Users/...; I.bootPrefixes (sent by the panel) maps the first
   // form to the second so the same file is never imported twice.
   I.bootPrefixes = I.bootPrefixes || [];
+  // Used only as a comparison key. Lower-cased because Mac disks ignore letter case:
+  // a clip stored as ".mp4" in the project is the same file as ".MP4" on disk.
   function norm(p) {
     if (!p) return p;
-    var s = String(p).replace(/\\/g, "/");
+    var s = String(p).replace(/\\/g, "/").toLowerCase()
+      // A drive copy of the office server keeps its path as a folder named "/Volumes/" (shown
+      // as ":Volumes/:ampdata" in the shell): the same file as /Volumes/ampdata/... .
+      .replace(/^.*\/:volumes\/:/, "/volumes/");
     for (var i = 0; i < I.bootPrefixes.length; i++) {
-      var pre = I.bootPrefixes[i];
+      var pre = String(I.bootPrefixes[i]).toLowerCase();
       if (s.indexOf(pre + "/") === 0) { s = s.substring(pre.length); break; }
     }
     return s;

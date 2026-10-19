@@ -136,10 +136,17 @@
   }
 
   // Start-up-disk paths stored by Media Browser (/Volumes/Macintosh HD/Users/...) are
-  // compared as /Users/... (prefixes sent by the panel).
+  // compared as /Users/... (prefixes sent by the panel). Lower-cased: Mac disks ignore
+  // letter case, so ".mp4" in the project and ".MP4" on disk are the same file.
   function normPath(p, prefixes) {
-    var s = String(p || "").replace(/\\/g, "/");
-    for (var i = 0; i < (prefixes || []).length; i++) if (s.indexOf(prefixes[i] + "/") === 0) { s = s.substring(prefixes[i].length); break; }
+    var s = String(p || "").replace(/\\/g, "/").toLowerCase()
+      // A drive copy of the office server keeps its path as a folder named "/Volumes/" (shown
+      // as ":Volumes/:ampdata" in the shell): the same file as /Volumes/ampdata/... .
+      .replace(/^.*\/:volumes\/:/, "/volumes/");
+    for (var i = 0; i < (prefixes || []).length; i++) {
+      var pre = String(prefixes[i]).toLowerCase();
+      if (s.indexOf(pre + "/") === 0) { s = s.substring(pre.length); break; }
+    }
     return s;
   }
 
