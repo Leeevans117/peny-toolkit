@@ -72,15 +72,24 @@ module.exports = function (api) {
   // --useMeta: develop at the clip's shot white balance/tint/ISO as Premiere does. Without it
   // REDline uses its defaults (5600K, tint 0, ISO 320), so a 4800K clip's proxy came out warm
   // (Lee, 2 Oct 2026). --metaIgnoreFrameGuide keeps in-camera frame guides from cropping.
+  // REDline writes the camera audio with its channels rotated by one, so it renders to a
+  // ".redline-part.mov" first (no "_Proxy." in the name, so lookups never take it for a
+  // proxy) and red-audio-order.sh re-wraps that into the real proxy with the channels in
+  // the R3D's order (Lee, 19 Oct 2026).
   function encodeCommand(entry) {
+    var ffmpeg = firstExisting(FFMPEG);
     if (extOf(entry.mediaPath) === "r3d") {
       var redline = firstExisting(REDLINE);
-      if (!redline) return null;
-      return q(redline) + " --i " + q(entry.mediaPath) + " --o " + q(entry.nameNoExt + PROXY_INFIX) +
-        " --outDir " + q(path.dirname(entry.outputPath)) + " --format 201 --res 4 --resizeX " + SCALE_W +
-        " --resizeY " + SCALE_H + " --fit 3 --primaryDev --useMeta --metaIgnoreFrameGuide";
+      if (!redline || !ffmpeg) return null;
+      var dir = path.dirname(entry.outputPath), part = entry.nameNoExt + ".redline-part";
+      var partFile = path.join(dir, part + ".mov");
+      return "rm -f " + q(partFile) + " && " +
+        q(redline) + " --i " + q(entry.mediaPath) + " --o " + q(part) +
+        " --outDir " + q(dir) + " --format 201 --res 4 --resizeX " + SCALE_W +
+        " --resizeY " + SCALE_H + " --fit 3 --primaryDev --useMeta --metaIgnoreFrameGuide" +
+        " && /bin/bash " + q(path.join(__dirname, "red-audio-order.sh")) + " " + q(ffmpeg) + " " +
+        q(partFile) + " " + q(entry.outputPath);
     }
-    var ffmpeg = firstExisting(FFMPEG);
     if (!ffmpeg) return null;
     // -n: never overwrite (the original used -y).
     return q(ffmpeg) + " -n -hwaccel videotoolbox -i " + q(entry.mediaPath) +
@@ -241,7 +250,7 @@ module.exports = function (api) {
       p.render.forEach(function (r) {
         try { fs.mkdirSync(path.dirname(r.outputPath), { recursive: true }); } catch (e) {}
         var cmd = encodeCommand(r);
-        if (!cmd) { r.reason = "no " + (extOf(r.mediaPath) === "r3d" ? "REDline" : "ffmpeg") + " found"; noCmd.push(r); return; }
+        if (!cmd) { r.reason = "no " + (extOf(r.mediaPath) === "r3d" ? "REDline or ffmpeg" : "ffmpeg") + " found"; noCmd.push(r); return; }
         pool.add({ key: r.outputPath, cmd: cmd, outputPath: r.outputPath, label: r.binPath + "/" + r.name,
           weight: sourceBytes(r.mediaPath), kind: extOf(r.mediaPath) === "r3d" ? "r3d" : "ffmpeg",
           group: r.camera });
