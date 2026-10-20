@@ -47,7 +47,8 @@
   //             clip, so they show wherever that footage is used);
   //   "layer" - clip markers on the question adjustment layers, each layer given its own
   //             source range (base + sequence time) so its markers show on that layer only.
-  var TOPICS = "layer";
+  // Lee, 20 Oct 2026: "clip" (on the top video clip). "layer" stays as an option.
+  var TOPICS = "clip";
 
   function sequenceForItem(projectItem) {
     if (!projectItem) return null;
@@ -478,7 +479,15 @@
     var layers, qTrack = questionLayerTrack(seq);
     if (params.layers === false) layers = { skipped: "turned off" };
     else if (TOPICS === "layer" && qTrack >= 0) layers = checkRow(seq, qTrack, layerSpans, frame);
-    else layers = addLayers(seq, layerSpans, frame, emptyTrackFrom(seq, topFootageTrack(seq) + 1), null);
+    else {
+      var lIdx = emptyTrackFrom(seq, topFootageTrack(seq) + 1);
+      if (lIdx < 0) {
+        var lErr = ensureVideoTrack(seq, Math.max(topFootageTrack(seq) + 1, seq.videoTracks.numTracks));
+        lIdx = lErr ? -1 : emptyTrackFrom(seq, topFootageTrack(seq) + 1);
+        if (lErr) layers = { error: lErr };
+      }
+      if (!layers) layers = addLayers(seq, layerSpans, frame, lIdx, null);
+    }
     // 7. Theme row above the question layers: one layer per broad theme (Segmentation markers,
     // moved by the trim), back to back, named after the theme.
     var themes = { skipped: "no theme markers" }, ths = [], ml = markerList(seq);
@@ -487,6 +496,7 @@
     for (i = 0; i + 1 < ths.length; i++) ths[i].b = ths[i + 1].a;
     if (ths.length && params.layers !== false) {
       var qIdx = layers.index !== undefined ? layers.index : questionLayerTrack(seq);
+      if (qIdx < 0) qIdx = topFootageTrack(seq); // no question row: themes still go above the footage
       var tIdx = -1, vt = seq.videoTracks;
       for (i = qIdx + 1; i < vt.numTracks; i++) {
         if (trackLocked(vt[i])) continue;

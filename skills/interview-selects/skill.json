@@ -1,7 +1,7 @@
 {
   "id": "interview-selects",
   "name": "Interviews",
-  "description": "Transcribes the active interview sequence on this Mac (whisper), finds each answer with the local AI model (Ollama, no internet), groups the answers by the interviewer's question and the questions into broad themes, and puts them on a copy called \"<sequence> Cut version\": a Chapter marker per question, a Segmentation marker per theme, and the small topics as clip markers on the question adjustment layers (your footage stays clean). About 20 minutes for an hour of interview. Then Cut, raise & trim answers (Cut versions only) raises each question's answer one track, removes the questions and dead bits in between, keeps one adjustment layer per question and adds a row above with one layer per theme.",
+  "description": "Transcribes the active interview sequence on this Mac (whisper), finds each answer with the local AI model (Ollama, no internet), groups the answers by the interviewer's question and the questions into broad themes, and puts them on a copy called \"<sequence> Cut version\": a Chapter marker per question, a Segmentation marker per theme, and the small topics as clip markers on the clip on the top video track (they belong to that footage, so they also show in other sequences that use it). About 20 minutes for an hour of interview. Then Cut, raise & trim answers (Cut versions only) raises each question's answer one track, removes the questions and dead bits in between, puts one adjustment layer per question over the answers and a row above with one layer per theme.",
   "order": 6,
   "icon": "icon.svg",
   "tint": [
