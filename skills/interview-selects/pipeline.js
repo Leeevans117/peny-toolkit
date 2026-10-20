@@ -31,9 +31,9 @@ function prompt(lines, first, who) {
     "List EVERY substantive answer the interviewee gives in this part, in time order. Be thorough: a typical hour of interview has 30-40 answers. " +
     "Leave out interviewer and crew speech, small talk, false starts and technical chat.\n" +
     "An answer that runs longer than about 2 minutes usually covers several points: split it where the subject changes, so each answer is about one thing.\n" +
-    "For each answer give the first and last line number of the answer itself (not the question), a one-line topic and a 1-2 sentence outline of what is said.\n" +
+    "For each answer give the first and last line number of the answer itself (not the question), a one-line topic and a brief note of what is said.\n" +
     "Rules:\n- The topic is a short plain phrase with a capital first letter; names and places keep their capitals (e.g. London, Sam). It must never start with the word \"Topic\".\n" +
-    "- " + (who ? "Start the outline with the interviewee's name (" + who + "); after that use they/their." : "In the outline call the interviewee \"they\" (or use their name if the transcript makes it clear).") + " Never assume gender.\n" +
+    "- The outline is a brief note of the point made, at most about 12 words, like a log note. Do not name or refer to the speaker at all (no \"" + (who || "Tony") + " says\", \"they mention\", \"the interviewee\"): the editor knows who is talking. Never assume gender.\n" +
     "- Answers must not overlap.\n" +
     "Return ONLY JSON: {\"answers\":[{\"start_line\":1,\"end_line\":2,\"topic\":\"...\",\"outline\":\"...\"}]}\n\nTranscript:\n" + body;
 }
@@ -283,6 +283,48 @@ function themes(questions, opts) {
   });
 }
 
+/* Brief notes (Lee, 20 Oct 2026: "more brief, we don't need to see that Tony is saying
+ * it"). One short Ollama call rewrites every outline as a log note of at most ~12 words
+ * with no speaker; cleanOutline then strips any "Tony says that" style opening left over. */
+var BRIEF_SCHEMA = { type: "object", required: ["notes"], properties: { notes: { type: "array", items: { type: "object",
+  required: ["n", "note"], properties: { n: { type: "integer" }, note: { type: "string" } } } } } };
+
+function cleanOutline(t, who) {
+  var names = ["the interviewee", "interviewee", "the speaker", "he", "she", "they"];
+  if (who) names.unshift(who);
+  var verbs = "says|said|explains|explained|mentions|mentioned|talks about|talked about|discusses|discussed|describes|described|expresses|expressed|notes|noted|recalls|recalled|reflects on|reflected on|highlights|emphasizes|emphasises|shares|admits|believes|feels|thinks|hopes|say|explain|mention|talk about|discuss|describe|express|note|recall|reflect on|highlight|share|admit|believe|feel|think|hope";
+  t = String(t || "").trim();
+  for (var i = 0; i < names.length; i++) {
+    var re = new RegExp("^" + names[i].replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?:'s)?\\s+(?:" + verbs + ")(?:\\s+that|\\s+how)?\\s*[:,]?\\s*", "i");
+    if (re.test(t)) { t = t.replace(re, ""); break; }
+  }
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : t;
+}
+
+function brief(answers, opts) {
+  opts = opts || {};
+  if (!answers.length) return Promise.resolve({ answers: answers, tokens: { prompt: 0, output: 0 } });
+  var list = answers.map(function (a, i) { return (i + 1) + ". " + a.topic + ": " + a.outline; }).join("\n");
+  var text = "Rewrite each note below as a brief log note for a video editor: the point made, at most about 12 words, no full sentence needed. " +
+    "Do not name or refer to the speaker at all (no \"" + (opts.who || "Tony") + " says\", \"they mention\", \"the interviewee\"). Keep names of other people and places.\n" +
+    "Return ONLY JSON: {\"notes\":[{\"n\":1,\"note\":\"...\"}]}\n\nNotes:\n" + list;
+  return ollamaGenerateWith(text, BRIEF_SCHEMA, opts.numCtx || 8192).then(function (r) {
+    var notes = [];
+    try { notes = JSON.parse(r.response).notes || []; } catch (e) {}
+    var byN = {};
+    notes.forEach(function (x) { if (x && x.n) byN[x.n | 0] = String(x.note || "").trim(); });
+    return {
+      answers: answers.map(function (a, i) {
+        var o = {};
+        for (var k in a) if (a.hasOwnProperty(k)) o[k] = a[k];
+        o.outline = cleanOutline(byN[i + 1] || a.outline, opts.who);
+        return o;
+      }),
+      tokens: { prompt: r.prompt_eval_count || 0, output: r.eval_count || 0 }
+    };
+  });
+}
+
 function cleanTopic(t) {
   t = String(t || "").replace(/^\s*topic\s*[:\-–—]?\s*/i, "").trim();
   if (!/\s/.test(t) && /[a-z][A-Z]/.test(t)) t = t.replace(/([a-z])([A-Z])/g, "$1 $2"); // "FamilyDynamicInTeam"
@@ -290,4 +332,4 @@ function cleanTopic(t) {
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
-module.exports = { readTranscript: readTranscript, selects: selects, group: group, themes: themes, windows: windows, tc: tc, MODEL: MODEL };
+module.exports = { readTranscript: readTranscript, selects: selects, group: group, themes: themes, brief: brief, cleanOutline: cleanOutline, windows: windows, tc: tc, MODEL: MODEL };

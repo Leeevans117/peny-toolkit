@@ -187,8 +187,11 @@ module.exports = function (api) {
         });
       });
     }).then(function (r) {
+      if (!r.answers.length) throw { stop: "The model found no answers. Transcript: " + path.join(dir, "transcript.srt") };
+      api.status("Making the " + r.answers.length + " topic notes brief…");
+      return pipeline.brief(r.answers, { who: (params.name || "").trim() }).then(function (b) { r.answers = b.answers; r.stats.briefTokens = b.tokens; return r; });
+    }).then(function (r) {
       answers = r.answers; stats = r.stats;
-      if (!answers.length) throw { stop: "The model found no answers. Transcript: " + path.join(dir, "transcript.srt") };
       api.status("Grouping the " + answers.length + " answers by question…");
       var g0 = Date.now();
       return pipeline.group(pipeline.readTranscript(path.join(dir, "transcript.json")), answers, { who: (params.name || "").trim() }, function (i, n) {
@@ -238,10 +241,21 @@ module.exports = function (api) {
     var saved, answers, questions, themes, server = null;
     try { saved = JSON.parse(fs.readFileSync(file, "utf-8")); answers = saved.answers; questions = saved.questions; themes = saved.themes; } catch (e) { return Promise.resolve({ ok: false, error: "Could not read " + file }); }
     var grouped = Promise.resolve(), who = (params.name || "").trim();
+    if (params.brief) {
+      // Test hook: rewrite the saved outlines as brief notes first.
+      grouped = startOllama(firstExisting(OLLAMA)).then(function (child) {
+        server = child;
+        api.status("Making the topic notes brief…");
+        return pipeline.brief(answers, { who: who });
+      }).then(function (b) {
+        answers = b.answers; saved.answers = answers;
+        fs.writeFileSync(file, JSON.stringify(saved, null, 1));
+        if (server) { try { server.kill(); } catch (eK) {} server = null; }
+      });
+    }
     if (!questions || !themes || params.regroup) {
       var ollama = firstExisting(OLLAMA);
-      api.status("Grouping the answers by question…");
-      grouped = startOllama(ollama).then(function (child) {
+      grouped = grouped.then(function () { api.status("Grouping the answers by question…"); return startOllama(ollama); }).then(function (child) {
         server = child;
         if (questions && !params.regroup) return { questions: questions };
         return pipeline.group(pipeline.readTranscript(path.join(path.dirname(file), "transcript.json")), answers, { who: who }, function (i, n) {

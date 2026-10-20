@@ -23,6 +23,7 @@
     if (action === "dump") return T.ok("Pieces " + params.a + "-" + params.b, { pieces: around(seq, params.a, params.b) });
     if (action === "cutraise") return cutraise(seq, params);
     if (action === "untest") return untest(params);
+    if (action === "renote") return renote(seq, params);
     if (action === "unbase") return unbase(params);
     if (action === "layerprobe") return layerprobe(seq, params);
     if (action === "rmprobe") {
@@ -1040,6 +1041,29 @@
       } else d.slipError = "QE item not found";
     }
     return T.ok("Layer probe done.", d);
+  }
+
+  // Sets new comments on this Cut version's topic markers, matched by name (params.notes =
+  // { topic name: note }), wherever TOPICS keeps them. Times are not touched.
+  function renote(seq, params) {
+    if (!isCut(seq)) return T.fail("Only on a Cut version.");
+    var notes = params.notes || {}, done = {}, n = 0, vt = seq.videoTracks;
+    for (var i = 0; i < vt.numTracks; i++) {
+      var cl = vt[i].clips;
+      for (var c = 0; c < cl.numItems; c++) {
+        var x = cl[c];
+        if ((TOPICS === "layer") !== isAdjClip(x)) continue;
+        var inS = x.inPoint.seconds, outS = inS + (x.end.seconds - x.start.seconds), mc = x.projectItem.getMarkers(), m = mc.getFirstMarker();
+        while (m) {
+          var key = String(m.name) + "@" + Math.round(m.start.seconds * 100);
+          if (!done[key] && notes.hasOwnProperty(String(m.name)) && m.comments && m.start.seconds >= inS - 0.02 && m.start.seconds < outS) {
+            m.comments = notes[String(m.name)]; done[key] = true; n++;
+          }
+          m = mc.getNextMarker(m);
+        }
+      }
+    }
+    return T.ok(n + " topic note(s) made brief on \"" + seq.name + "\".", { changed: n });
   }
 
   function findMarkerTyped(seq, start, name, type) {
