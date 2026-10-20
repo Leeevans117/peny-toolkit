@@ -72,10 +72,11 @@ module.exports = function (api) {
   // --useMeta: develop at the clip's shot white balance/tint/ISO as Premiere does. Without it
   // REDline uses its defaults (5600K, tint 0, ISO 320), so a 4800K clip's proxy came out warm
   // (Lee, 2 Oct 2026). --metaIgnoreFrameGuide keeps in-camera frame guides from cropping.
-  // REDline writes the camera audio with its channels rotated by one, so it renders to a
-  // ".redline-part.mov" first (no "_Proxy." in the name, so lookups never take it for a
-  // proxy) and red-audio-order.sh re-wraps that into the real proxy with the channels in
-  // the R3D's order (Lee, 19 Oct 2026).
+  // REDline renders to a ".redline-part.mov" first (no "_Proxy." in the name, so lookups
+  // never take it for a proxy); red-proxy-finish.sh then makes the real proxy: levels
+  // pre-expanded against Premiere's legal-range squeeze of RED proxies, and the camera
+  // audio (which REDline writes rotated by one channel) put back in the R3D's channel
+  // order (Lee, 19 Oct 2026; details in the script).
   function encodeCommand(entry) {
     var ffmpeg = firstExisting(FFMPEG);
     if (extOf(entry.mediaPath) === "r3d") {
@@ -87,7 +88,7 @@ module.exports = function (api) {
         q(redline) + " --i " + q(entry.mediaPath) + " --o " + q(part) +
         " --outDir " + q(dir) + " --format 201 --res 4 --resizeX " + SCALE_W +
         " --resizeY " + SCALE_H + " --fit 3 --primaryDev --useMeta --metaIgnoreFrameGuide" +
-        " && /bin/bash " + q(path.join(__dirname, "red-audio-order.sh")) + " " + q(ffmpeg) + " " +
+        " && /bin/bash " + q(path.join(__dirname, "red-proxy-finish.sh")) + " " + q(ffmpeg) + " " +
         q(partFile) + " " + q(entry.outputPath);
     }
     if (!ffmpeg) return null;
