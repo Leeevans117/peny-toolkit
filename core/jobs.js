@@ -53,20 +53,31 @@ function fileSize(p) {
   try { return fs.statSync(p).size; } catch (e) { return 0; }
 }
 
-// A finished .mov has a 'moov' atom; ffmpeg/REDline write it last (no +faststart), so
-// a render cut short lacks it. Reads only the last 2 MB.
+// A finished .mov has a whole 'moov' atom; ffmpeg/REDline write it last (no +faststart),
+// so a render cut short lacks it. Walks the top-level atoms (a few 16-byte reads). The old
+// check only searched the last 2 MB, but an 80-minute 8K interview proxy has a 9.6 MB moov
+// (one sample entry per PCM sample), so finished files were called incomplete (20 Oct 2026).
 function isCompleteMov(p) {
-  var TAIL = 2 * 1024 * 1024;
+  var fd;
   try {
     var size = fs.statSync(p).size;
     if (size < 4096) return false;
-    var start = size > TAIL ? size - TAIL : 0;
-    var buf = Buffer.alloc(size - start);
-    var fd = fs.openSync(p, "r");
-    try { fs.readSync(fd, buf, 0, buf.length, start); } finally { fs.closeSync(fd); }
-    return buf.indexOf("moov") !== -1;
+    fd = fs.openSync(p, "r");
+    var head = Buffer.alloc(16), off = 0;
+    while (off + 8 <= size) {
+      if (fs.readSync(fd, head, 0, 16, off) < 8) return false;
+      var len = head.readUInt32BE(0), type = head.toString("latin1", 4, 8);
+      if (len === 1) len = Number(head.readBigUInt64BE(8));
+      else if (len === 0) len = size - off;           // runs to the end of the file
+      if (len < 8 || off + len > size) return false;   // atom cut short
+      if (type === "moov") return true;
+      off += len;
+    }
+    return false;
   } catch (e) {
     return false;
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch (e) {}
   }
 }
 
