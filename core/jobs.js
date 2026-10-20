@@ -444,7 +444,7 @@ JobPool.prototype._watch = function () {
     } else if (job.outputPath && now - job.launchedAt >= self.opts.stallGraceMs && now - job.lastSizeCheckAt >= self.opts.stallCheckMs) {
       // A RED render writes job.partPath first (the final file only appears at the end).
       var size = fileSize(job.outputPath);
-      if (size === -1 && job.partPath) size = fileSize(job.partPath);
+      if (job.partPath && !fs.existsSync(job.outputPath)) size = fileSize(job.partPath);
       if (job.lastSize !== -1 && size === job.lastSize) {
         self.log("Stalled (no output growth), killing: " + job.label + " at " + size + " bytes", "err");
         self._kill(job, "stalled: output stuck at " + size + " bytes");
