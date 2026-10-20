@@ -4,8 +4,10 @@
  * 3. whisper.cpp (large-v3-turbo + Silero voice detection) transcribes it.
  * 4. Ollama (qwen2.5:32b) picks the answers in ~9 min windows with 1 min overlap, then long
  *    answers are split (pipeline.js). Ollama is started for the run and stopped after.
- * 5. premiere.jsx "copy": Make safe copy (unless already on a TOOLKIT COPY), then "mark":
- *    one marker per answer on the copy (name = topic, comment = outline), read back.
+ * 5. Ollama groups the answers by the interviewer's questions, and the questions into broad
+ *    themes (pipeline.js group, themes).
+ * 6. premiere.jsx "copy": "<sequence> Cut version" (unless already on one), then "mark":
+ *    question (Chapter) and theme (Segmentation) markers, topics as clip markers, read back.
  * Work files: /tmp/peny-toolkit/interview-selects/<sequence>-<time>/. Nothing is deleted. */
 var fs = require("fs");
 var path = require("path");
@@ -149,7 +151,7 @@ module.exports = function (api) {
     if (!inModelDir(VAD_MODEL)) missing.push(VAD_MODEL + " in " + MODEL_DIRS.join(" or "));
     if (missing.length) return Promise.resolve({ ok: false, error: "Missing on this Mac: " + missing.join("; ") + "." });
 
-    var t0 = Date.now(), scan, dir, answers, questions = [], stats, server = null, times = {};
+    var t0 = Date.now(), scan, dir, answers, questions = [], themes = [], stats, server = null, times = {};
     function lap(k) { times[k] = Math.round((Date.now() - t0) / 1000); }
     if (params.reuse) return markOnly(params.reuse, params);
     api.status("Reading the sequence's audio…");
@@ -194,28 +196,32 @@ module.exports = function (api) {
         api.status("Finding the interviewer's questions: part " + (i + 1) + " of " + n + " (" + Math.round((Date.now() - g0) / 1000) + " s so far)…");
       }).then(function (g) {
         questions = g.questions; stats.groupTokens = g.tokens;
-        r.questions = questions;
+        api.status("Grouping the " + questions.length + " questions into broad themes…");
+        return pipeline.themes(questions, { who: (params.name || "").trim() }).then(function (t) { themes = t.themes; stats.themeTokens = t.tokens; return g; });
+      }).then(function (g) {
+        r.questions = questions; r.themes = themes;
         fs.writeFileSync(path.join(dir, "answers.json"), JSON.stringify(r, null, 1));
         writeCsv(path.join(dir, "answers.csv"), answers);
         writeCsv(path.join(dir, "questions.csv"), questions.map(function (q) { return { start: q.start, end: q.end, topic: q.title, outline: q.comment }; }));
+        writeCsv(path.join(dir, "themes.csv"), themes.map(function (t) { return { start: t.start, end: t.end, topic: t.title, outline: t.comment }; }));
         lap("answers");
       });
     }).then(function () {
-      api.status("Making a safe copy of the sequence…");
+      api.status("Making the Cut version of the sequence…");
       return api.evalSkill({ action: "copy" });
     }).then(function (c) {
       if (!c.ok) throw { stop: c.error };
-      api.status("Adding " + answers.length + " markers…");
-      return api.evalSkill({ action: "mark", answers: answers, questions: questions }).then(function (m) { return { copy: c, mark: m }; });
+      api.status("Adding " + questions.length + " question, " + themes.length + " theme and " + answers.length + " topic markers…");
+      return api.evalSkill({ action: "mark", answers: answers, questions: questions, themes: themes }).then(function (m) { return { copy: c, mark: m }; });
     }).then(function (o) {
       lap("total");
       var d = o.mark.details || {};
-      var summary = (o.mark.ok ? "" : "Not all markers went on. ") + questions.length + " questions and " + answers.length + " answers: " + d.checked + " markers on \"" + d.sequence + "\"" +
-        (o.copy.details.made ? " (a new safe copy; the original is untouched)" : "") + ". Took " + fmt(times.total) +
+      var summary = (o.mark.ok ? "" : "Not all markers went on. ") + o.mark.summary.replace(/\.$/, "") + "" +
+        (o.copy.details.made ? " (a new Cut version; the original is untouched)" : "") + ". Took " + fmt(times.total) +
         " (audio " + times.audio + " s, transcript " + (times.transcribe - times.audio) + " s, answers " + (times.answers - times.transcribe) + " s). List: " + path.join(dir, "answers.csv");
       api.status(summary);
       return { ok: !!o.mark.ok, summary: summary, error: summary, details: {
-        sequence: d.sequence, markers: d.checked, questions: questions.length, wrong: d.wrong, failed: d.failed, workFolder: dir, stats: stats, times: times } };
+        sequence: d.sequence, markers: d.checked, questions: questions.length, themes: themes.length, topics: d.topics, wrong: d.wrong, failed: d.failed, workFolder: dir, stats: stats, times: times } };
     }).catch(function (e) {
       var msg = e && e.stop ? e.stop : "Interview Selects stopped: " + (e && e.message ? e.message : String(e));
       api.status(msg);
@@ -229,32 +235,38 @@ module.exports = function (api) {
   // Puts the answers of an earlier run (its answers.json) on the active sequence's safe
   // copy without transcribing again (test hook: params.reuse = path to answers.json).
   function markOnly(file, params) {
-    var saved, answers, questions, server = null;
-    try { saved = JSON.parse(fs.readFileSync(file, "utf-8")); answers = saved.answers; questions = saved.questions; } catch (e) { return Promise.resolve({ ok: false, error: "Could not read " + file }); }
-    var grouped = Promise.resolve();
-    if (!questions || params.regroup) {
+    var saved, answers, questions, themes, server = null;
+    try { saved = JSON.parse(fs.readFileSync(file, "utf-8")); answers = saved.answers; questions = saved.questions; themes = saved.themes; } catch (e) { return Promise.resolve({ ok: false, error: "Could not read " + file }); }
+    var grouped = Promise.resolve(), who = (params.name || "").trim();
+    if (!questions || !themes || params.regroup) {
       var ollama = firstExisting(OLLAMA);
       api.status("Grouping the answers by question…");
       grouped = startOllama(ollama).then(function (child) {
         server = child;
-        return pipeline.group(pipeline.readTranscript(path.join(path.dirname(file), "transcript.json")), answers, { who: (params.name || "").trim() }, function (i, n) {
+        if (questions && !params.regroup) return { questions: questions };
+        return pipeline.group(pipeline.readTranscript(path.join(path.dirname(file), "transcript.json")), answers, { who: who }, function (i, n) {
           api.status("Finding the interviewer's questions: part " + (i + 1) + " of " + n + "…");
         });
       }).then(function (g) {
         questions = g.questions; saved.questions = questions;
+        api.status("Grouping the questions into broad themes…");
+        return pipeline.themes(questions, { who: who });
+      }).then(function (t) {
+        themes = t.themes; saved.themes = themes;
         fs.writeFileSync(file, JSON.stringify(saved, null, 1));
       });
     }
     return grouped.then(function () {
       if (server) { try { server.kill(); } catch (eK) {} server = null; }
-      api.status("Making a safe copy of the sequence…");
+      api.status("Making the Cut version of the sequence…");
       return api.evalSkill({ action: "copy" });
     }).then(function (c) {
       if (!c.ok) return c;
-      api.status("Adding " + questions.length + " question and " + answers.length + " answer markers…");
-      return api.evalSkill({ action: "mark", answers: answers, questions: questions }).then(function (m) {
+      api.status("Adding question, theme and topic markers…");
+      return api.evalSkill({ action: "mark", answers: answers, questions: questions, themes: themes }).then(function (m) {
         var d = m.details || {};
-        var summary = d.checked + " markers (" + questions.length + " questions, " + answers.length + " answers) on \"" + d.sequence + "\" (from " + file + ").";
+        var summary = (m.summary || m.error) + " (from " + file + ")";
+        d.themeList = themes.map(function (t) { return fmt(t.start) + "-" + fmt(t.end) + " " + t.title + " (questions " + t.questions.join("-") + ")"; });
         api.status(summary);
         d.questionList = questions.map(function (q) { return fmt(q.start) + "-" + fmt(q.end) + " " + q.title + (q.question ? " (Q: " + q.question + ")" : ""); });
         return { ok: !!m.ok, summary: summary, error: m.error || summary, details: d };
@@ -277,7 +289,7 @@ module.exports = function (api) {
     var p = {};
     for (var k in params) if (params.hasOwnProperty(k)) p[k] = params[k];
     p.action = params.jsxAction || "cutraise";
-    api.status(p.action === "cutraise" ? "Cutting and raising the answers…" : "Running " + p.action + "…");
+    api.status(p.action === "cutraise" ? "Cutting, raising and trimming the answers…" : "Running " + p.action + "…");
     return api.evalSkill(p).then(function (r) { api.status(r.ok ? r.summary : r.error); return r; });
   }
 

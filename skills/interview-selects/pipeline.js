@@ -238,6 +238,51 @@ function group(lines, answers, opts, progress) {
   });
 }
 
+/* Broad themes (Lee, 20 Oct 2026): consecutive questions grouped under a theme that spans
+ * several of them, e.g. "Family and the team" over the first four questions. One short
+ * Ollama call over the question titles. Groups are made consecutive and complete whatever
+ * the model returns; a theme spans its first question's start to its last question's end. */
+var THEME_SCHEMA = { type: "object", required: ["themes"], properties: { themes: { type: "array", items: { type: "object",
+  required: ["first", "last", "title"], properties: { first: { type: "integer" }, last: { type: "integer" }, title: { type: "string" } } } } } };
+
+function themes(questions, opts) {
+  opts = opts || {};
+  if (!questions.length) return Promise.resolve({ themes: [], tokens: { prompt: 0, output: 0 } });
+  var list = questions.map(function (q, i) { return (i + 1) + ". [" + tc(q.start) + "] " + q.title + (q.question ? " (asked: " + q.question + ")" : ""); }).join("\n");
+  var want = Math.max(2, Math.min(10, Math.round(questions.length / 4)));
+  var text = "You are helping a video editor organise an interview" + (opts.who ? " with " + opts.who : "") + ". Below are the interview's questions in time order.\n" +
+    "Group consecutive questions into broad themes, each spanning several questions (about " + want + " themes in all; a theme is usually 2 to 6 questions). " +
+    "Every question belongs to exactly one theme, in order.\n" +
+    "For each theme give its first and last question number and a broad title (a short phrase, capital first letter, names keep their capitals, never starting with the word \"Topic\").\n" +
+    "Return ONLY JSON: {\"themes\":[{\"first\":1,\"last\":4,\"title\":\"...\"}]}\n\nQuestions:\n" + list;
+  return ollamaGenerateWith(text, THEME_SCHEMA, opts.numCtx || 8192).then(function (r) {
+    var ts = [];
+    try { ts = JSON.parse(r.response).themes || []; } catch (e) {}
+    var out = [], next = 1, n = questions.length;
+    ts.sort(function (p, q) { return (p.first | 0) - (q.first | 0); }).forEach(function (t) {
+      var f = Math.max(next, t.first | 0), l = Math.min(n, Math.max(f, t.last | 0));
+      if (f > n || l < f) return;
+      if (f > next) out.push({ f: next, l: f - 1, title: questions[next - 1].title });
+      out.push({ f: f, l: l, title: cleanTopic(t.title) });
+      next = l + 1;
+    });
+    if (next <= n) out.push({ f: next, l: n, title: out.length ? out[out.length - 1].title : questions[next - 1].title, extend: true });
+    // A trailing remainder joins the theme before it rather than standing alone.
+    var merged = [];
+    out.forEach(function (g) {
+      var p = merged[merged.length - 1];
+      if (g.extend && p) p.l = g.l; else merged.push(g);
+    });
+    return {
+      themes: merged.map(function (g) {
+        return { start: questions[g.f - 1].start, end: questions[g.l - 1].end, title: g.title, questions: [g.f, g.l],
+          comment: "Questions: " + questions.slice(g.f - 1, g.l).map(function (q) { return q.title; }).join("; ") };
+      }),
+      tokens: { prompt: r.prompt_eval_count || 0, output: r.eval_count || 0 }
+    };
+  });
+}
+
 function cleanTopic(t) {
   t = String(t || "").replace(/^\s*topic\s*[:\-–—]?\s*/i, "").trim();
   if (!/\s/.test(t) && /[a-z][A-Z]/.test(t)) t = t.replace(/([a-z])([A-Z])/g, "$1 $2"); // "FamilyDynamicInTeam"
@@ -245,4 +290,4 @@ function cleanTopic(t) {
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
-module.exports = { readTranscript: readTranscript, selects: selects, group: group, windows: windows, tc: tc, MODEL: MODEL };
+module.exports = { readTranscript: readTranscript, selects: selects, group: group, themes: themes, windows: windows, tc: tc, MODEL: MODEL };

@@ -1,12 +1,13 @@
 // Interview Selects, Premiere side. The panel (panel.js) calls this with params.action:
 //   "scan"  - the active sequence's audio as plain segments (file, in, start, end), following
 //             nested sequences, so ffmpeg can rebuild the sound in sequence time. Read only.
-//   "copy"  - runs Make safe copy (the make-safe-copy skill) unless the active sequence is
-//             already a TOOLKIT COPY.
-//   "mark"  - adds one sequence marker per answer (name = topic, comment = outline, spanning
-//             the answer) to the active TOOLKIT COPY and reads them back.
-//   "cutraise" - on a TOOLKIT COPY: cuts every clip at each answer marker's start and end,
-//             relinks the pieces and moves each answer up one track (see cutraise below).
+//   "copy"  - duplicates the active sequence as "<name> Cut version" and opens it, unless the
+//             active sequence already has "Cut version" in its name (Lee, 20 Oct 2026).
+//   "mark"  - on a Cut version: one Chapter marker per question, one Segmentation marker per
+//             broad theme, and the small topics as clip markers (see TOPICS below), read back.
+//   "cutraise" - on a Cut version only: cuts at each question's answer, raises it one track,
+//             removes everything between the answers, then a row of adjustment layers named
+//             after the questions and a row above it named after the themes.
 //   "probe", "dump" - read-only checks used through the test hook (jsxAction).
 (function () {
   var T = PenyToolkit;
@@ -21,8 +22,32 @@
     if (action === "probe") return probe(seq, params);
     if (action === "dump") return T.ok("Pieces " + params.a + "-" + params.b, { pieces: around(seq, params.a, params.b) });
     if (action === "cutraise") return cutraise(seq, params);
+    if (action === "untest") return untest(params);
+    if (action === "unbase") return unbase(params);
+    if (action === "layerprobe") return layerprobe(seq, params);
+    if (action === "rmprobe") {
+      if (!isCut(seq)) return T.fail("Only on a Cut version.");
+      var gone = 0, vt0 = seq.videoTracks;
+      for (var ti0 = 0; ti0 < vt0.numTracks; ti0++) for (var ci0 = vt0[ti0].clips.numItems - 1; ci0 >= 0; ci0--) {
+        var c0 = vt0[ti0].clips[ci0];
+        if (String(c0.name) === "Layer probe" && isAdjClip(c0)) { c0.remove(false, false); gone++; }
+      }
+      return T.ok(gone + " probe layer(s) removed from the Cut version.");
+    }
+    if (action === "topics") return T.ok("Topics", { mode: TOPICS, topics: readTopics(seq, 1 / (T.sequenceFps(seq) || 25)).list });
     return T.fail("Unknown action: " + action);
   };
+
+  // ---- Cut version (Lee, 20 Oct 2026: the copy is "<sequence> Cut version") ----
+  var CUT = "Cut version";
+  function isCut(seq) { return String(seq.name).indexOf(CUT) >= 0; }
+
+  // Where the small topic markers live:
+  //   "clip"  - clip markers on the clip on the top video track (they belong to the source
+  //             clip, so they show wherever that footage is used);
+  //   "layer" - clip markers on the question adjustment layers, each layer given its own
+  //             source range (base + sequence time) so its markers show on that layer only.
+  var TOPICS = "layer";
 
   function sequenceForItem(projectItem) {
     if (!projectItem) return null;
@@ -85,21 +110,40 @@
     var last = 0;
     for (var j = 0; j < segs.length; j++) if (segs[j].end > last) last = segs[j].end;
     return T.ok("Found " + segs.length + " audio piece(s) on " + labels.join(", ") + ".", {
-      sequence: String(seq.name), sequenceId: String(seq.sequenceID), isCopy: T.isToolkitCopy(seq),
+      sequence: String(seq.name), sequenceId: String(seq.sequenceID), isCopy: isCut(seq),
       tracks: labels, duration: Math.max(end, last), segments: segs, notes: notes, fps: T.sequenceFps(seq)
     });
   }
 
+  // Duplicates seq (Sequence.clone, the way Make safe copy does), names the new sequence
+  // "<name> Cut version" ("... Cut version 2" if taken), checks the original did not change
+  // and opens the copy. Only the new sequence is named; no clip is renamed.
   function copy(seq) {
-    if (T.isToolkitCopy(seq)) return T.ok("\"" + seq.name + "\" is already a TOOLKIT COPY; markers go on it.", { copyName: String(seq.name), copyId: String(seq.sequenceID), made: false });
-    var file = new File(File($.fileName).parent.parent.fsName + "/make-safe-copy/premiere.jsx");
-    if (!file.exists) return T.fail("Make safe copy skill not found at " + file.fsName);
-    $.evalFile(file);
-    var r = T.skills["make-safe-copy"]({});
-    if (!r.ok) return r;
-    if (!r.details.copyIsActive) return T.fail("The copy \"" + r.details.copyName + "\" was made but is not the active sequence, so no markers were added. Open it and run again.", r.details);
-    r.details.made = true;
-    return r;
+    if (isCut(seq)) return T.ok("\"" + seq.name + "\" is already a Cut version; markers go on it.", { copyName: String(seq.name), copyId: String(seq.sequenceID), made: false });
+    var originalName = String(seq.name), originalId = String(seq.sequenceID), before = {}, list = T.sequenceList(), i;
+    for (i = 0; i < list.length; i++) before[String(list[i].sequenceID)] = true;
+    var printBefore = T.fingerprint(seq);
+    seq.clone();
+    var created = null;
+    for (var tries = 0; tries < 20 && !created; tries++) {
+      list = T.sequenceList();
+      for (i = 0; i < list.length; i++) if (!before[String(list[i].sequenceID)]) { created = list[i]; break; }
+      if (!created) $.sleep(250);
+    }
+    if (!created) return T.fail("Sequence.clone() did not create a new sequence (checked for 5 s).");
+    var wanted = originalName + " " + CUT;
+    for (var n = 2; T.sequenceNameExists(wanted) && n < 100; n++) wanted = originalName + " " + CUT + " " + n;
+    created.name = wanted;
+    if (String(created.name) !== wanted && created.projectItem) created.projectItem.name = wanted;
+    if (String(created.name) !== wanted) return T.fail("The copy was made as \"" + created.name + "\" but could not be named \"" + wanted + "\".");
+    var original = T.findSequenceById(originalId), printAfter = original ? T.fingerprint(original) : null;
+    var unchanged = !!(printAfter && printAfter.hash === printBefore.hash && printAfter.clips === printBefore.clips && String(original.name) === originalName);
+    try { app.project.openSequence(String(created.sequenceID)); } catch (e) {}
+    var active = T.activeSequence(), isActive = !!(active && String(active.sequenceID) === String(created.sequenceID));
+    var d = { copyName: wanted, copyId: String(created.sequenceID), originalName: originalName, originalUnchanged: unchanged, copyIsActive: isActive, made: true };
+    if (!unchanged) return T.fail("Copy made, but the original sequence no longer matches its fingerprint. Check it before going on.", d);
+    if (!isActive) return T.fail("The copy \"" + wanted + "\" was made but is not the active sequence, so no markers were added. Open it and run again.", d);
+    return T.ok("Created \"" + wanted + "\" and opened it; the original is unchanged.", d);
   }
 
   // Read-only look at what Premiere 26.5.2 offers for moving a timeline piece to another
@@ -150,13 +194,13 @@
       for (var i = 0; i < tracks.numTracks; i++) {
         var locked = false;
         try { locked = tracks[i].isLocked(); } catch (e) {}
-        if (locked) continue;
+        if (locked || (kind === "V" && trackHasLayers(tracks[i]))) continue;
         var cl = tracks[i].clips, hit = false;
         for (var c = 0; c < cl.numItems; c++) {
           if (cl[c].start.seconds < t - frame / 2 && cl[c].end.seconds > t + frame / 2) { hit = true; break; }
         }
         if (!hit) continue;
-        (kind === "V" ? q.getVideoTrackAt(i) : q.getAudioTrackAt(i)).razor(tc);
+        qeTrack(seq, q, kind, i).razor(tc);
         done.push(kind + (i + 1));
       }
     }
@@ -188,9 +232,30 @@
     return o;
   }
 
+  // The QE track that holds the same clips as DOM track kind/i. Normally the same index,
+  // but after QE addTracks put a track at the bottom (20 Oct 2026) the QE and DOM lists
+  // disagreed, so the clips' starts are compared; the same index wins when both match.
+  function qeTrack(seq, q, kind, i) {
+    var dom = kind === "V" ? seq.videoTracks : seq.audioTracks, sig = [], c, j;
+    for (c = 0; c < dom[i].clips.numItems; c++) sig.push(Math.round(dom[i].clips[c].start.seconds * 100));
+    function sigOf(qt) {
+      var out = [];
+      for (var k = 0; k < qt.numItems; k++) { var it = qt.getItemAt(k); if (it && String(it.type) === "Clip") out.push(Math.round(T.sec(it.start.ticks) * 100)); }
+      return out.join(",");
+    }
+    var want = sig.join(","), n = kind === "V" ? q.numVideoTracks : q.numAudioTracks;
+    var same = kind === "V" ? q.getVideoTrackAt(i) : q.getAudioTrackAt(i);
+    if (same && sigOf(same) === want) return same;
+    for (j = 0; j < (n || 0); j++) {
+      var cand = kind === "V" ? q.getVideoTrackAt(j) : q.getAudioTrackAt(j);
+      if (cand && sigOf(cand) === want) return cand;
+    }
+    return same;
+  }
+
   // QE item of the piece starting at a on track kind ("V"/"A") index i, or null.
   function qeItemAt(seq, q, kind, i, a, frame) {
-    var qt = kind === "V" ? q.getVideoTrackAt(i) : q.getAudioTrackAt(i);
+    var qt = qeTrack(seq, q, kind, i);
     for (var k = 0; k < qt.numItems; k++) {
       var c = qt.getItemAt(k);
       if (c && String(c.type) === "Clip" && Math.abs(T.sec(c.start.ticks) - a) < frame / 2) return c;
@@ -224,8 +289,7 @@
   // 26.5.2: moves only that piece, keeps its time and links). Everything is read back.
   function answerSpans(seq, frame) {
     // Question (Chapter) markers when there are any; otherwise every answer (Comment) marker.
-    var list = markerList(seq), spans = [], chapters = false, i;
-    for (i = 0; i < list.length; i++) if (list[i].type === "Chapter" && list[i].end - list[i].start > frame) chapters = true;
+    var list = markerList(seq), spans = [], chapters = true, i;
     for (i = 0; i < list.length; i++) {
       var m = list[i];
       if (chapters && m.type !== "Chapter") continue;
@@ -265,10 +329,10 @@
   }
 
   function cutraise(seq, params) {
-    if (!T.isToolkitCopy(seq)) return T.fail("Cut & raise only works on a TOOLKIT COPY. \"" + seq.name + "\" is not one.");
+    if (!isCut(seq)) return T.fail("Cut, raise & trim only runs on a sequence with \"Cut version\" in its name (made by Find answers). \"" + seq.name + "\" is not one.");
     var fps = T.sequenceFps(seq) || 25, frame = 1 / fps, half = frame / 2;
     var spans = answerSpans(seq, frame);
-    if (!spans.length) return T.fail("No answer markers (markers with a comment and a length) on this sequence. Run Find answers first.");
+    if (!spans.length) return T.fail("No question markers (Chapter markers with a length) on this sequence. Run Find answers first.");
     var durBefore = T.sec(seq.end);
     app.enableQE();
     var q = qe.project.getActiveSequence();
@@ -305,6 +369,7 @@
       var o = origAt(pieces[i].track, (pieces[i].a + pieces[i].b) / 2);
       if (!o || !o.group) continue;
       var key = o.group + "|" + Math.round(pieces[i].a * fps) + "|" + Math.round(pieces[i].b * fps);
+      pieces[i].linkedBefore = true;
       (segs[key] = segs[key] || []).push(pieces[i]);
     }
     var linkProblems = [];
@@ -330,7 +395,7 @@
       pieces = allPieces(seq);
       for (j = 0; j < pieces.length; j++) {
         var pc = pieces[j];
-        if (Math.abs(pc.a - sp.a) < half && Math.abs(pc.b - sp.b) < half) {
+        if (Math.abs(pc.a - sp.a) < half && Math.abs(pc.b - sp.b) < half && !isAdjClip(pc.item)) {
           var og = origAt(pc.track, (pc.a + pc.b) / 2);
           if (og && og.name === pc.name) mine.push(pc); // still on its original track = not raised yet
         }
@@ -341,6 +406,7 @@
       var problem = null;
       for (j = 0; j < mine.length && !problem; j++) {
         var tk = mine[j].kind, ti = mine[j].index + 1, tracks = tk === "V" ? seq.videoTracks : seq.audioTracks;
+        if (ti >= tracks.numTracks && tk === "V") { var vErr = ensureVideoTrack(seq, ti); if (vErr) { problem = vErr; break; } tracks = seq.videoTracks; }
         if (ti >= tracks.numTracks) { problem = "there is no track above " + mine[j].track + " (add one and run again)"; break; }
         if (isLocked(seq, tk, ti)) { problem = tk + (ti + 1) + " is locked"; break; }
         var cl = tracks[ti].clips;
@@ -369,6 +435,11 @@
     pieces = allPieces(seq);
     var shifted = [], up = 0, notUp = [], linkBad = [];
     for (i = 0; i < pieces.length; i++) {
+      var o2 = origAt(pieces[i].track, (pieces[i].a + pieces[i].b) / 2);
+      if ((!o2 || o2.name !== pieces[i].name) && pieces[i].index > 0) o2 = origAt(pieces[i].kind + pieces[i].index, (pieces[i].a + pieces[i].b) / 2);
+      pieces[i].linkedBefore = !!(o2 && o2.group && o2.name === pieces[i].name);
+    }
+    for (i = 0; i < pieces.length; i++) {
       var pc2 = pieces[i], inSpan = null;
       for (j = 0; j < spans.length; j++) if (Math.abs(pc2.a - spans[j].a) < half && Math.abs(pc2.b - spans[j].b) < half) inSpan = spans[j];
       var src = origAt(pc2.track, (pc2.a + pc2.b) / 2);
@@ -382,7 +453,7 @@
     }
     for (i = 0; i < spans.length; i++) {
       var inside = [];
-      for (j = 0; j < pieces.length; j++) if (Math.abs(pieces[j].a - spans[i].a) < half && Math.abs(pieces[j].b - spans[i].b) < half) inside.push(pieces[j]);
+      for (j = 0; j < pieces.length; j++) if (Math.abs(pieces[j].a - spans[i].a) < half && Math.abs(pieces[j].b - spans[i].b) < half && !isAdjClip(pieces[j].item) && pieces[j].linkedBefore) inside.push(pieces[j]);
       for (j = 0; j < inside.length; j++) {
         var n2 = T.linkedNodeIds(inside[j].item).length;
         if (inside.length > 1 && n2 < inside.length) linkBad.push(T.fmt(spans[i].a) + " " + inside[j].track + " linked to " + n2 + " of " + inside.length);
@@ -391,26 +462,53 @@
     // 5. Trim (Lee, 3 Oct 2026, like "Tahnee Home IV Trimmed"): everything outside the answers
     // (questions, crew chat, pauses) is extracted, so the answers run back to back; markers move
     // with them and each question's adjustment layer runs to the start of the next one.
-    var trim = null, layerSpans = spans, expectDur = durBefore;
+    var trim = null, layerSpans = spans, expectDur = durBefore, mapT = function (t) { return t; };
     if (params.trim !== false) {
       trim = trimDead(seq, q, spans, frame, orig);
       expectDur = trim.keptTotal;
-      layerSpans = [];
-      for (i = 0; i < spans.length; i++) {
-        var la = trim.map(spans[i].a), lb = i + 1 < spans.length ? trim.map(spans[i + 1].a) : trim.map(spans[i].b);
-        layerSpans.push({ a: la, b: lb, names: spans[i].names });
-      }
+      mapT = trim.map;
     }
-    var layers = params.layers === false ? { skipped: "turned off" } : addLayers(seq, layerSpans, frame);
+    layerSpans = [];
+    for (i = 0; i < spans.length; i++) {
+      var la = mapT(spans[i].a), lb = i + 1 < spans.length ? mapT(spans[i + 1].a) : mapT(spans[i].b);
+      layerSpans.push({ a: la, b: lb, names: spans[i].names });
+    }
+    // 6. Question layers: in "layer" mode they were placed by Find answers (they carry the
+    // topic markers) and the trim has closed them up; otherwise they are placed now.
+    var layers, qTrack = questionLayerTrack(seq);
+    if (params.layers === false) layers = { skipped: "turned off" };
+    else if (TOPICS === "layer" && qTrack >= 0) layers = checkRow(seq, qTrack, layerSpans, frame);
+    else layers = addLayers(seq, layerSpans, frame, emptyTrackFrom(seq, topFootageTrack(seq) + 1), null);
+    // 7. Theme row above the question layers: one layer per broad theme (Segmentation markers,
+    // moved by the trim), back to back, named after the theme.
+    var themes = { skipped: "no theme markers" }, ths = [], ml = markerList(seq);
+    for (i = 0; i < ml.length; i++) if (ml[i].type === "Segmentation" && ml[i].end - ml[i].start > frame) ths.push({ a: ml[i].start, b: ml[i].end, names: [ml[i].name] });
+    ths.sort(function (x, y) { return x.a - y.a; });
+    for (i = 0; i + 1 < ths.length; i++) ths[i].b = ths[i + 1].a;
+    if (ths.length && params.layers !== false) {
+      var qIdx = layers.index !== undefined ? layers.index : questionLayerTrack(seq);
+      var tIdx = -1, vt = seq.videoTracks;
+      for (i = qIdx + 1; i < vt.numTracks; i++) {
+        if (trackLocked(vt[i])) continue;
+        if (!vt[i].clips.numItems || (trackHasLayers(vt[i]) && i !== qIdx)) { tIdx = i; break; }
+      }
+      if (tIdx < 0) {
+        var tErr = ensureVideoTrack(seq, vt.numTracks);
+        if (tErr) themes = { error: tErr };
+        else tIdx = seq.videoTracks.numTracks - 1;
+      }
+      if (!themes.error) themes = addLayers(seq, ths, frame, tIdx, null);
+    }
     var durAfter = T.sec(seq.end);
-    var ok = !shifted.length && !linkBad.length && !linkProblems.length && Math.abs(durAfter - expectDur) < frame * 1.5 && !layers.error && !(trim && trim.problems.length);
+    var ok = !shifted.length && !linkBad.length && !linkProblems.length && Math.abs(durAfter - expectDur) < frame * 1.5 && !layers.error && !themes.error && !(trim && trim.problems.length);
     var text = spans.length + " answers: " + cuts + " cuts, " + raised + " pieces raised one track, " + skipped.length + " skipped; links " +
       (linkBad.length || linkProblems.length ? "NOT all intact" : "intact") + "; " + (shifted.length ? shifted.length + " pieces shifted in time" : "nothing shifted in time") +
       (trim ? "; " + trim.gaps + " dead bits removed (" + T.fmt(trim.removed) + "), " + trim.markersMoved + " markers moved with them" + (trim.problems.length ? ", " + trim.problems.length + " problems" : "") : "") +
       "; length " + T.fmt(durAfter) + (trim || Math.abs(durAfter - durBefore) >= half ? " (was " + T.fmt(durBefore) + ")" : " (unchanged)") +
       "; " + (layers.error ? "adjustment layers: " + layers.error : layers.skipped ? "no adjustment layers (" + layers.skipped + ")" :
-        layers.placed + " adjustment layers named on " + layers.track) + ".";
-    var details = { sequence: String(seq.name), spansFrom: spans.byChapter ? "question markers" : "answer markers", layers: layers, answers: spans.length, joined: 0, cuts: cuts, relinkedGroups: relinked, raised: raised, raisedPiecesFound: up,
+        layers.placed + " question layers on " + layers.track) +
+      "; " + (themes.error ? "theme layers: " + themes.error : themes.skipped ? "no theme layers (" + themes.skipped + ")" : themes.placed + " theme layers on " + themes.track) + ".";
+    var details = { sequence: String(seq.name), topicsOn: TOPICS, layers: layers, themeLayers: themes, answers: spans.length, joined: 0, cuts: cuts, relinkedGroups: relinked, raised: raised, raisedPiecesFound: up,
       skipped: skipped, unmatched: notUp, linkProblems: linkProblems.concat(linkBad), shifted: shifted,
       durationBefore: durBefore, durationAfter: durAfter, cutLogSample: cutLog.slice(0, 5),
       trim: trim ? { gaps: trim.gaps, removed: trim.removed, keptTotal: trim.keptTotal, markersMoved: trim.markersMoved, markersRestored: trim.restored || 0, relinked: trim.relinked,
@@ -423,8 +521,8 @@
   // length = answers' total, no holes, every piece shows the same source frames as before
   // (just earlier), linked pieces relinked, markers moved to their answers' new times.
   function trimDead(seq, q, spans, frame, orig) {
-    var half = frame / 2, i, j, list = markerList(seq), kept = [], dur = T.sec(seq.end), res = { problems: [] };
-    for (i = 0; i < list.length; i++) if (list[i].type !== "Chapter" && list[i].comments && list[i].end - list[i].start > frame) kept.push({ a: list[i].start, b: list[i].end });
+    var half = frame / 2, i, j, kept = [], dur = T.sec(seq.end), res = { problems: [] }, tl = readTopics(seq, frame).list;
+    for (i = 0; i < tl.length; i++) if (tl[i].b - tl[i].a > frame) kept.push({ a: tl[i].a, b: tl[i].b });
     if (!kept.length) for (i = 0; i < spans.length; i++) kept.push({ a: spans[i].a, b: spans[i].b });
     kept.sort(function (x, y) { return x.a - y.a; });
     var merged = [];
@@ -448,6 +546,7 @@
     };
     // Pieces and markers before.
     var before = allPieces(seq), oldMarkers = [], m = seq.markers.getFirstMarker();
+    for (i = 0; i < before.length; i++) before[i].linked = T.linkedNodeIds(before[i].item).length >= 2;
     while (m) { oldMarkers.push({ start: m.start.seconds, end: m.end.seconds, name: String(m.name), type: String(m.type), comments: String(m.comments) }); m = seq.markers.getNextMarker(m); }
     // Extract, last gap first. QE extract(in, out) removes in..out with out exclusive
     // (an out of the gap's last frame left one frame behind, 3 Oct 2026). Any wrong amount
@@ -487,6 +586,7 @@
           hit.name = om.name;
           hit.comments = om.comments;
           if (om.type === "Chapter") hit.setTypeAsChapter();
+          else if (om.type === "Segmentation") hit.setTypeAsSegmentation();
           res.restored = (res.restored || 0) + 1;
         } catch (eR) { res.problems.push("marker " + om.name + " lost in the trim and could not be put back: " + eR); continue; }
       }
@@ -510,7 +610,9 @@
             Math.abs(res.map(b0.a + (x.item.inPoint.seconds - b0.item.inPoint.seconds)) - x.a) < half) src = b0;
       }
       if (!src) { res.problems.push(x.track + " " + T.fmt(x.a) + " " + x.name + ": not where its source frames should be"); continue; }
-      // Link group as before the trim (by the pieces' common start and end).
+      // Link group as before the trim (by the pieces' common start and end); layers and
+      // pieces that were not linked before stay as they are.
+      if (isAdjClip(x.item) || !src.linked) continue;
       var key = String(src.a.toFixed(2)) + "|" + String(src.b.toFixed(2)) + "|" + Math.round(x.a / frame) + "|" + Math.round(x.b / frame);
       (groups[key] = groups[key] || []).push(x);
     }
@@ -539,75 +641,215 @@
 
   // The project's adjustment layer item (Lee's projects have one called "Adjustment Layer";
   // ExtendScript cannot make one). First item that says it is an adjustment layer, else by name.
+  // Prefers an adjustment layer item named exactly "Adjustment Layer" (Lee's own renamed
+  // per-question layers are left alone), else the first adjustment layer item.
   function findAdjustmentItem() {
-    var byName = null;
+    var plain = null, any = null, byName = null;
     function walk(bin) {
       for (var i = 0; i < bin.children.numItems; i++) {
         var it = bin.children[i];
-        if (it.type === ProjectItemType.BIN) { var r = walk(it); if (r) return r; continue; }
+        if (it.type === ProjectItemType.BIN) { walk(it); continue; }
         var adj = false;
         try { adj = it.isAdjustmentLayer && it.isAdjustmentLayer(); } catch (e) {}
-        if (adj) return it;
+        if (adj && !plain && String(it.name) === "Adjustment Layer") plain = it;
+        if (adj && !any) any = it;
         if (!byName && String(it.name) === "Adjustment Layer") byName = it;
       }
-      return null;
     }
-    return walk(app.project.rootItem) || byName;
+    walk(app.project.rootItem);
+    return plain || byName || any;
   }
 
-  // One adjustment layer per span, named after the question, on the lowest unlocked video
-  // track above every clip that is empty over the whole sequence. Only layers this makes are
-  // named; a layer already there with that name and span is left as it is.
-  function addLayers(seq, spans, frame) {
-    var half = frame / 2, item = findAdjustmentItem(), i, j;
-    if (!item) return { error: "no Adjustment Layer in the project (make one: File > New > Adjustment Layer, then run again)" };
+  function isAdjClip(c) { try { return !!c.isAdjustmentLayer(); } catch (e) { return false; } }
+  function trackHasLayers(tr) {
+    for (var i = 0; i < tr.clips.numItems; i++) if (isAdjClip(tr.clips[i])) return true;
+    return false;
+  }
+  function trackLocked(tr) { try { return !!tr.isLocked(); } catch (e) { return false; } }
+  // Highest video track with footage (not adjustment layers), -1 if none.
+  function topFootageTrack(seq) {
     var top = -1, vt = seq.videoTracks;
-    for (i = 0; i < vt.numTracks; i++) if (vt[i].clips.numItems) top = i;
-    var target = -1;
-    for (i = top + 1; i < vt.numTracks; i++) {
-      var locked = false;
-      try { locked = vt[i].isLocked(); } catch (e) {}
-      if (!locked && !vt[i].clips.numItems) { target = i; break; }
-    }
-    // A re-run: our layers are already on a track above the clips.
-    var existing = null;
-    for (i = 0; i < vt.numTracks && !existing; i++) {
+    for (var i = 0; i < vt.numTracks; i++) {
       var cl = vt[i].clips;
-      for (j = 0; j < cl.numItems; j++) {
-        var adj = false;
-        try { adj = cl[j].isAdjustmentLayer(); } catch (e2) {}
-        if (adj) { existing = i; break; }
+      for (var c = 0; c < cl.numItems; c++) if (!isAdjClip(cl[c])) { top = i; break; }
+    }
+    return top;
+  }
+  // Adds video tracks to seq (QE addTracks, the bridge's add_tracks way) until index idx
+  // exists; checks the existing tracks kept their places (QE can insert at the bottom).
+  function ensureVideoTrack(seq, idx) {
+    var vt = seq.videoTracks, need = idx + 1 - vt.numTracks;
+    if (need <= 0) return null;
+    var before = [], i;
+    for (i = 0; i < vt.numTracks; i++) before.push(vt[i].clips.numItems + "|" + (vt[i].clips.numItems ? String(vt[i].clips[0].nodeId) : ""));
+    app.enableQE();
+    // QE addTracks(video count, video insert index, audio count, audio type, audio index,
+    // submix count, submix type, submix index): the bridge's (n, 0, 0, 0) put the new track
+    // at index 0 under the footage (20 Oct 2026), so insert at the top index instead.
+    qe.project.getActiveSequence().addTracks(need, vt.numTracks, 0, 0, seq.audioTracks.numTracks, 0, 0, 0);
+    vt = seq.videoTracks;
+    if (vt.numTracks < idx + 1) return "could not add " + need + " video track(s) (now " + vt.numTracks + ")";
+    for (i = 0; i < before.length; i++) {
+      var now = vt[i].clips.numItems + "|" + (vt[i].clips.numItems ? String(vt[i].clips[0].nodeId) : "");
+      if (now !== before[i]) return "adding tracks moved the existing video tracks (V" + (i + 1) + " changed); stopped";
+    }
+    return null;
+  }
+
+  // First unlocked video track at index >= from that is empty, -1 if none.
+  function emptyTrackFrom(seq, from) {
+    var vt = seq.videoTracks;
+    for (var i = Math.max(0, from); i < vt.numTracks; i++) if (!trackLocked(vt[i]) && !vt[i].clips.numItems) return i;
+    return -1;
+  }
+  function itemMarkers(item) {
+    var out = [], mc = item.getMarkers(), m = mc.getFirstMarker();
+    while (m) { out.push({ m: m, start: m.start.seconds, end: m.end.seconds, name: String(m.name), comments: String(m.comments) }); m = mc.getNextMarker(m); }
+    return out;
+  }
+
+  // Puts the adjustment layer item on track from a to b (sequence seconds). With base set,
+  // the layer's source range is base + a .. base + b (the item's in/out are set for the
+  // overwrite and put back after), so clip markers at base + t show on this layer only.
+  function placeLayer(track, item, a, b, name, base, frame) {
+    var half = frame / 2, got = null, j;
+    for (j = 0; j < track.clips.numItems; j++) if (Math.abs(track.clips[j].start.seconds - a) < half) got = track.clips[j];
+    if (!got) {
+      track.overwriteClip(item, a);
+      for (j = 0; j < track.clips.numItems; j++) if (Math.abs(track.clips[j].start.seconds - a) < half) got = track.clips[j];
+    }
+    if (!got) return { error: T.fmt(a) + " " + name + ": layer did not appear" };
+    if (!isAdjClip(got)) return { error: T.fmt(a) + ": a clip that is not an adjustment layer is there; left alone" };
+    if (Math.abs(got.end.seconds - b) >= half) {
+      var t = new Time();
+      t.ticks = String(T.ticks(b));
+      try { got.end = t; } catch (e4) {}
+      if (Math.abs(got.end.seconds - b) >= half) { try { got.end = b; } catch (e5) {} }
+    }
+    got.name = name;
+    // Own source range: TrackItem.inPoint can be set and keeps the layer's start and end
+    // (20 Oct 2026, 26.5.2; the project item's in/out are ignored by overwriteClip for it).
+    if (base !== null && base !== undefined && Math.abs(got.inPoint.seconds - (base + a)) >= half) {
+      var ti = new Time();
+      ti.ticks = String(T.ticks(base + a));
+      try { got.inPoint = ti; } catch (e6) {}
+    }
+    if (Math.abs(got.end.seconds - b) >= half) return { error: T.fmt(a) + " " + name + ": ends at " + T.fmt(got.end.seconds) + " not " + T.fmt(b) };
+    if (String(got.name) !== name) return { error: T.fmt(a) + ": name did not stick" };
+    if (base !== null && base !== undefined && Math.abs(got.inPoint.seconds - (base + a)) >= half)
+      return { error: T.fmt(a) + " " + name + ": its source starts at " + got.inPoint.seconds.toFixed(2) + " s, not " + (base + a).toFixed(2) + " (the in point did not stick)" };
+    return { item: got };
+  }
+
+  // A source range on the adjustment item with no markers yet, for this Cut version's layers.
+  function freeBase(item, dur) {
+    var list = itemMarkers(item);
+    for (var k = 0; k < 400; k++) {
+      var base = 100000 + k * 20000, clash = false;
+      for (var i = 0; i < list.length; i++) if (list[i].start >= base - 1 && list[i].start <= base + dur + 60) clash = true;
+      if (!clash) return base;
+    }
+    return null;
+  }
+
+  function cleanName(t) { return String(t).replace(/^\s*topic\s*[:\-]?\s*/i, "") || "Answer"; }
+
+  // ---- Topic markers ----
+  // Topics read back in sequence time from wherever TOPICS keeps them.
+  function readTopics(seq, frame) {
+    var half = frame / 2, seen = {}, list = [], vt = seq.videoTracks, i, c, k;
+    var qTrack = TOPICS === "layer" ? questionLayerTrack(seq) : -1;
+    for (i = 0; i < vt.numTracks; i++) {
+      if (TOPICS === "layer" && i !== qTrack) continue;
+      var cl = vt[i].clips;
+      for (c = 0; c < cl.numItems; c++) {
+        var x = cl[c];
+        if ((TOPICS === "layer") !== isAdjClip(x)) continue;
+        if (TOPICS === "clip" && i !== topFootageTrackAt(seq, (x.start.seconds + x.end.seconds) / 2)) continue;
+        var inS = x.inPoint.seconds, outS = inS + (x.end.seconds - x.start.seconds), ms = itemMarkers(x.projectItem);
+        for (k = 0; k < ms.length; k++) {
+          if (!ms[k].comments || ms[k].start < inS - half || ms[k].start >= outS - half) continue;
+          var a = x.start.seconds + (ms[k].start - inS), b = Math.min(x.end.seconds, x.start.seconds + (ms[k].end - inS));
+          var key = Math.round(a / frame) + "|" + ms[k].name;
+          if (seen[key]) { if (b > seen[key].b) seen[key].b = b; continue; }
+          seen[key] = { a: a, b: b, name: ms[k].name, comments: ms[k].comments };
+          list.push(seen[key]);
+        }
       }
     }
-    if (existing !== null) target = existing;
-    if (target < 0) return { error: "no empty unlocked video track above the clips (add one and run again)" };
-    var track = vt[target], placed = 0, problems = [], names = [];
-    for (i = 0; i < spans.length; i++) {
-      var sp = spans[i], title = sp.names[0], got = null;
-      if (/^\s*topic\b/i.test(title)) title = title.replace(/^\s*topic\s*[:\-]?\s*/i, "");
-      for (j = 0; j < track.clips.numItems; j++) if (Math.abs(track.clips[j].start.seconds - sp.a) < half) got = track.clips[j];
-      if (!got) {
-        track.overwriteClip(item, sp.a);
-        for (j = 0; j < track.clips.numItems; j++) if (Math.abs(track.clips[j].start.seconds - sp.a) < half) got = track.clips[j];
-      }
-      if (!got) { problems.push(T.fmt(sp.a) + " " + title + ": layer did not appear"); continue; }
-      var isAdj = false;
-      try { isAdj = got.isAdjustmentLayer(); } catch (e3) {}
-      if (!isAdj) { problems.push(T.fmt(sp.a) + ": a non-adjustment clip is there; left alone"); continue; }
-      if (Math.abs(got.end.seconds - sp.b) >= half) {
-        var t = new Time();
-        t.ticks = String(T.ticks(sp.b));
-        try { got.end = t; } catch (e4) {}
-        if (Math.abs(got.end.seconds - sp.b) >= half) { try { got.end = sp.b; } catch (e5) {} }
-      }
-      got.name = title;
-      if (Math.abs(got.end.seconds - sp.b) >= half) problems.push(T.fmt(sp.a) + " " + title + ": ends at " + T.fmt(got.end.seconds) + " not " + T.fmt(sp.b));
-      else if (String(got.name) !== title) problems.push(T.fmt(sp.a) + ": name did not stick");
-      else { placed++; if (names.length < 5) names.push(T.fmt(sp.a) + "-" + T.fmt(sp.b) + " " + title); }
+    // A topic cut into pieces (trim, raise) joins up again where its pieces touch.
+    list.sort(function (p, q) { return p.a - q.a; });
+    return { list: list, track: qTrack };
+  }
+
+  // Highest footage track with a clip covering t.
+  function topFootageTrackAt(seq, t) {
+    var vt = seq.videoTracks;
+    for (var i = vt.numTracks - 1; i >= 0; i--) {
+      var cl = vt[i].clips;
+      for (var c = 0; c < cl.numItems; c++) if (!isAdjClip(cl[c]) && cl[c].start.seconds <= t && cl[c].end.seconds > t) return i;
     }
-    var r = { track: "V" + (target + 1), placed: placed, of: spans.length, problems: problems, sample: names };
-    if (problems.length) r.error = placed + " of " + spans.length + " placed on V" + (target + 1) + "; " + problems.slice(0, 3).join("; ");
+    return -1;
+  }
+  function footageClipAt(seq, t) {
+    var i = topFootageTrackAt(seq, t);
+    if (i < 0) return null;
+    var cl = seq.videoTracks[i].clips;
+    for (var c = 0; c < cl.numItems; c++) if (!isAdjClip(cl[c]) && cl[c].start.seconds <= t && cl[c].end.seconds > t) return cl[c];
+    return null;
+  }
+
+  // The question layers are on the lowest video track that holds adjustment layers.
+  function questionLayerTrack(seq) {
+    var vt = seq.videoTracks;
+    for (var i = 0; i < vt.numTracks; i++) if (trackHasLayers(vt[i])) return i;
+    return -1;
+  }
+
+  function putMarker(mc, start, end, name, comments) {
+    var list = [], m = mc.getFirstMarker(), hit = null;
+    while (m) { if (Math.abs(m.start.seconds - start) < 0.02 && String(m.name) === name) hit = m; m = mc.getNextMarker(m); }
+    if (!hit) hit = mc.createMarker(start);
+    hit.name = name;
+    hit.comments = comments;
+    setEnd(hit, end);
+    return hit;
+  }
+
+
+  // Checks the layers already on track idx against the spans (after the trim they should
+  // sit back to back, one per question).
+  function checkRow(seq, idx, spans, frame) {
+    var half = frame / 2, cl = seq.videoTracks[idx].clips, problems = [], ok = 0, names = [];
+    for (var i = 0; i < spans.length; i++) {
+      var hit = null;
+      for (var j = 0; j < cl.numItems; j++) if (isAdjClip(cl[j]) && Math.abs(cl[j].start.seconds - spans[i].a) < half) hit = cl[j];
+      if (!hit) { problems.push(T.fmt(spans[i].a) + " " + spans[i].names[0] + ": no question layer starts here"); continue; }
+      ok++;
+      if (names.length < 5) names.push(T.fmt(hit.start.seconds) + "-" + T.fmt(hit.end.seconds) + " " + hit.name);
+    }
+    var holes = [];
+    for (j = 1; j < cl.numItems; j++) if (cl[j].start.seconds - cl[j - 1].end.seconds > half) holes.push(T.fmt(cl[j - 1].end.seconds) + "-" + T.fmt(cl[j].start.seconds));
+    var r = { track: "V" + (idx + 1), index: idx, placed: ok, of: spans.length, pieces: cl.numItems, holes: holes, problems: problems, sample: names };
+    if (problems.length) r.error = problems.length + " question layers missing on V" + (idx + 1) + "; " + problems.slice(0, 3).join("; ");
     return r;
+  }
+
+  // A row of adjustment layers, one per span, named after it, on video track index target
+  // (layers already there with the same start are reused). base: see placeLayer.
+  function addLayers(seq, spans, frame, target, base) {
+    var item = findAdjustmentItem(), placed = 0, problems = [], names = [];
+    if (!item) return { error: "no Adjustment Layer in the project (make one: File > New > Adjustment Layer, then run again)" };
+    if (target < 0 || target >= seq.videoTracks.numTracks) return { error: "no empty unlocked video track for the layers (add one and run again)" };
+    for (var i = 0; i < spans.length; i++) {
+      var title = cleanName(spans[i].names ? spans[i].names[0] : spans[i].name);
+      var r = placeLayer(seq.videoTracks[target], item, spans[i].a, spans[i].b, title, base, frame);
+      if (r.error) problems.push(r.error);
+      else { placed++; if (names.length < 5) names.push(T.fmt(spans[i].a) + "-" + T.fmt(spans[i].b) + " " + title); }
+    }
+    var res = { track: "V" + (target + 1), index: target, placed: placed, of: spans.length, problems: problems, sample: names };
+    if (problems.length) res.error = placed + " of " + spans.length + " placed on V" + (target + 1) + "; " + problems.slice(0, 3).join("; ");
+    return res;
   }
 
   function markerList(seq) {
@@ -639,45 +881,163 @@
     if (Math.abs(m.end.seconds - sec) >= 0.02) throw new Error("end could not be set (reads " + T.fmt(m.end.seconds) + ")");
   }
 
+  // Questions -> Chapter markers, themes -> Segmentation markers (both on the sequence);
+  // small topics -> clip markers (TOPICS). In "layer" mode the question layers are placed
+  // here, carrying their topics, on the first empty unlocked track two above the footage
+  // (one track is kept free for Cut & raise to move the answers up into).
   function mark(seq, params) {
-    if (!T.isToolkitCopy(seq)) return T.fail("Markers only go on a TOOLKIT COPY. \"" + seq.name + "\" is not one.");
-    var want = [], before = markerList(seq).length, added = [], failed = [], q = params.questions || [], i;
-    // Question markers (one per interviewer question, a broad title, spanning all its answers)
-    // are Chapter markers; the small answer markers are Comment markers.
-    for (i = 0; i < q.length; i++) want.push({ start: q[i].start, end: q[i].end, topic: q[i].title, outline: q[i].comment, chapter: true });
-    for (i = 0; i < (params.answers || []).length; i++) want.push(params.answers[i]);
-    var fps = T.sequenceFps(seq) || 25;
+    if (!isCut(seq)) return T.fail("Markers only go on a Cut version. \"" + seq.name + "\" is not one.");
+    var fps = T.sequenceFps(seq) || 25, frame = 1 / fps, half = frame / 2, i, j;
+    function fr(x) { return Math.round(x * fps) / fps; }
+    var q = params.questions || [], th = params.themes || [], ans = params.answers || [];
+    var want = [], failed = [], wrong = [], before = markerList(seq).length;
+    for (i = 0; i < q.length; i++) want.push({ a: fr(q[i].start), b: fr(q[i].end), name: cleanName(q[i].title), comments: q[i].comment || q[i].title, type: "Chapter" });
+    for (i = 0; i < th.length; i++) want.push({ a: fr(th[i].start), b: fr(th[i].end), name: cleanName(th[i].title), comments: th[i].comment || th[i].title, type: "Segmentation" });
     for (i = 0; i < want.length; i++) {
       var w = want[i];
-      // Whole frames, so the marker sits exactly where Premiere shows it.
-      var a = Math.round(w.start * fps) / fps, b = Math.round(w.end * fps) / fps;
       try {
-        // A marker this skill already put here (same start and topic) is updated, not doubled.
-        var m = findMarker(seq, a, w.topic, w.chapter) || seq.markers.createMarker(a);
-        m.name = w.topic;
-        m.comments = w.outline;
-        setEnd(m, b);
-        if (w.chapter) m.setTypeAsChapter();
-        added.push({ start: a, end: b, name: w.topic, chapter: !!w.chapter });
-      } catch (e) {
-        failed.push({ start: T.fmt(a), name: w.topic, error: String(e) });
-      }
+        var m = findMarkerTyped(seq, w.a, w.name, w.type) || seq.markers.createMarker(w.a);
+        m.name = w.name; m.comments = w.comments; setEnd(m, w.b);
+        if (w.type === "Chapter") m.setTypeAsChapter(); else m.setTypeAsSegmentation();
+      } catch (e) { failed.push({ start: T.fmt(w.a), name: w.name, error: String(e) }); }
     }
-    // Read back: every marker must be there with its name, comment and end.
-    var now = markerList(seq), found = 0, wrong = [];
-    for (var j = 0; j < added.length; j++) {
+    var now = markerList(seq), seqOk = 0;
+    for (i = 0; i < want.length; i++) {
       var hit = null;
-      for (var k = 0; k < now.length; k++) {
-        if (Math.abs(now[k].start - added[j].start) < 0.02 && now[k].name === added[j].name && (now[k].type === "Chapter") === added[j].chapter) { hit = now[k]; break; }
-      }
-      if (!hit) { wrong.push({ name: added[j].name, problem: "not found after adding" }); continue; }
-      if (Math.abs(hit.end - added[j].end) > 0.05) wrong.push({ name: added[j].name, problem: "ends at " + T.fmt(hit.end) + " not " + T.fmt(added[j].end) });
-      else if (!hit.comments) wrong.push({ name: added[j].name, problem: "comment missing" });
-      else if (added[j].chapter && hit.type !== "Chapter") wrong.push({ name: added[j].name, problem: "type is " + hit.type + ", not Chapter" });
-      else found++;
+      for (j = 0; j < now.length; j++) if (Math.abs(now[j].start - want[i].a) < 0.02 && now[j].name === want[i].name && now[j].type === want[i].type) hit = now[j];
+      if (!hit) wrong.push({ name: want[i].name, problem: want[i].type + " marker not found after adding" });
+      else if (Math.abs(hit.end - want[i].b) > 0.05) wrong.push({ name: want[i].name, problem: "ends at " + T.fmt(hit.end) + " not " + T.fmt(want[i].b) });
+      else seqOk++;
     }
-    var text = found + " of " + want.length + " markers (" + q.length + " question, " + (want.length - q.length) + " answer) added to \"" + seq.name + "\" and checked" + (wrong.length || failed.length ? "; see the list below." : ".");
-    var details = { sequence: String(seq.name), markersBefore: before, markersAfter: now.length, checked: found, questions: q.length, failed: failed, wrong: wrong };
-    return found === want.length ? T.ok(text, details) : T.fail(text, details);
+
+    // Topics
+    var topicRes = { mode: TOPICS, put: 0 };
+    if (TOPICS === "layer") {
+      var item = findAdjustmentItem();
+      if (!item) return T.fail("No Adjustment Layer in the project (make one: File > New > Adjustment Layer, then run again).");
+      var qt = questionLayerTrack(seq), base = null;
+      if (qt < 0) {
+        var from = topFootageTrack(seq) + 2;
+        qt = emptyTrackFrom(seq, from);
+        if (qt < 0) {
+          var addErr = ensureVideoTrack(seq, Math.max(from, seq.videoTracks.numTracks));
+          if (addErr) return T.fail("Question layers: " + addErr + ".");
+          qt = emptyTrackFrom(seq, from);
+        }
+      }
+      if (qt < 0) return T.fail("No empty unlocked video track two above the footage for the question layers (add one and run again).");
+      // Reuse the base of layers already here (re-run), else a free one.
+      var cl = seq.videoTracks[qt].clips;
+      // (only a base this skill chose: at or above 100000 s, far from the item's normal 3600 s)
+      for (j = 0; j < cl.numItems && base === null; j++) if (isAdjClip(cl[j]) && cl[j].inPoint.seconds - cl[j].start.seconds >= 99999) base = cl[j].inPoint.seconds - cl[j].start.seconds;
+      if (base === null) base = freeBase(item, T.sec(seq.end));
+      if (base === null) return T.fail("No free source range on the Adjustment Layer item for this sequence's topic markers.");
+      var spans = [];
+      for (i = 0; i < q.length; i++) spans.push({ a: fr(q[i].start), b: fr(q[i].end), name: q[i].title });
+      var lay = addLayers(seq, spans, frame, qt, base);
+      topicRes.layers = lay; topicRes.track = "V" + (qt + 1); topicRes.base = base;
+      if (lay.error) failed.push({ name: "question layers", error: lay.error });
+      var mc = item.getMarkers();
+      for (i = 0; i < ans.length; i++) {
+        try { putMarker(mc, base + fr(ans[i].start), base + fr(ans[i].end), cleanName(ans[i].topic), ans[i].outline || ans[i].topic); topicRes.put++; }
+        catch (e2) { failed.push({ start: T.fmt(ans[i].start), name: ans[i].topic, error: String(e2) }); }
+      }
+    } else {
+      for (i = 0; i < ans.length; i++) {
+        var a0 = fr(ans[i].start), clip = footageClipAt(seq, a0 + half);
+        if (!clip) { failed.push({ start: T.fmt(a0), name: ans[i].topic, error: "no footage on the video tracks there" }); continue; }
+        var src = clip.inPoint.seconds + (a0 - clip.start.seconds), len = Math.min(fr(ans[i].end), clip.end.seconds) - a0;
+        try { putMarker(clip.projectItem.getMarkers(), src, src + len, cleanName(ans[i].topic), ans[i].outline || ans[i].topic); topicRes.put++; }
+        catch (e3) { failed.push({ start: T.fmt(a0), name: ans[i].topic, error: String(e3) }); }
+      }
+    }
+    // Read the topics back the way Cut & raise will.
+    var back = readTopics(seq, frame).list, topicOk = 0;
+    for (i = 0; i < ans.length; i++) {
+      var aa = fr(ans[i].start), nm = cleanName(ans[i].topic), got = false;
+      for (j = 0; j < back.length; j++) if (Math.abs(back[j].a - aa) < half && back[j].name === nm) got = true;
+      if (got) topicOk++; else wrong.push({ name: nm, problem: "topic marker at " + T.fmt(aa) + " not read back" });
+    }
+    var ok = !failed.length && !wrong.length;
+    var text = q.length + " question and " + th.length + " theme markers on \"" + seq.name + "\" (" + seqOk + " checked); " + topicOk + " of " + ans.length + " topic markers " +
+      (TOPICS === "layer" ? "on the question layers (" + topicRes.track + ")" : "on the clips on the top video track") + " read back" + (ok ? "." : "; see the list below.");
+    var details = { sequence: String(seq.name), markersBefore: before, markersAfter: markerList(seq).length, checked: seqOk + topicOk, questions: q.length, themes: th.length,
+      topics: topicRes, failed: failed, wrong: wrong };
+    return ok ? T.ok(text, details) : T.fail(text, details);
+  }
+
+  // Removes the one test marker named "Claude clip-marker test" from a project item (the
+  // bridge cannot delete clip markers). Nothing else is touched.
+  function untest(params) {
+    var found = null;
+    function walk(bin) {
+      for (var i = 0; i < bin.children.numItems && !found; i++) {
+        var it = bin.children[i];
+        if (it.type === ProjectItemType.BIN) walk(it);
+        else if (String(it.nodeId) === String(params.item)) found = it;
+      }
+    }
+    walk(app.project.rootItem);
+    if (!found) return T.fail("Item " + params.item + " not found.");
+    var mc = found.getMarkers(), m = mc.getFirstMarker(), gone = 0, left = [];
+    while (m) {
+      var next = mc.getNextMarker(m);
+      if (String(m.name) === "Claude clip-marker test") { mc.deleteMarker(m); gone++; }
+      m = next;
+    }
+    m = mc.getFirstMarker();
+    while (m) { left.push(T.fmt(m.start.seconds) + " " + m.name); m = mc.getNextMarker(m); }
+    return T.ok(gone + " test marker(s) removed from " + found.name + ".", { left: left });
+  }
+
+  // Removes the topic markers a failed test put on the Adjustment Layer item at
+  // base .. base + span (only markers in that range whose name is in params.names).
+  function unbase(params) {
+    var item = findAdjustmentItem(), names = {}, gone = 0, kept = 0;
+    if (!item) return T.fail("No adjustment layer item.");
+    for (var i = 0; i < (params.names || []).length; i++) names[params.names[i]] = true;
+    var mc = item.getMarkers(), m = mc.getFirstMarker();
+    while (m) {
+      var next = mc.getNextMarker(m);
+      if (m.start.seconds >= params.base - 1 && m.start.seconds <= params.base + params.span && names[String(m.name)]) { mc.deleteMarker(m); gone++; } else kept++;
+      m = next;
+    }
+    return T.ok(gone + " test topic marker(s) removed from \"" + item.name + "\"; " + kept + " other marker(s) on it left alone.", { item: String(item.name), nodeId: String(item.nodeId) });
+  }
+
+  // On a Cut version: places one adjustment layer on track params.track (index) at a..b,
+  // then tries to move its source start to params.src: TrackItem.inPoint, then QE slip.
+  function layerprobe(seq, params) {
+    if (!isCut(seq)) return T.fail("Only on a Cut version.");
+    var fps = T.sequenceFps(seq) || 25, frame = 1 / fps, item = findAdjustmentItem(), tr = seq.videoTracks[params.track], d = {};
+    var r = placeLayer(tr, item, params.a, params.b, "Layer probe", null, frame);
+    if (r.error) return T.fail(r.error);
+    var got = r.item;
+    d.inBefore = got.inPoint.seconds; d.outBefore = got.outPoint.seconds;
+    try { var t = new Time(); t.seconds = params.src; got.inPoint = t; d.setInPoint = "no error"; } catch (e) { d.setInPoint = String(e); }
+    d.inAfterSet = got.inPoint.seconds; d.startAfterSet = got.start.seconds; d.endAfterSet = got.end.seconds;
+    if (Math.abs(got.inPoint.seconds - params.src) > frame) {
+      app.enableQE();
+      var qi = qeItemAt(seq, qe.project.getActiveSequence(), "V", params.track, params.a, frame);
+      if (qi) {
+        var tm = new Time(), tpf = parseFloat(seq.timebase);
+        tm.ticks = String(Math.round((params.src - got.inPoint.seconds) * T.TICKS_PER_SECOND / tpf) * tpf);
+        var off = tm.getFormatted(seq.getSettings().videoFrameRate, seq.getSettings().videoDisplayFormat);
+        d.slipOffset = off;
+        try { d.slipReturned = String(qi.slip(off, false)); } catch (e2) { d.slipError = String(e2); }
+        for (var j = 0; j < tr.clips.numItems; j++) if (Math.abs(tr.clips[j].start.seconds - params.a) < frame) got = tr.clips[j];
+        d.inAfterSlip = got.inPoint.seconds; d.startAfterSlip = got.start.seconds; d.endAfterSlip = got.end.seconds;
+      } else d.slipError = "QE item not found";
+    }
+    return T.ok("Layer probe done.", d);
+  }
+
+  function findMarkerTyped(seq, start, name, type) {
+    var m = seq.markers.getFirstMarker();
+    while (m) {
+      if (Math.abs(m.start.seconds - start) < 0.02 && String(m.name) === name && String(m.type) === type) return m;
+      m = seq.markers.getNextMarker(m);
+    }
+    return null;
   }
 }());

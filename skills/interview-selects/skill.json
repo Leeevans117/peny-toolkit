@@ -1,7 +1,7 @@
 {
   "id": "interview-selects",
   "name": "Interviews",
-  "description": "Transcribes the active interview sequence on this Mac (whisper), finds each answer with the local AI model (Ollama, no internet), groups the answers by the interviewer's question, and puts them on a safe copy: one Chapter marker per question (a broad title, spanning the whole answer) and one Comment marker per small topic. About 20 minutes for an hour of interview. Then Cut, raise & trim answers raises each question's answer one track, removes the questions and dead bits in between and puts an adjustment layer named after each question over its answers (copy only).",
+  "description": "Transcribes the active interview sequence on this Mac (whisper), finds each answer with the local AI model (Ollama, no internet), groups the answers by the interviewer's question and the questions into broad themes, and puts them on a copy called \"<sequence> Cut version\": a Chapter marker per question, a Segmentation marker per theme, and the small topics as clip markers on the question adjustment layers (your footage stays clean). About 20 minutes for an hour of interview. Then Cut, raise & trim answers (Cut versions only) raises each question's answer one track, removes the questions and dead bits in between, keeps one adjustment layer per question and adds a row above with one layer per theme.",
   "order": 6,
   "icon": "icon.svg",
   "tint": [
@@ -27,13 +27,13 @@
       "id": "find",
       "label": "Find answers and add markers",
       "style": "primary",
-      "confirm": "Transcribe this sequence and find the answers on this Mac? It takes about 20 minutes for an hour of interview. A safe copy of the sequence is made and the markers go on the copy; the original is not changed."
+      "confirm": "Transcribe this sequence and find the answers on this Mac? It takes about 20 minutes for an hour of interview. A copy called \"<sequence> Cut version\" is made and the markers and question layers go on it; the original is not changed."
     },
     {
       "id": "cutraise",
       "label": "Cut, raise & trim answers",
       "style": "secondary",
-      "confirm": "On this TOOLKIT COPY: cut at every question's answer, move each answer up one track, remove everything between the answers (questions, crew chat, pauses) so the answers run back to back, move the markers with them and put an adjustment layer named after each question over its answers? Links are kept. Only the TOOLKIT COPY changes; no footage is deleted and nothing is saved."
+      "confirm": "On this Cut version: cut at every question's answer, move each answer up one track, remove everything between the answers (questions, crew chat, pauses) so the answers run back to back, and add a row of theme layers above the question layers? Links are kept. Only the Cut version changes; no footage is deleted and nothing is saved."
     },
     {
       "id": "cancel",

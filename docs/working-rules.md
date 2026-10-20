@@ -19,7 +19,8 @@ How Claude (and anyone else) works on Lee's Premiere projects with this toolkit.
 - Never rename clips, never delete footage, proxies or project items.
 - Save the project only when Lee agrees.
 - Anything that edits a timeline runs only on a sequence whose name ends
-  `TOOLKIT COPY` (made by **Make safe copy**).
+  `TOOLKIT COPY` (made by **Make safe copy**). Interviews uses its own copy,
+  `<sequence> Cut version`, and its Cut, raise & trim runs only on those (Lee, 20 Oct 2026).
 - Never trust a "success" return from Premiere: read the result back and report
   what actually happened.
 - Only one ExtendScript call at a time.
