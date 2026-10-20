@@ -65,13 +65,14 @@ module.exports = function (api) {
   var jobs = api.jobs;
   var pool = null;
 
-  // RED proxies use --primaryDev ("Export Ungraded RWG/Log3G10"): the same flat, ungraded
-  // look Premiere shows for the raw R3D. Without it REDline applies the clip's IPP2
-  // output transform (a graded Rec.709 look), so toggling proxies changed the picture
-  // as if a LUT had been added (Lee, 2 Oct 2026).
-  // --useMeta: develop at the clip's shot white balance/tint/ISO as Premiere does. Without it
-  // REDline uses its defaults (5600K, tint 0, ISO 320), so a 4800K clip's proxy came out warm
-  // (Lee, 2 Oct 2026). --metaIgnoreFrameGuide keeps in-camera frame guides from cropping.
+  // RED proxies use --useMeta: REDline develops each clip with its own recorded colour
+  // space, gamma, white balance/tint and ISO, as Premiere does for the R3D. Log clips
+  // (Komodo, V-Raptor: Log3G10/RWG) come out log; clips recorded with a display gamma
+  // (the DSMC2 Gemini clips: BT.1886) come out graded, as Premiere shows them.
+  // Without --useMeta REDline uses its defaults (IPP2 Rec.709 look, 5600K, ISO 320): the
+  // "LUT" and the warm cast Lee saw (2 Oct 2026). --primaryDev (always log) was used
+  // from 2 Oct; it matched the log cameras but made Gemini proxies flat (19 Oct 2026).
+  // --metaIgnoreFrameGuide keeps in-camera frame guides from cropping.
   // REDline renders to a ".redline-part.mov" first (no "_Proxy." in the name, so lookups
   // never take it for a proxy); red-proxy-finish.sh then makes the real proxy: levels
   // pre-expanded against Premiere's legal-range squeeze of RED proxies, and the camera
@@ -87,7 +88,7 @@ module.exports = function (api) {
       return "rm -f " + q(partFile) + " && " +
         q(redline) + " --i " + q(entry.mediaPath) + " --o " + q(part) +
         " --outDir " + q(dir) + " --format 201 --res 4 --resizeX " + SCALE_W +
-        " --resizeY " + SCALE_H + " --fit 3 --primaryDev --useMeta --metaIgnoreFrameGuide" +
+        " --resizeY " + SCALE_H + " --fit 3 --useMeta --metaIgnoreFrameGuide" +
         " && /bin/bash " + q(path.join(__dirname, "red-proxy-finish.sh")) + " " + q(ffmpeg) + " " +
         q(partFile) + " " + q(entry.outputPath);
     }
