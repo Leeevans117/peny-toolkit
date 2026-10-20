@@ -253,7 +253,9 @@ module.exports = function (api) {
         try { fs.mkdirSync(path.dirname(r.outputPath), { recursive: true }); } catch (e) {}
         var cmd = encodeCommand(r);
         if (!cmd) { r.reason = "no " + (extOf(r.mediaPath) === "r3d" ? "REDline or ffmpeg" : "ffmpeg") + " found"; noCmd.push(r); return; }
+        var isR3d = extOf(r.mediaPath) === "r3d";
         pool.add({ key: r.outputPath, cmd: cmd, outputPath: r.outputPath, label: r.binPath + "/" + r.name,
+          partPath: isR3d ? path.join(path.dirname(r.outputPath), r.nameNoExt + ".redline-part.mov") : null,
           weight: sourceBytes(r.mediaPath), kind: extOf(r.mediaPath) === "r3d" ? "r3d" : "ffmpeg",
           group: r.camera });
       });

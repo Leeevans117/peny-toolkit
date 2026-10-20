@@ -8,8 +8,8 @@
  *    per frame).
  *  - completion = the process exiting, never the output file existing (ffmpeg creates
  *    the file at the start, which over-filled the pool).
- *  - kill = pkill -P <shell pid> then SIGKILL the shell; killing the shell alone can
- *    orphan ffmpeg/REDline.
+ *  - kill = SIGKILL every process under the shell (children first), then the shell;
+ *    killing the shell alone orphans ffmpeg/REDline.
  *  - stall: after a 5 min grace, an output file that has not grown in 10 min is a hung
  *    job and is killed; 4 h is a hard backstop.
  *
@@ -410,10 +410,24 @@ JobPool.prototype._launch = function (job) {
   this._emitProgress("job-start");
 };
 
+// Every process under pid, children before parents. A RED render is a shell chain
+// (REDline, then red-proxy-finish.sh -> ffmpeg); an async "pkill -P" that ran after the
+// shell was killed found nothing, and a hung REDline ran on as an orphan (20 Oct 2026).
+function descendants(pid) {
+  var out = [];
+  try {
+    childProcess.execSync("pgrep -P " + pid, { encoding: "utf-8" }).split("\n").forEach(function (s) {
+      var c = parseInt(s, 10);
+      if (c) out = out.concat(descendants(c), [c]);
+    });
+  } catch (e) {} // pgrep exits 1 when there are none
+  return out;
+}
+
 JobPool.prototype._kill = function (job, reason) {
   job.killReason = reason;
   try {
-    if (job.child && job.child.pid) childProcess.exec("pkill -P " + job.child.pid);
+    if (job.child && job.child.pid) descendants(job.child.pid).forEach(function (pid) { try { process.kill(pid, "SIGKILL"); } catch (e) {} });
     if (job.child) job.child.kill("SIGKILL");
   } catch (e) {
     this.log("Could not kill " + job.label + ": " + e.message, "err");
@@ -428,7 +442,9 @@ JobPool.prototype._watch = function () {
       self.log("Timeout, killing: " + job.label, "err");
       self._kill(job, "timed out after " + Math.round(self.opts.timeoutMs / 60000) + " min");
     } else if (job.outputPath && now - job.launchedAt >= self.opts.stallGraceMs && now - job.lastSizeCheckAt >= self.opts.stallCheckMs) {
+      // A RED render writes job.partPath first (the final file only appears at the end).
       var size = fileSize(job.outputPath);
+      if (size === -1 && job.partPath) size = fileSize(job.partPath);
       if (job.lastSize !== -1 && size === job.lastSize) {
         self.log("Stalled (no output growth), killing: " + job.label + " at " + size + " bytes", "err");
         self._kill(job, "stalled: output stuck at " + size + " bytes");
