@@ -118,23 +118,55 @@ module.exports = function (api) {
     return index;
   }
 
+  // Seconds of video in a file by ffprobe, or null when it cannot be read (offline, R3D).
+  var durationCache = {};
+  function mediaSeconds(file) {
+    if (file in durationCache) return durationCache[file];
+    var d = null, ffmpeg = firstExisting(FFMPEG);
+    if (ffmpeg && extOf(file) !== "r3d") {
+      try {
+        var out = require("child_process").execFileSync(path.join(path.dirname(ffmpeg), "ffprobe"),
+          ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file], { encoding: "utf-8", timeout: 20000 });
+        d = parseFloat(out); if (!isFinite(d)) d = null;
+      } catch (e) { d = null; }
+    }
+    return (durationCache[file] = d);
+  }
+  // A proxy found away from the clip's own folder only counts if it is as long as the clip:
+  // two different files can share a name (Les Gets: A_0044C902...CANON.mp4 in the shoot
+  // root, 68.6 s, and another in YouthCamp/Day2/R5, 12.7 s), and the old lookup gave the
+  // root clip the other one's proxy, which Premiere then refused (20 Oct 2026). R3D clip
+  // names carry the camera's clip ID and cannot be probed here, so they are not checked.
+  function sameLength(proxyFile, mediaPath) {
+    if (!mediaPath) return true;
+    var a = mediaSeconds(mediaPath), b = mediaSeconds(proxyFile);
+    if (a === null || b === null) return true;
+    return Math.abs(a - b) <= Math.max(0.5, a * 0.01);
+  }
+
   // Same lookup order as the original findExistingProxyFile + resolveProxyFromGlobalIndex,
-  // but never climbing above the proxy root.
-  function resolveProxy(root, binPath, nameNoExt, index) {
+  // but never climbing above the proxy root. Matches outside the clip's own folder must
+  // pass sameLength().
+  function resolveProxy(root, binPath, nameNoExt, index, mediaPath) {
     var prefix = (nameNoExt + PROXY_INFIX + ".").toLowerCase();
     var dir = path.join(root, binPath);
     for (var level = 0; level <= LOOKUP_LEVELS_UP; level++) {
       var names = [];
       try { names = fs.readdirSync(dir); } catch (e) {}
-      for (var i = 0; i < names.length; i++) if (names[i].toLowerCase().indexOf(prefix) === 0) return path.join(dir, names[i]);
+      for (var i = 0; i < names.length; i++) {
+        if (names[i].toLowerCase().indexOf(prefix) !== 0) continue;
+        var hit = path.join(dir, names[i]);
+        if (level === 0 || sameLength(hit, mediaPath)) return hit;
+      }
       if (path.resolve(dir) === path.resolve(root)) break;
       dir = path.dirname(dir);
     }
     var c = index[nameNoExt.toLowerCase()];
     if (!c || !c.length) return null;
-    var want = path.join(root, binPath), best = c[0], score = -1;
-    c.forEach(function (x) { var s = commonPrefix(x.dir, want); if (s > score) { score = s; best = x; } });
-    return best.file;
+    var want = path.join(root, binPath);
+    var ranked = c.slice().sort(function (x, y) { return commonPrefix(y.dir, want) - commonPrefix(x.dir, want); });
+    for (var k = 0; k < ranked.length; k++) if (sameLength(ranked[k].file, mediaPath)) return ranked[k].file;
+    return null;
   }
 
   function checkRoot(params) {
@@ -164,7 +196,7 @@ module.exports = function (api) {
         rec.reason = "proxy attached: " + it.proxyPath; p.done.push(rec); return;
       }
       var nameNoExt = stripExt(it.name);
-      var found = resolveProxy(root, it.binPath, nameNoExt, index);
+      var found = resolveProxy(root, it.binPath, nameNoExt, index, it.mediaPath);
       if (found) {
         if (jobs.isCompleteMov(found)) { rec.reason = "proxy on disk: " + found; p.done.push(rec); }
         else { rec.reason = "incomplete proxy on disk, left alone (delete it by hand to re-render): " + found; p.skipped.push(rec); }
@@ -305,7 +337,7 @@ module.exports = function (api) {
       if (!res.ok) return res;
       var index = indexProxies(c.root), pairs = [], missing = [], incomplete = [], already = [];
       res.details.items.forEach(function (it) {
-        var found = resolveProxy(c.root, it.binPath, stripExt(it.name), index);
+        var found = resolveProxy(c.root, it.binPath, stripExt(it.name), index, it.mediaPath);
         if (!found) { missing.push({ name: it.name, bin: it.binPath }); return; }
         if (!jobs.isCompleteMov(found)) { incomplete.push({ name: it.name, bin: it.binPath, file: found }); return; }
         if (it.hasProxy && it.proxyPath && path.resolve(it.proxyPath) === path.resolve(found)) { already.push({ name: it.name, file: found }); return; }
