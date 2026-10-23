@@ -1,0 +1,53 @@
+{
+  "id": "selects-sequences",
+  "name": "Selects Setup",
+  "description": "Builds the day Selects sequences from the footage bins. Scan footage reads the footage bin (select it in the Project panel, e.g. 02 FOOTAGE/LakePlacid, or type its path): its Day bins and the camera/source bins in each day. Set the block order, the label (marker name) and colour of each block, and which day a clip in two days belongs to. Build makes, per day, \"<Project> Day NN_Selects UNCUT\" (every clip of the day, one block per source back to back, a gap between blocks, a marker over each block; recorder wavs on their own audio track) and an empty \"<Project> Day NN_Selects\", files them in 01 SEQUENCES/Selects and Selects/UNCUT, and checks every clip. Existing sequences are left alone; clips are never renamed; nothing is saved. Don't click in Premiere while it builds.",
+  "order": 9,
+  "icon": "icon.svg",
+  "tint": [
+    "#1c1c1e",
+    "#000000"
+  ],
+  "entry": "premiere.jsx",
+  "panel": "panel.js",
+  "inputs": [
+    {
+      "id": "bin",
+      "label": "Footage bin",
+      "type": "segment",
+      "options": [
+        { "label": "Selected bin", "value": "" },
+        { "label": "Bin path", "text": true, "placeholder": "e.g. 02 FOOTAGE/LakePlacid" }
+      ]
+    },
+    {
+      "id": "project",
+      "label": "Name in the sequence names (optional)",
+      "placeholder": "e.g. Lake Placid; empty = the project file's name"
+    },
+    {
+      "id": "gap",
+      "label": "Gap between blocks, seconds (optional)",
+      "placeholder": "10"
+    }
+  ],
+  "actions": [
+    {
+      "id": "scan",
+      "label": "Scan footage",
+      "style": "secondary"
+    },
+    {
+      "id": "build",
+      "label": "Build Selects sequences",
+      "style": "primary",
+      "confirm": "Build the day Selects sequences with the blocks and choices shown? For each day a new \"Selects UNCUT\" sequence with every clip of that day and an empty \"Selects\" sequence are made and filed in 01 SEQUENCES/Selects. Existing sequences and clips are not changed and nothing is saved. Please don't click in Premiere until it says it has finished."
+    },
+    {
+      "id": "cancel",
+      "label": "Cancel",
+      "control": true,
+      "style": "danger"
+    }
+  ]
+}
