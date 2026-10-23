@@ -8,6 +8,9 @@
  *    themes (pipeline.js group, themes).
  * 6. premiere.jsx "copy": "<sequence> Cut version" (unless already on one), then "mark":
  *    question (Chapter) and theme (Segmentation) markers, topics as clip markers, read back.
+ * Remove ums & uhs (unum): steps 1-2 on the active sequence, then fillers.js finds the
+ * fillers (whisper on short clips, each checked twice, snapped to the sound) and
+ * premiere.jsx "unum" cuts them on a copy "<sequence> No ums"; fillers.csv lists them all.
  * Work files: /tmp/peny-toolkit/interview-selects/<sequence>-<time>/. Nothing is deleted. */
 var fs = require("fs");
 var path = require("path");
@@ -18,6 +21,7 @@ function BUNDLED(name) { return path.join(process.env.HOME || "", "Library", "Ap
 var http = require("http");
 var childProcess = require("child_process");
 var pipeline = require("./pipeline.js");
+var fillers = require("./fillers.js");
 
 var FFMPEG = [BUNDLED("ffmpeg"), "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"];
 var WHISPER = [BUNDLED("whisper-cli"), "/opt/homebrew/bin/whisper-cli", "/usr/local/bin/whisper-cli"];
@@ -291,6 +295,58 @@ module.exports = function (api) {
     });
   }
 
+  // Remove ums & uhs: the active sequence's sound -> fillers.js -> premiere.jsx "unum" on a
+  // "<sequence> No ums" copy. params.fillers = the words to remove (empty = the default list).
+  function unum(params) {
+    cancelled = false;
+    var ffmpeg = firstExisting(FFMPEG), whisper = firstExisting(WHISPER), missing = [];
+    if (!ffmpeg) missing.push("ffmpeg");
+    if (!whisper) missing.push("whisper-cli (brew install whisper-cpp)");
+    if (!inModelDir(WHISPER_MODEL)) missing.push(WHISPER_MODEL + " in " + MODEL_DIRS.join(" or "));
+    if (missing.length) return Promise.resolve({ ok: false, error: "Missing on this Mac: " + missing.join("; ") + "." });
+    var words = fillers.words(params.fillers), t0 = Date.now(), scan, dir, found;
+    function q(v) { return '"' + String(v).replace(/"/g, '""') + '"'; }
+    api.status("Reading the sequence's audio…");
+    return api.evalSkill({ action: "scan", track: params.track || "" }).then(function (r) {
+      if (!r.ok) throw { stop: r.error };
+      scan = r.details;
+      if (scan.sequence.indexOf("No ums") >= 0) throw { stop: "\"" + scan.sequence + "\" is already a \"No ums\" copy. Open the sequence it came from and run again." };
+      var safe = scan.sequence.replace(/[^A-Za-z0-9 _-]+/g, "").replace(/\s+/g, "_").slice(0, 60);
+      dir = path.join(WORK_ROOT, safe + "-ums-" + new Date().toISOString().replace(/[:.]/g, "-"));
+      fs.mkdirSync(dir, { recursive: true });
+      var gone = scan.segments.filter(function (s) { return !fs.existsSync(s.path); });
+      if (gone.length) throw { stop: gone.length + " audio file(s) are offline, e.g. " + gone[0].path };
+      api.log("Remove ums & uhs: \"" + scan.sequence + "\" " + fmt(scan.duration) + ", " + scan.segments.length + " audio piece(s) on " + scan.tracks.join(", ") + "; removing " + words.join(", ") + ".");
+      return buildAudio(ffmpeg, joinPieces(scan.segments), scan.duration, dir);
+    }).then(function (wav) {
+      return fillers.find(wav, scan.duration, dir, { ffmpeg: ffmpeg, whisper: whisper, model: inModelDir(WHISPER_MODEL) }, run, api.status, { words: words });
+    }).then(function (r) {
+      found = r;
+      fs.writeFileSync(path.join(dir, "fillers.json"), JSON.stringify(r, null, 1));
+      if (r.crashed.length) api.log("whisper stopped on " + r.crashed.length + " clip(s) (left out): " + r.crashed.slice(0, 5).join(", "));
+      if (!r.fillers.length) throw { stop: "No fillers found that can be cut safely (" + r.candidates + " possible, " + r.skipped.length + " skipped as unclear). Nothing was changed. List: " + path.join(dir, "fillers.json") };
+      api.status("Cutting " + r.fillers.length + " fillers on a copy of the sequence…");
+      return api.evalSkill({ action: "unum", sequenceId: scan.sequenceId, fillers: r.fillers.map(function (f) { return { word: f.word, start: f.start, end: f.end }; }) });
+    }).then(function (u) {
+      var d = u.details || {}, rows = ["status,word,original_time,new_time,seconds,note"];
+      (d.removed || []).forEach(function (x) { rows.push(["removed", x.word, x.originalTime, x.newTime, x.seconds, ""].map(q).join(",")); });
+      (d.skipped || []).forEach(function (x) { rows.push(["skipped", x.word, x.at, "", "", x.why].map(q).join(",")); });
+      found.skipped.forEach(function (x) { rows.push(["left in", x.word, fmt(x.t), "", "", x.why + ": " + x.context].map(q).join(",")); });
+      var csv = path.join(dir, "fillers.csv");
+      fs.writeFileSync(csv, rows.join("\n") + "\n");
+      var took = Math.round((Date.now() - t0) / 1000);
+      var summary = (u.ok ? "" : "Not all went well. ") + (u.summary || u.error).replace(/\.$/, "") + ". " + found.skipped.length + " more possible fillers left in (too close to a word or not clear). Took " + fmt(took) + ". List: " + csv;
+      api.status(summary);
+      return { ok: !!u.ok, summary: summary, error: summary, details: { sequence: d.sequence, removed: d.removedCount, removedSeconds: d.removedSeconds, skippedInPremiere: (d.skipped || []).length,
+        leftIn: found.skipped.length, candidates: found.candidates, clips: found.clips, crashed: found.crashed.length, durationBefore: d.durationBefore, durationAfter: d.durationAfter,
+        originalUnchanged: d.originalUnchanged, problems: d.problems, holes: d.holes, relinked: d.relinked, markersMoved: d.markersMoved, cutMarkers: d.cutMarkers, workFolder: dir, csv: csv, took: took } };
+    }).catch(function (e) {
+      var msg = e && e.stop ? e.stop : "Remove ums & uhs stopped: " + (e && e.message ? e.message : String(e));
+      api.status(msg);
+      return { ok: false, error: msg, details: { workFolder: dir || null } };
+    });
+  }
+
   function cancel() {
     cancelled = true;
     children.forEach(function (c) { try { c.kill(); } catch (e) {} });
@@ -307,5 +363,5 @@ module.exports = function (api) {
     return api.evalSkill(p).then(function (r) { api.status(r.ok ? r.summary : r.error); return r; });
   }
 
-  return { actions: { find: find, cutraise: cutraise, cancel: cancel }, busy: function () { return children.length ? children.length + " child process(es)" : null; } };
+  return { actions: { find: find, cutraise: cutraise, unum: unum, cancel: cancel }, busy: function () { return children.length ? children.length + " child process(es)" : null; } };
 };

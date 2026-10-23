@@ -1,7 +1,7 @@
 {
   "id": "interview-selects",
   "name": "Interviews",
-  "description": "Transcribes the active interview sequence on this Mac (whisper), finds each answer with the local AI model (Ollama, no internet), groups the answers by the interviewer's question and the questions into broad themes, and puts them on a copy called \"<sequence> Cut version\": a Chapter marker per question, a Segmentation marker per theme, and the small topics as clip markers on the clip on the top video track (they belong to that footage, so they also show in other sequences that use it). About 20 minutes for an hour of interview. Then Cut, raise & trim answers (Cut versions only) raises each question's answer one track, removes the questions and dead bits in between, puts one adjustment layer per question over the answers and a row above with one layer per theme.",
+  "description": "Transcribes the active interview sequence on this Mac (whisper), finds each answer with the local AI model (Ollama, no internet), groups the answers by the interviewer's question and the questions into broad themes, and puts them on a copy called \"<sequence> Cut version\": a Chapter marker per question, a Segmentation marker per theme, and the small topics as clip markers on the clip on the top video track (they belong to that footage, so they also show in other sequences that use it). About 20 minutes for an hour of interview. Then Cut, raise & trim answers (Cut versions only) raises each question's answer one track, removes the questions and dead bits in between, puts one adjustment layer per question over the answers and a row above with one layer per theme. Remove ums & uhs finds the filler words (um, uh, er, erm, ah, hmm) with whisper on this Mac, checks each one twice and cuts it from every track of a copy called \"<sequence> No ums\" (picture and sound stay in sync, links kept), with a marker at each cut and a list of them all; fillers said straight into a word are left in.",
   "order": 6,
   "icon": "icon.svg",
   "tint": [
@@ -20,6 +20,11 @@
       "id": "track",
       "label": "Audio track (optional)",
       "placeholder": "e.g. A1; empty = all unmuted tracks"
+    },
+    {
+      "id": "fillers",
+      "label": "Fillers to remove (optional)",
+      "placeholder": "um, umm, uh, uhh, er, erm, ah, hmm"
     }
   ],
   "actions": [
@@ -34,6 +39,12 @@
       "label": "Cut, raise & trim answers",
       "style": "secondary",
       "confirm": "On this Cut version: cut at every question's answer, move each answer up one track, remove everything between the answers (questions, crew chat, pauses) so the answers run back to back, and add a row of theme layers above the question layers? Links are kept. Only the Cut version changes; no footage is deleted and nothing is saved."
+    },
+    {
+      "id": "unum",
+      "label": "Remove ums & uhs",
+      "style": "secondary",
+      "confirm": "Find the ums and uhs in this sequence and cut them on a copy called \"<sequence> No ums\"? It takes about 12 minutes for an hour of interview. Every track is cut at the same place so picture and sound stay in sync; links are kept, each cut gets a marker and the list goes in a CSV. The original is not changed, no footage is deleted and nothing is saved."
     },
     {
       "id": "cancel",

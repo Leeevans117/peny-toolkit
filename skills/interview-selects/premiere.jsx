@@ -8,6 +8,10 @@
 //   "cutraise" - on a Cut version only: cuts at each question's answer, raises it one track,
 //             removes everything between the answers, then a row of adjustment layers named
 //             after the questions and a row above it named after the themes.
+//   "unum"  - "Remove ums & uhs": duplicates the active sequence (or Cut version) as
+//             "<name> No ums", opens it and extracts each filler span (panel.js finds them)
+//             from every track, back to front, like the trim; markers move, links are
+//             restored and checked, and a marker marks each cut.
 //   "probe", "dump" - read-only checks used through the test hook (jsxAction).
 (function () {
   var T = PenyToolkit;
@@ -18,6 +22,7 @@
     var action = params.action || "scan";
     if (action === "scan") return scan(seq, params);
     if (action === "copy") return copy(seq);
+    if (action === "unum") return unum(seq, params);
     if (action === "mark") return mark(seq, params);
     if (action === "probe") return probe(seq, params);
     if (action === "dump") return T.ok("Pieces " + params.a + "-" + params.b, { pieces: around(seq, params.a, params.b) });
@@ -120,8 +125,9 @@
   // Duplicates seq (Sequence.clone, the way Make safe copy does), names the new sequence
   // "<name> Cut version" ("... Cut version 2" if taken), checks the original did not change
   // and opens the copy. Only the new sequence is named; no clip is renamed.
-  function copy(seq) {
-    if (isCut(seq)) return T.ok("\"" + seq.name + "\" is already a Cut version; markers go on it.", { copyName: String(seq.name), copyId: String(seq.sequenceID), made: false });
+  function copy(seq, suffix) {
+    suffix = suffix || CUT;
+    if (suffix === CUT && isCut(seq)) return T.ok("\"" + seq.name + "\" is already a Cut version; markers go on it.", { copyName: String(seq.name), copyId: String(seq.sequenceID), made: false });
     var originalName = String(seq.name), originalId = String(seq.sequenceID), before = {}, list = T.sequenceList(), i;
     for (i = 0; i < list.length; i++) before[String(list[i].sequenceID)] = true;
     var printBefore = T.fingerprint(seq);
@@ -133,8 +139,8 @@
       if (!created) $.sleep(250);
     }
     if (!created) return T.fail("Sequence.clone() did not create a new sequence (checked for 5 s).");
-    var wanted = originalName + " " + CUT;
-    for (var n = 2; T.sequenceNameExists(wanted) && n < 100; n++) wanted = originalName + " " + CUT + " " + n;
+    var wanted = originalName + " " + suffix;
+    for (var n = 2; T.sequenceNameExists(wanted) && n < 100; n++) wanted = originalName + " " + suffix + " " + n;
     created.name = wanted;
     if (String(created.name) !== wanted && created.projectItem) created.projectItem.name = wanted;
     if (String(created.name) !== wanted) return T.fail("The copy was made as \"" + created.name + "\" but could not be named \"" + wanted + "\".");
@@ -144,8 +150,93 @@
     var active = T.activeSequence(), isActive = !!(active && String(active.sequenceID) === String(created.sequenceID));
     var d = { copyName: wanted, copyId: String(created.sequenceID), originalName: originalName, originalUnchanged: unchanged, copyIsActive: isActive, made: true };
     if (!unchanged) return T.fail("Copy made, but the original sequence no longer matches its fingerprint. Check it before going on.", d);
-    if (!isActive) return T.fail("The copy \"" + wanted + "\" was made but is not the active sequence, so no markers were added. Open it and run again.", d);
+    if (!isActive) return T.fail("The copy \"" + wanted + "\" was made but is not the active sequence, so nothing was changed on it. Open it and run again.", d);
     return T.ok("Created \"" + wanted + "\" and opened it; the original is unchanged.", d);
+  }
+
+  // ---- Remove ums & uhs ----
+  var NOUMS = "No ums";
+  function isNoUms(seq) { return String(seq.name).indexOf(NOUMS) >= 0; }
+
+  // params.fillers: [{ word, start, end }] in sequence seconds (found by panel.js on this
+  // sequence's sound). Each is snapped to frames; fillers that would cut through an edit,
+  // or leave less than 3 frames of a clip, are skipped. The copy is made only after the
+  // checks that need no change, so a refused run leaves nothing behind.
+  function unum(seq, params) {
+    if (params.sequenceId && String(seq.sequenceID) !== String(params.sequenceId)) return T.fail("The active sequence changed while the fillers were being found (now \"" + seq.name + "\"). Open the interview sequence again and run again; nothing was changed.");
+    if (isNoUms(seq)) return T.fail("\"" + seq.name + "\" is already a \"" + NOUMS + "\" copy. Open the sequence it came from and run again.");
+    var fps = T.sequenceFps(seq) || 25, frame = 1 / fps, half = frame / 2, i, j, list = params.fillers || [];
+    if (!list.length) return T.fail("No fillers to remove.");
+    function locked(tracks) {
+      for (var t = 0; t < tracks.numTracks; t++) if (tracks[t].clips.numItems && trackLocked(tracks[t])) return true;
+      return false;
+    }
+    if (locked(seq.videoTracks) || locked(seq.audioTracks)) return T.fail("A track with clips on it is locked; the cuts would put it out of sync. Unlock it and run again.");
+    // Spans in whole frames, joined when less than 3 frames apart.
+    var spans = [], skipped = [];
+    for (i = 0; i < list.length; i++) {
+      var a = Math.round(list[i].start * fps), b = Math.round(list[i].end * fps);
+      if (b - a < 1) { skipped.push({ at: T.fmt(list[i].start), word: list[i].word, why: "shorter than a frame" }); continue; }
+      spans.push({ a: a, b: b, words: [list[i].word], at: [list[i].start] });
+    }
+    spans.sort(function (x, y) { return x.a - y.a; });
+    var joined = [];
+    for (i = 0; i < spans.length; i++) {
+      var p = joined[joined.length - 1];
+      if (p && spans[i].a - p.b < 3) { p.b = Math.max(p.b, spans[i].b); p.words = p.words.concat(spans[i].words); p.at = p.at.concat(spans[i].at); }
+      else joined.push(spans[i]);
+    }
+    // Edits: no clip may start or end inside a span, or within 3 frames of it (a sliver).
+    var pieces = allPieces(seq), cuts = [];
+    for (i = 0; i < joined.length; i++) {
+      var sp = joined[i], why = null;
+      for (j = 0; j < pieces.length && !why; j++) {
+        var ca = Math.round(pieces[j].a * fps), cb = Math.round(pieces[j].b * fps);
+        if (cb <= sp.a - 3 || ca >= sp.b + 3) continue;
+        if ((ca > sp.a && ca < sp.b) || (cb > sp.a && cb < sp.b)) why = "an edit on " + pieces[j].track + " is inside it";
+        else if ((ca > sp.a - 3 && ca < sp.a) || (cb > sp.b && cb < sp.b + 3)) why = "less than 3 frames from an edit on " + pieces[j].track;
+      }
+      if (why) { skipped.push({ at: T.fmt(sp.at[0]), word: sp.words.join("+"), why: why }); continue; }
+      cuts.push({ a: sp.a / fps, b: sp.b / fps, words: sp.words, at: sp.at });
+    }
+    if (!cuts.length) return T.fail("None of the " + list.length + " fillers could be cut safely; nothing was changed.", { skipped: skipped });
+
+    // Copy, then work on the copy only.
+    var origId = String(seq.sequenceID), origPrint = T.fingerprint(seq), origMarkers = markerList(seq).length, origEnd = T.sec(seq.end);
+    var c = copy(seq, NOUMS);
+    if (!c.ok) return c;
+    var work = T.activeSequence();
+    if (!work || String(work.sequenceID) !== c.details.copyId) return T.fail("The copy was made but is not the active sequence; nothing was cut.", c.details);
+    app.enableQE();
+    var q = qe.project.getActiveSequence(), before = T.sec(work.end), want = 0;
+    for (i = 0; i < cuts.length; i++) want += cuts[i].b - cuts[i].a;
+    var res = extractGaps(work, q, cuts, frame, { oldHoles: true });
+    // A marker where each cut was, on the copy (put on after the extract, so not moved).
+    var marked = 0, rows = [];
+    for (i = 0; i < cuts.length; i++) {
+      var did = false;
+      for (j = 0; j < res.done.length; j++) if (Math.abs(res.done[j].a - cuts[i].a) < half) did = true;
+      if (!did) { skipped.push({ at: T.fmt(cuts[i].at[0]), word: cuts[i].words.join("+"), why: "not cut: the extract stopped before it" }); continue; }
+      var at = res.map(cuts[i].a), len = cuts[i].b - cuts[i].a, label = cuts[i].words.join(" + ");
+      rows.push({ word: label, originalTime: T.fmt(cuts[i].a), originalStart: cuts[i].a, originalEnd: cuts[i].b, newTime: T.fmt(at), seconds: Math.round(len * 1000) / 1000 });
+      try {
+        var m = work.markers.createMarker(at);
+        m.name = label + " removed";
+        m.comments = "\"" + label + "\" removed by Remove ums & uhs: " + len.toFixed(2) + " s at " + tcOf(seq, cuts[i].a) + " in \"" + seq.name + "\".";
+        marked++;
+      } catch (eM) { res.problems.push("marker at " + T.fmt(at) + ": " + eM); }
+    }
+    var after = T.sec(work.end), orig = T.findSequenceById(origId), origNow = orig ? T.fingerprint(orig) : null;
+    var origSame = !!(origNow && origNow.hash === origPrint.hash && origNow.clips === origPrint.clips && markerList(orig).length === origMarkers && Math.abs(T.sec(orig.end) - origEnd) < half);
+    var lengthOk = Math.abs((before - after) - res.removed) < frame * 1.5 && Math.abs(res.removed - want) < frame * 1.5;
+    var ok = lengthOk && origSame && !res.problems.length && res.gaps === cuts.length;
+    var text = (ok ? "" : "CHECK: ") + res.gaps + " of " + list.length + " fillers removed from \"" + c.details.copyName + "\" (" + res.removed.toFixed(1) + " s, " + T.fmt(before) + " -> " + T.fmt(after) + "), " +
+      skipped.length + " skipped; " + (res.problems.length ? res.problems.length + " problems, e.g. " + res.problems[0] : "links, sync and markers checked") +
+      "; the original is " + (origSame ? "unchanged" : "NOT unchanged") + ". Nothing is saved.";
+    var d = { sequence: c.details.copyName, original: String(seq.name), fillers: list.length, cuts: cuts.length, removedCount: res.gaps, removedSeconds: res.removed, wantSeconds: want,
+      durationBefore: before, durationAfter: after, lengthOk: lengthOk, originalUnchanged: origSame, relinked: res.relinked, markersMoved: res.markersMoved, markersRestored: res.restored || 0,
+      cutMarkers: marked, holes: res.holes, oldHoles: res.oldHoles, problems: res.problems.slice(0, 20), skipped: skipped, removed: rows };
+    return ok ? T.ok(text, d) : T.fail(text, d);
   }
 
   // Read-only look at what Premiere 26.5.2 offers for moving a timeline piece to another
@@ -532,7 +623,7 @@
   // length = answers' total, no holes, every piece shows the same source frames as before
   // (just earlier), linked pieces relinked, markers moved to their answers' new times.
   function trimDead(seq, q, spans, frame, orig) {
-    var half = frame / 2, i, j, kept = [], dur = T.sec(seq.end), res = { problems: [] }, tl = readTopics(seq, frame).list;
+    var half = frame / 2, i, kept = [], dur = T.sec(seq.end), tl = readTopics(seq, frame).list;
     for (i = 0; i < tl.length; i++) if (tl[i].b - tl[i].a > frame) kept.push({ a: tl[i].a, b: tl[i].b });
     if (!kept.length) for (i = 0; i < spans.length; i++) kept.push({ a: spans[i].a, b: spans[i].b });
     kept.sort(function (x, y) { return x.a - y.a; });
@@ -544,6 +635,14 @@
     var gaps = [], prev = 0;
     for (i = 0; i < merged.length; i++) { if (merged[i].a - prev > half) gaps.push({ a: prev, b: merged[i].a }); prev = merged[i].b; }
     if (dur - prev > half) gaps.push({ a: prev, b: dur });
+    return extractGaps(seq, q, gaps, frame, {});
+  }
+
+  // Extracts gaps (sorted [{ a, b }], sequence seconds) from every track, last first, then
+  // checks length, source frames, links, markers and holes (see trimDead). opts.oldHoles:
+  // holes that were already there before (moved by the extract) are not problems.
+  function extractGaps(seq, q, gaps, frame, opts) {
+    var half = frame / 2, i, j, dur = T.sec(seq.end), res = { problems: [] };
     var removed = 0;
     for (i = 0; i < gaps.length; i++) removed += gaps[i].b - gaps[i].a;
     res.gaps = gaps.length; res.removed = removed; res.keptTotal = dur - removed;
@@ -581,6 +680,7 @@
       for (i = 0; i < gaps.length; i++) removed += gaps[i].b - gaps[i].a;
       res.gaps = gaps.length; res.removed = removed; res.keptTotal = dur - removed;
     }
+    res.done = gaps;
     // Markers: put each back on its answer's new time (whether or not Premiere moved it).
     var cur = [], moved = 0;
     m = seq.markers.getFirstMarker();
@@ -641,10 +741,25 @@
       for (j = 0; j < grp.length; j++) if (T.linkedNodeIds(grp[j].item).length < grp.length) res.problems.push(grp[j].track + " " + T.fmt(grp[j].a) + " linked to " + T.linkedNodeIds(grp[j].item).length + " of " + grp.length);
     }
     // Holes: every moment of the new length must have something on some track.
-    after.sort(function (x, y) { return x.a - y.a; });
-    var reach = 0, holes = [];
-    for (i = 0; i < after.length; i++) { if (after[i].a - reach > half) holes.push(T.fmt(reach) + "-" + T.fmt(after[i].a)); if (after[i].b > reach) reach = after[i].b; }
-    if (T.sec(seq.end) - reach > half) holes.push(T.fmt(reach) + "-" + T.fmt(T.sec(seq.end)));
+    function holesIn(list, end) {
+      var sorted = list.slice().sort(function (x, y) { return x.a - y.a; }), reach = 0, out = [];
+      for (var h = 0; h < sorted.length; h++) { if (sorted[h].a - reach > half) out.push({ a: reach, b: sorted[h].a }); if (sorted[h].b > reach) reach = sorted[h].b; }
+      if (end - reach > half) out.push({ a: reach, b: end });
+      return out;
+    }
+    var holeList = holesIn(after, T.sec(seq.end)), holes = [];
+    if (opts.oldHoles) {
+      var was = holesIn(before, dur);
+      var newHoles = []; // (ExtendScript is ES3: no Array.filter)
+      for (var hn = 0; hn < holeList.length; hn++) {
+        var old = false;
+        for (var w = 0; w < was.length; w++) if (res.map(was[w].a) <= holeList[hn].a + half && res.map(was[w].b) >= holeList[hn].b - half) old = true;
+        if (!old) newHoles.push(holeList[hn]);
+      }
+      holeList = newHoles;
+      res.oldHoles = was.length;
+    }
+    for (i = 0; i < holeList.length; i++) holes.push(T.fmt(holeList[i].a) + "-" + T.fmt(holeList[i].b));
     res.holes = holes;
     if (holes.length) res.problems.push(holes.length + " holes left, e.g. " + holes[0]);
     return res;
