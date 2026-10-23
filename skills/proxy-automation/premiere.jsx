@@ -40,7 +40,7 @@
   function itemById(id) {
     id = String(id);
     if (P.items[id]) return P.items[id];
-    var stack = [app.project.rootItem];
+    var stack = [T.proj().rootItem];
     while (stack.length) {
       var bin = stack.pop();
       for (var c = 0; c < bin.children.numItems; c++) {
@@ -53,7 +53,7 @@
   }
 
   function findBin(path) {
-    var parts = String(path).split("/"), bin = app.project.rootItem;
+    var parts = String(path).split("/"), bin = T.proj().rootItem;
     for (var i = 0; i < parts.length; i++) {
       if (parts[i] === "") continue;
       var next = null;
@@ -70,7 +70,7 @@
   // Full bin path from the project root ("02 FOOTAGE/Korea / Seoul/Day2/Komodo"), so the
   // proxy tree mirrors where the bin really sits, not just the selected bin's own name.
   function binFullPath(target) {
-    var id = String(target.nodeId), st = [{ bin: app.project.rootItem, path: "" }];
+    var id = String(target.nodeId), st = [{ bin: T.proj().rootItem, path: "" }];
     while (st.length) {
       var f = st.pop();
       for (var c = 0; c < f.bin.children.numItems; c++) {
@@ -87,7 +87,7 @@
   // Typed bin that is not a path from the root: accept it if exactly one bin has that
   // name (or that full path, which matters when a bin name itself contains "/").
   function findBinByName(text) {
-    var hits = [], st = [{ bin: app.project.rootItem, path: "" }];
+    var hits = [], st = [{ bin: T.proj().rootItem, path: "" }];
     while (st.length) {
       var f = st.pop();
       for (var c = 0; c < f.bin.children.numItems; c++) {
@@ -105,7 +105,7 @@
     // A bin can also be given by nodeId (used by Ingest + proxies; bin names such as
     // "Korea / Seoul" contain "/" and cannot be written as a path).
     if (params.binNodeId) {
-      var st = [app.project.rootItem];
+      var st = [T.proj().rootItem];
       while (st.length) {
         var pb = st.pop();
         for (var q = 0; q < pb.children.numItems; q++) {
@@ -118,7 +118,7 @@
       return { error: "Bin not found (nodeId " + params.binNodeId + ")." };
     }
     var b = params.bin ? String(params.bin).replace(/^\s+|\s+$/g, "") : "";
-    if (b === "ALL") return { roots: [{ bin: app.project.rootItem, path: "" }] };
+    if (b === "ALL") return { roots: [{ bin: T.proj().rootItem, path: "" }] };
     if (b !== "") {
       var bin = findBin(b);
       if (bin) return { roots: [{ bin: bin, path: binFullPath(bin) }] };
@@ -158,7 +158,7 @@
       only = {};
       for (var mpi = 0; mpi < params.mediaPaths.length; mpi++) only[normPath(params.mediaPaths[mpi], params.bootPrefixes)] = true;
     }
-    var sc = only ? { roots: [{ bin: app.project.rootItem, path: "" }] } : scopeRoots(params);
+    var sc = only ? { roots: [{ bin: T.proj().rootItem, path: "" }] } : scopeRoots(params);
     if (sc.error) return T.fail(sc.error);
     P.items = {};
     var out = [], tally = { bins: 0, noMediaPath: 0, audioOnly: 0, nonVideo: 0, offline: 0 };
@@ -229,7 +229,7 @@
   }
 
   T.skills["proxy-automation"] = function (params) {
-    if (!app.project) return T.fail("No project open.");
+    if (!T.proj()) return T.fail(T.targetPath ? "Project not open: " + T.targetPath : "No project open.");
     if (params.action === "list") return list(params);
     if (params.action === "attach") return attach(params);
     if (params.action === "detach") return detach(params);

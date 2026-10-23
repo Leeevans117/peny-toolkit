@@ -91,7 +91,7 @@ one app tile per skill; tapping a tile opens that skill's view (< returns home).
   actually happened.
 - Anything that edits a timeline runs only on a sequence whose name ends
   `TOOLKIT COPY` (made by **Make safe copy**).
-- Never save the project, rename clips, or delete footage, proxies or project items.
+- Never rename clips, or delete footage, proxies or project items. Never save the project, except Ingest + Proxies with "Save each project" on (Lee, 22 Oct 2026): only after its import, render and attach all passed, confirmed by the file on disk changing.
 - Only one ExtendScript call at a time (the panel queues them).
 
 ## Testing without clicking

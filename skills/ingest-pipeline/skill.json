@@ -1,7 +1,7 @@
 {
   "id": "ingest-pipeline",
   "name": "Ingest + Proxies",
-  "description": "One button, three stages: imports a footage folder (Import footage), renders proxies for everything in its bins (Proxies), then attaches them. You are asked for two folders, one after the other: first the FOOTAGE folder to import, then the folder where the PROXIES should be saved. Each stage must pass before the next starts.",
+  "description": "One button, three stages: imports a footage folder (Import footage), renders proxies for everything in its bins (Proxies), then attaches them. You are asked for two folders, one after the other: first the FOOTAGE folder to import, then the folder where the PROXIES should be saved. Each stage must pass before the next starts. Each press works on the project that is in front when you press it, even if you click into another project while it runs. To queue more: open or click into another project and press Ingest + proxies again while a run is going; that job starts when the current one ends. With \"Save each project\" on, a project is saved only after its import, proxies and attach all passed. Waiting jobs are lost if Premiere or the panel restarts.",
   "order": 1,
   "icon": "icon.svg",
   "tint": [
@@ -10,7 +10,14 @@
   ],
   "progress": true,
   "panel": "panel.js",
-  "inputs": [],
+  "inputs": [
+    {
+      "id": "saveProject",
+      "label": "Save each project when its proxies are attached",
+      "type": "checkbox",
+      "default": true
+    }
+  ],
   "actions": [
     {
       "id": "run",
@@ -24,10 +31,11 @@
         {
           "id": "dest",
           "title": "Step 2 of 2: choose where the PROXIES should be saved",
-          "explain": "Step 2 of 2: PROXIES\n\nA second folder window will open. Choose the folder where the proxy files should be saved, e.g. this project's Proxies folder.\n\nA folder tree matching the bins is created inside it. Existing proxy files are never overwritten or deleted.\n\nAfter this, import, proxy rendering and attaching run on their own."
+          "explain": "Step 2 of 2: PROXIES\n\nA second folder window will open. Choose the folder where the proxy files should be saved, e.g. this project's Proxies folder.\n\nA folder tree matching the bins is created inside it. Existing proxy files are never overwritten or deleted.\n\nAfter this, import, proxy rendering and attaching run on their own, in the project in front now. If a run is already going, this job waits in the queue."
         }
       ],
-      "style": "primary"
+      "style": "primary",
+      "queue": "queue"
     },
     {
       "id": "pause",
@@ -45,8 +53,9 @@
       "id": "cancel",
       "label": "Cancel",
       "control": true,
-      "confirm": "Cancel the proxy renders? Running ffmpeg/REDline jobs are killed; partial files stay on disk. Attach will not run.",
+      "confirm": "Cancel the proxy renders and every waiting job? Running ffmpeg/REDline jobs are killed; partial files stay on disk. Attach will not run, and nothing is saved.",
       "style": "danger"
     }
-  ]
+  ],
+  "entry": "premiere.jsx"
 }

@@ -88,6 +88,23 @@ var PenyToolkit = $.global.PenyToolkit;
   };
 
   // ---- Project / sequence ----
+  // The project a skill works on. Normally the active project; the Ingest + Proxies job queue sets
+  // params.projectPath so Ingest and Proxies keep working on the project the job was started in
+  // (Adobe: scripts can act on any project in app.projects). With a path set and that
+  // project not open this is null, so nothing falls back to the project in front.
+  T.targetPath = null;
+  T.samePath = function (a, b) {
+    try { return new File(String(a)).fsName === new File(String(b)).fsName; } catch (e) { return String(a) === String(b); }
+  };
+  T.findOpenProject = function (p) {
+    var ps = app.projects;
+    for (var i = 0; i < ps.numProjects; i++) { try { if (T.samePath(ps[i].path, p)) return ps[i]; } catch (e) {} }
+    return null;
+  };
+  T.proj = function () {
+    if (T.targetPath) return T.findOpenProject(T.targetPath);
+    return app.project || null;
+  };
   T.activeSequence = function () {
     if (!app || !app.project) return null;
     return app.project.activeSequence || null;
@@ -224,10 +241,11 @@ var PenyToolkit = $.global.PenyToolkit;
     try {
       var fn = T.skills[skillId];
       if (!fn) return T.json(T.fail("Unknown skill: " + skillId));
+      T.targetPath = params && params.projectPath ? String(params.projectPath) : null;
       T.log("run " + skillId + " params=" + T.json(params || {}));
       var r = fn(params || {});
       r.skill = skillId;
-      try { r.project = app.project ? String(app.project.name) : null; } catch (eP) {}
+      try { var rp = T.proj(); r.project = rp ? String(rp.name) : null; } catch (eP) {}
       r.ms = new Date().getTime() - started;
       T.log("done " + skillId + " ok=" + r.ok + " " + (r.ok ? r.summary : r.error) + " (" + r.ms + " ms)");
       return T.json(r);

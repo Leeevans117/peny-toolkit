@@ -86,7 +86,17 @@ function evalJsx(script) {
 
 function jsxString(s) { return JSON.stringify(String(s)); }
 
+// Set by Ingest + Proxies while it runs a queued job: every skill call then carries
+// projectPath, so Ingest and Proxies work on that open project, not the one in front.
+var projectTarget = null;
+
 function evalSkill(skill, params) {
+  if (projectTarget) {
+    var withTarget = {};
+    for (var pk in (params || {})) if (params.hasOwnProperty(pk)) withTarget[pk] = params[pk];
+    if (withTarget.projectPath === undefined) withTarget.projectPath = projectTarget;
+    params = withTarget;
+  }
   var core = path.join(extRoot, "core", "core.jsx");
   var entry = path.join(skill.dir, skill.entry || "premiere.jsx");
   var script =
@@ -113,17 +123,23 @@ function runAction(skillId, actionId, params, source) {
   if (!skill) return Promise.resolve({ ok: false, skill: skillId, error: "Unknown skill: " + skillId });
   var action = findAction(skill, actionId);
   if (!action) return Promise.resolve({ ok: false, skill: skillId, error: "Unknown action: " + actionId });
-  if (!action.control && running) {
+  // Pressed again while its own run is going: "queue" names the action that adds a job
+  // to that run instead (Ingest + Proxies), so the lock below is left alone.
+  var queued = !action.control && running && action.queue && runningSkill === skill.id && skill.module && skill.module.actions[action.queue];
+  if (!action.control && !queued && running) {
     return Promise.resolve({ ok: false, skill: skillId, error: running + " is still running." });
   }
   if (params) for (var pk in params) if (params.hasOwnProperty(pk) && typeof params[pk] === "string") params[pk] = fileUrlToPath(params[pk]);
   var label = skill.name + (skill.actions ? " > " + action.label : "");
-  if (!action.control) { running = label; runningSkill = skill.id; setButtons(); }
-  log("Run " + label + " (" + source + ") " + JSON.stringify(params || {}), "warn");
+  var locks = !action.control && !queued;
+  if (locks) { running = label; runningSkill = skill.id; setButtons(); }
+  log((queued ? "Queue " : "Run ") + label + " (" + source + ") " + JSON.stringify(params || {}), "warn");
 
   var p;
   try {
-    if (action.skill) {
+    if (queued) {
+      p = skill.module.actions[action.queue](params || {});
+    } else if (action.skill) {
       // An action that runs another (Premiere-only) skill, e.g. Link External Audio's
       // "Make safe copy" step, which runs the make-safe-copy skill.
       var other = findSkill(action.skill);
@@ -145,7 +161,7 @@ function runAction(skillId, actionId, params, source) {
     result = result || { ok: false, error: "No result" };
     result.skill = skill.id;
     result.action = action.id;
-    if (!action.control) { running = null; runningSkill = null; setButtons(); }
+    if (locks) { running = null; runningSkill = null; setButtons(); }
     log((result.ok ? "OK  " : "FAIL ") + label + ": " + (result.ok ? result.summary : result.error), result.ok ? "ok" : "err");
     var d = result.details || {};
     ["failed", "skipped"].forEach(function (k) {
@@ -302,7 +318,9 @@ var runningSkill = null;
 function setButtons() {
   var bs = document.querySelectorAll("button[data-action]");
   for (var i = 0; i < bs.length; i++) {
-    if (bs[i].getAttribute("data-control") !== "1") bs[i].disabled = !!running;
+    // A "queue" action stays usable while its own skill runs: pressing it adds a job.
+    var queues = bs[i].getAttribute("data-queue-skill");
+    if (bs[i].getAttribute("data-control") !== "1") bs[i].disabled = !!running && !(queues && queues === runningSkill);
   }
   var tiles = document.querySelectorAll(".tile[data-skill]");
   for (var t = 0; t < tiles.length; t++) {
@@ -452,6 +470,8 @@ function loadSkills() {
             if (!other || !other.module || !other.module.actions[actionId]) return Promise.resolve({ ok: false, error: "No action " + skillId + "/" + actionId });
             return Promise.resolve(other.module.actions[actionId](params || {}));
           },
+          // Ingest + Proxies job queue: the project every skill call works on (null = the one in front).
+          setProjectTarget: function (p) { projectTarget = p || null; },
           skillDir: s.dir
         });
       }
@@ -563,6 +583,7 @@ function drawSkills() {
       b.className = "pill " + (a.style || (a.control ? "secondary" : "primary"));
       b.setAttribute("data-action", a.id);
       if (a.control) b.setAttribute("data-control", "1");
+      if (a.queue) b.setAttribute("data-queue-skill", s.id);
       b.addEventListener("click", function () { pressAction(s, a, getters); });
       (a.control ? ctl : main).appendChild(b);
     });
@@ -627,7 +648,8 @@ function pollHook() {
   try { req = JSON.parse(fs.readFileSync(HOOK_RUN, "utf-8")); } catch (e) { req = null; }
   var skill = req && req.skill ? findSkill(req.skill) : null;
   var action = skill ? findAction(skill, req.action) : null;
-  if (running && !(action && action.control)) return; // wait for the running action to finish
+  // wait for the running action to finish (a control, or a queue press on the running skill, goes now)
+  if (running && !(action && (action.control || (action.queue && skill.id === runningSkill)))) return;
   var claimed = HOOK_RUN + ".claimed";
   try { fs.renameSync(HOOK_RUN, claimed); } catch (e) { return; }
   try { fs.unlinkSync(claimed); } catch (e) {}

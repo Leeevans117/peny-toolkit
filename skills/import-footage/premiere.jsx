@@ -37,7 +37,7 @@
     I.binsByName = {};
     I.binCache = {};
     I.pathIndex = {};
-    var count = 0, stack = [app.project.rootItem];
+    var count = 0, stack = [T.proj().rootItem];
     while (stack.length) {
       var bin = stack.pop();
       for (var i = 0; i < bin.children.numItems; i++) {
@@ -75,7 +75,7 @@
     if (I.binCache && I.binCache[key]) return I.binCache[key];
     var matches = (I.binsByName && I.binsByName[chain[0]]) || [], current, r;
     if (matches.length === 1) current = matches[0];
-    else { r = childBin(app.project.rootItem, chain[0]); current = r.bin; if (r.created) createdBins.push(chain[0]); }
+    else { r = childBin(T.proj().rootItem, chain[0]); current = r.bin; if (r.created) createdBins.push(chain[0]); }
     for (var i = 1; i < chain.length; i++) {
       r = childBin(current, chain[i]);
       current = r.bin;
@@ -101,13 +101,13 @@
     try { bin = resolveChain(chain, createdBins); } catch (e) { return T.fail("Could not find or create the bin: " + e); }
 
     var before = mediaPathsIn(bin), ret = null;
-    try { ret = app.project.importFiles(paths, true, bin, numbered); } catch (e2) { ret = "error: " + e2; }
+    try { ret = T.proj().importFiles(paths, true, bin, numbered); } catch (e2) { ret = "error: " + e2; }
     var have = mediaPathsIn(bin), missing = [], i;
     for (i = 0; i < paths.length; i++) if (!have[norm(paths[i])]) missing.push(paths[i]);
 
     var retried = [];
     for (i = 0; i < missing.length; i++) {
-      try { app.project.importFiles([missing[i]], true, bin, numbered); } catch (e3) {}
+      try { T.proj().importFiles([missing[i]], true, bin, numbered); } catch (e3) {}
       retried.push(missing[i]);
     }
     if (retried.length) have = mediaPathsIn(bin);
@@ -146,7 +146,7 @@
     return null;
   }
   function sequenceForItem(item) {
-    var seqs = app.project.sequences;
+    var seqs = T.proj().sequences;
     for (var i = 0; i < seqs.numSequences; i++) {
       try { if (seqs[i].projectItem && String(seqs[i].projectItem.nodeId) === String(item.nodeId)) return seqs[i]; } catch (e) {}
     }
@@ -168,7 +168,7 @@
     var bare = rec.name.replace(/\.[^.]+$/, "");
     if (childByName(synced, rec.name) || childByName(synced, bare)) { rec.reason = "a sequence of this name is already in Synced"; return { ok: true, skipped: true, rec: rec }; }
 
-    var seq = app.project.createNewSequenceFromClips(rec.name, [r3d], synced);
+    var seq = T.proj().createNewSequenceFromClips(rec.name, [r3d], synced);
     if (!seq) {
       var made = childByName(synced, rec.name);
       seq = made ? sequenceForItem(made) : null;
@@ -176,8 +176,8 @@
     if (!seq) { rec.reason = "createNewSequenceFromClips made no sequence"; return { ok: false, rec: rec }; }
     rec.sequenceId = String(seq.sequenceID);
     rec.sequenceName = String(seq.name);
-    app.project.openSequence(seq.sequenceID);
-    var active = app.project.activeSequence;
+    T.proj().openSequence(seq.sequenceID);
+    var active = T.proj().activeSequence;
     if (!active || String(active.sequenceID) !== rec.sequenceId) { rec.reason = "could not make the new sequence active"; return { ok: false, rec: rec }; }
 
     var v = seq.videoTracks[0].clips.numItems ? seq.videoTracks[0].clips[0] : null;
@@ -249,7 +249,7 @@
     var name = String(params.name), matches = I.binsByName[name] || [], bin = null;
     if (matches.length === 1) bin = matches[0];
     else {
-      var r = app.project.rootItem;
+      var r = T.proj().rootItem;
       for (var i = 0; i < r.children.numItems; i++) if (r.children[i].type == ProjectItemType.BIN && r.children[i].name === name) { bin = r.children[i]; break; }
     }
     if (!bin) return T.fail("No bin named \"" + name + "\".");
@@ -257,7 +257,7 @@
   }
 
   T.skills["import-footage"] = function (params) {
-    if (!app.project) return T.fail("No project open.");
+    if (!T.proj()) return T.fail(T.targetPath ? "Project not open: " + T.targetPath : "No project open.");
     if (params.bootPrefixes) I.bootPrefixes = params.bootPrefixes;
     if (params.action === "index") return index();
     if (params.action === "exists") return exists(params);
