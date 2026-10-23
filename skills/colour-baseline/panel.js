@@ -1,7 +1,8 @@
 /* Colour baseline, panel side (Node). Three buttons:
  * - Detect cameras: reads the active sequence's video clips (premiere.jsx "scan"), works out each
  *   clip's camera from the file itself and lists the cameras with clip counts, each with a
- *   dropdown of Lee's Lumetri presets (read from Premiere's user preset file). The choice per
+ *   LUT picker: a row of folders (this Mac's Premiere LUT folders, then "Presets" = Lee's Lumetri
+ *   presets from Premiere's user preset file) and a list of that folder's LUTs. The choice per
  *   camera is remembered in ~/.peny-toolkit/colour-baseline.json.
  * - Apply baseline grade: exports the active sequence to a project file, adds a Lumetri named
  *   "Adjustments" and the camera's LUT preset above each clip's existing Lumetri effects
@@ -28,27 +29,62 @@ var SETTINGS = path.join(os.homedir(), ".peny-toolkit", "colour-baseline.json");
 var REDLINE = ["/usr/local/bin/REDline", "/Applications/REDCINE-X Professional/REDCINE-X PRO.app/Contents/MacOS/REDline"];
 var ADJUSTMENTS = "Adjustments";
 var NO_LUT = "";
-// Premiere's own Creative LUTs (Lee, 13 Oct 2026): offered in the LUT dropdown as "file:<path>"
-// choices; Apply builds the Lumetri from the file (lutpreset.py lut_component). .cube and the
-// binary .itx are supported; .look files are not LUTs and are left out.
-var CREATIVE_GLOB_ROOT = "/Applications";
-function creativeDir() {
+// LUT folders on this Mac (Lee, 23 Oct 2026; Creative only since 13 Oct): every folder in this
+// Mac's Premiere Lumetri/LUTs (Mac mini 26.5.2: Technical, Creative, Legacy) and in the Adobe
+// Common LUTs folders, read when Detect runs, so each Mac lists its own LUTs. A file is offered
+// as a "file:<path>" choice; Apply builds the Lumetri from it (lutpreset.py lut_component), which
+// takes 3D .cube and Premiere's binary .itx ("ITX3") only, so 1D .cube, .look, .ilut are left out.
+var APPS = "/Applications";
+var FOLDER_ORDER = ["Technical", "Creative", "Basic"]; // Lee's order; other folders follow A-Z
+var PRESETS = "Presets"; // Lee's own Lumetri presets, last in the folder row
+function lutRoots() {
+  var roots = [];
   try {
-    var apps = fs.readdirSync(CREATIVE_GLOB_ROOT).filter(function (n) { return /^Adobe Premiere Pro \d{4}$/.test(n); }).sort().reverse();
+    var apps = fs.readdirSync(APPS).filter(function (n) { return /^Adobe Premiere Pro \d{4}$/.test(n); }).sort().reverse();
     for (var i = 0; i < apps.length; i++) {
-      var d = path.join(CREATIVE_GLOB_ROOT, apps[i], apps[i] + ".app", "Contents", "Lumetri", "LUTs", "Creative");
-      if (fs.existsSync(d)) return d;
+      var d = path.join(APPS, apps[i], apps[i] + ".app", "Contents", "Lumetri", "LUTs");
+      if (fs.existsSync(d)) { roots.push(d); break; }
     }
   } catch (e) {}
-  return null;
+  roots.push("/Library/Application Support/Adobe/Common/LUTs", path.join(os.homedir(), "Library", "Application Support", "Adobe", "Common", "LUTs"));
+  return roots;
 }
-function listCreative() {
-  var d = creativeDir();
-  if (!d) return [];
+function usableLut(file) {
+  var ext = extOf(file);
+  if (ext !== "cube" && ext !== "itx") return false;
   try {
-    return fs.readdirSync(d).filter(function (n) { return /\.(cube|itx)$/i.test(n); }).sort(function (a, b) { return a.localeCompare(b); })
-      .map(function (n) { return "file:" + path.join(d, n); });
-  } catch (e) { return []; }
+    var fd = fs.openSync(file, "r"), buf = Buffer.alloc(ext === "itx" ? 4 : 65536), n = fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    var s = buf.toString("latin1", 0, n);
+    return ext === "itx" ? s === "ITX3" : /^\s*LUT_3D_SIZE/m.test(s) && !/^\s*LUT_1D_SIZE/m.test(s);
+  } catch (e) { return false; }
+}
+// [{ name: "Technical", items: ["file:/…/x.cube", …] }, …] in Lee's order, empty folders left out.
+function listLutFolders() {
+  var byName = {};
+  function walk(dir, name, depth) {
+    var entries = [];
+    try { entries = fs.readdirSync(dir); } catch (e) { return; }
+    entries.forEach(function (n) {
+      if (n.charAt(0) === ".") return;
+      var p = path.join(dir, n), st = null;
+      try { st = fs.statSync(p); } catch (e) { return; }
+      if (st.isDirectory()) { if (depth < 3) walk(p, name, depth + 1); }
+      else if (usableLut(p)) (byName[name] = byName[name] || []).push("file:" + p);
+    });
+  }
+  lutRoots().forEach(function (root) {
+    var subs = [];
+    try { subs = fs.readdirSync(root); } catch (e) { return; }
+    subs.forEach(function (n) {
+      var p = path.join(root, n);
+      try { if (n.charAt(0) !== "." && fs.statSync(p).isDirectory()) walk(p, n, 1); } catch (e) {}
+    });
+  });
+  function rank(n) { var i = FOLDER_ORDER.indexOf(n); return i === -1 ? FOLDER_ORDER.length : i; }
+  return Object.keys(byName).sort(function (a, b) { return rank(a) - rank(b) || a.localeCompare(b); }).map(function (n) {
+    return { name: n, items: byName[n].sort(function (a, b) { return lutLabel(a).localeCompare(lutLabel(b)); }) };
+  });
 }
 function lutLabel(v) { return v && v.indexOf("file:") === 0 ? path.basename(v.slice(5)).replace(/\.[^.]+$/, "") : v; }
 // A saved choice still available: one of Lee's presets, or a LUT file that is still there.
@@ -242,14 +278,19 @@ module.exports = function (api) {
             if (c.choice && !choiceExists(c.choice, pr.names)) c.choice = NO_LUT; // preset or file gone
           });
           writeSettings(settings);
-          state = { cameras: cams, presets: pr.names, creative: listCreative(), sequence: scan.details.sequence, nested: scan.details.nested };
+          var folders = listLutFolders();
+          state = { cameras: cams, presets: pr.names, folders: folders, sequence: scan.details.sequence, nested: scan.details.nested };
           render();
           var lines = cams.map(function (c) { return c.camera + ": " + c.clips.length + " clip(s)" + (c.choice ? " -> " + lutLabel(c.choice) : " -> no LUT"); });
           return { ok: true, summary: cams.length + " camera(s) in \"" + scan.details.sequence + "\": " + lines.join("; ") + "." +
             (pr.names.length ? "" : " No Lumetri presets of yours found (Make LUT presets, then Effects panel > Import Presets)."),
             details: { sequence: scan.details.sequence, cameras: cams.map(function (c) {
               return { camera: c.camera, model: c.model, clips: c.clips.length, choice: c.choice, existing: c.existing, folders: c.folders.filter(function (f, i, a) { return a.indexOf(f) === i; }).slice(0, 5) };
-            }), skipped: scan.details.skipped, nested: scan.details.nested, presetFile: pr.file, presets: pr.names.length } };
+            }), skipped: scan.details.skipped, nested: scan.details.nested, presetFile: pr.file, presets: pr.names.length,
+            lutFolders: folders.map(function (f) { return f.name + " (" + f.items.length + ")"; }),
+            // Test hook: params.uiProbe opens each camera's LUT list in the real panel and reports
+            // whether it can be seen (the old dropdown could not at small panel sizes).
+            ui: params.uiProbe ? uiProbe() : undefined } };
         });
       });
     });
@@ -374,33 +415,142 @@ module.exports = function (api) {
     if (text !== undefined) d.textContent = text;
     return d;
   }
+  // The LUT picker is drawn in the page, not a <select>: CEP draws a <select>'s list inside the
+  // panel and cut it off unless the panel was full screen (Lee, 23 Oct 2026). This list opens
+  // in the card itself, scrolls with the panel and has its own scroll bar.
+  var CSS = [
+    ".lut-folders { flex-wrap: wrap; margin-bottom: 6px; }",
+    ".lut-folders button { flex: 1 1 auto; }",
+    ".lut-current { width: 100%; display: flex; align-items: center; gap: 6px; padding: 7px 10px; color: var(--text); font: inherit; font-size: 12px; text-align: left;",
+    "  background: rgba(0, 0, 0, 0.22); border: 1px solid var(--glass-line); border-radius: 12px; cursor: pointer; }",
+    ".lut-current .lname { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
+    ".lut-current .chev { flex: 0 0 auto; color: var(--dim); }",
+    ".lut-list { margin-top: 6px; padding: 6px; border-radius: 12px; background: rgba(0, 0, 0, 0.5); border: 1px solid var(--glass-line); }",
+    ".lut-list input[type=text] { margin-bottom: 6px; }",
+    ".lut-opts { max-height: 220px; overflow-y: auto; }",
+    ".lut-opt { display: block; width: 100%; padding: 6px 10px; border: 0; border-radius: 8px; background: none; color: var(--text); font: inherit;",
+    "  font-size: 12px; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
+    ".lut-opt:hover { background: var(--glass-strong); }",
+    ".lut-opt.on { background: #fff; color: #000; }",
+    ".lut-empty { padding: 6px 10px; color: var(--faint); font-size: 12px; }"].join("\n");
+  function addCss() {
+    var doc = root.ownerDocument, st = doc.getElementById("colour-lut-css");
+    if (!st) { st = doc.createElement("style"); st.id = "colour-lut-css"; doc.head.appendChild(st); }
+    st.textContent = CSS;
+  }
+  // The folder row: this Mac's LUT folders, then Lee's presets.
+  function lutFolders() {
+    var list = (state.folders || []).slice(), mine = state.presets.filter(function (n) { return n !== ADJUSTMENTS; });
+    if (mine.length) list.push({ name: PRESETS, items: mine });
+    return list;
+  }
+  function folderOf(v, folders) {
+    for (var i = 0; v && i < folders.length; i++) if (folders[i].items.indexOf(v) !== -1) return folders[i].name;
+    return null;
+  }
+  function picker(c, folders) {
+    var wrap = el("div", "lut-picker"), open = false;
+    var folder = folderOf(c.choice, folders) || (folders.length ? folders[0].name : null);
+    var seg = el("div", "segmented lut-folders");
+    var cur = el("button", "lut-current"), lname = el("span", "lname"), chev = el("span", "chev", "▾");
+    cur.appendChild(lname); cur.appendChild(chev);
+    var list = el("div", "lut-list hidden"), search = el("input"), opts = el("div", "lut-opts");
+    search.type = "text"; search.placeholder = "Filter";
+    list.appendChild(search); list.appendChild(opts);
+    function label() {
+      var f = folderOf(c.choice, folders);
+      lname.textContent = c.choice ? lutLabel(c.choice) + (f ? "  ·  " + f : "") : "No LUT (Adjustments only)";
+    }
+    function paintFolders() { Array.prototype.forEach.call(seg.children, function (b) { b.className = b.textContent === folder ? "on" : ""; }); }
+    function fill() {
+      while (opts.firstChild) opts.removeChild(opts.firstChild);
+      var f = folders.filter(function (x) { return x.name === folder; })[0], q = search.value.trim().toLowerCase();
+      var items = [NO_LUT].concat(f ? f.items : []).filter(function (v) { return !q || v === NO_LUT || lutLabel(v).toLowerCase().indexOf(q) !== -1; });
+      items.forEach(function (v) {
+        var o = el("button", "lut-opt" + (v === (c.choice || NO_LUT) ? " on" : ""), v === NO_LUT ? "No LUT (Adjustments only)" : lutLabel(v));
+        o.title = v.indexOf("file:") === 0 ? v.slice(5) : o.textContent;
+        o.addEventListener("click", function () { choose(v); });
+        opts.appendChild(o);
+      });
+      if (items.length === 1 && q) opts.appendChild(el("div", "lut-empty", "No LUT in " + folder + " matches \"" + search.value + "\""));
+    }
+    function show(on) {
+      open = on;
+      list.classList.toggle("hidden", !open);
+      chev.textContent = open ? "▴" : "▾";
+      if (open) {
+        fill();
+        var sel = opts.querySelector(".lut-opt.on");
+        if (sel) opts.scrollTop = Math.max(0, sel.offsetTop - opts.offsetTop - 60);
+        if (list.scrollIntoView) list.scrollIntoView({ block: "nearest" });
+      }
+    }
+    function choose(v) {
+      var s = readSettings();
+      s.choices[c.camera] = v;
+      writeSettings(s);
+      c.choice = v;
+      api.log("Colour: " + c.camera + " -> " + (lutLabel(v) || "no LUT"));
+      label();
+      show(false);
+    }
+    folders.forEach(function (f) {
+      var b = el("button", "", f.name);
+      b.title = f.items.length + " LUT" + (f.items.length === 1 ? "" : "s");
+      b.addEventListener("click", function () { folder = f.name; search.value = ""; paintFolders(); show(true); });
+      seg.appendChild(b);
+    });
+    cur.addEventListener("click", function () { show(!open); });
+    search.addEventListener("input", fill);
+    if (folders.length) wrap.appendChild(seg);
+    wrap.appendChild(cur); wrap.appendChild(list);
+    paintFolders(); label();
+    wrap._open = function (on) { show(on); return list; };
+    return wrap;
+  }
+  // Test hook (detect with uiProbe): opens each camera's list, scrolls it into view as a click
+  // does, and checks it lies inside the panel's visible area; puts the panel back after (if
+  // Colour was not on screen it is shown for the check and the screen put back).
+  function uiProbe() {
+    if (!root) return { error: "no panel" };
+    var doc = root.ownerDocument, win = doc.defaultView, view = root.closest(".view") || doc.scrollingElement;
+    var wasOpen = root.offsetParent !== null, saved = [];
+    if (!wasOpen) [doc.getElementById("home"), doc.getElementById("detail"), root.closest(".app")].forEach(function (e, i) {
+      if (!e) return;
+      saved.push([e, e.className]);
+      e.classList.toggle("hidden", i === 0);
+    });
+    var shown = root.offsetParent !== null, top0 = view.scrollTop;
+    var out = { panel: win.innerWidth + "x" + win.innerHeight, viewOpen: wasOpen, shownForCheck: !wasOpen && shown, pickers: [] };
+    Array.prototype.forEach.call(root.querySelectorAll(".lut-picker"), function (p, i) {
+      var list = p._open(true), r = list.getBoundingClientRect(), v = view.getBoundingClientRect();
+      var o = list.querySelectorAll(".lut-opt"), last = o[o.length - 1], opts = list.querySelector(".lut-opts");
+      opts.scrollTop = opts.scrollHeight;
+      var lr = last ? last.getBoundingClientRect() : null, orr = opts.getBoundingClientRect();
+      out.pickers.push({ camera: state.cameras[i] && state.cameras[i].camera,
+        folders: Array.prototype.map.call(p.querySelectorAll(".lut-folders button"), function (b) { return b.textContent; }),
+        options: o.length, list: Math.round(r.top) + "-" + Math.round(r.bottom), area: Math.round(v.top) + "-" + Math.round(v.bottom),
+        listInView: shown && r.height > 0 && r.top >= v.top - 1 && r.bottom <= v.bottom + 1,
+        lastOptionReachable: !!lr && lr.bottom <= orr.bottom + 1 && lr.top >= orr.top - 1 });
+      p._open(false);
+    });
+    view.scrollTop = top0;
+    saved.forEach(function (s) { s[0].className = s[1]; });
+    return out;
+  }
   function render() {
     if (!root) return;
+    addCss();
     while (root.firstChild) root.removeChild(root.firstChild);
     if (!state.cameras) return;
     if (!state.cameras.length) { root.appendChild(el("p", "desc", "No video clips with media files in \"" + state.sequence + "\".")); return; }
     root.appendChild(el("span", "flabel", "Cameras in \"" + state.sequence + "\" and the LUT for each"));
+    var folders = lutFolders();
     state.cameras.forEach(function (c) {
       var field = el("div", "field");
       var existing = Object.keys(c.existing).map(function (k) { return k + " x" + c.existing[k]; }).join(", ");
       field.appendChild(el("span", "flabel", c.camera + " · " + c.clips.length + " clip" + (c.clips.length === 1 ? "" : "s") + (existing ? " · has " + existing : "")));
-      var sel = el("select", "colour-select");
-      var none = el("option", "", "No LUT (Adjustments only)"); none.value = NO_LUT; sel.appendChild(none);
-      var mine = el("optgroup"); mine.label = "Your LUT presets";
-      state.presets.filter(function (n) { return n !== ADJUSTMENTS; }).forEach(function (n) { var o = el("option", "", n); o.value = n; mine.appendChild(o); });
-      if (mine.children.length) sel.appendChild(mine);
-      var cre = el("optgroup"); cre.label = "Premiere Creative LUTs";
-      (state.creative || []).forEach(function (v) { var o = el("option", "", lutLabel(v)); o.value = v; cre.appendChild(o); });
-      if (cre.children.length) sel.appendChild(cre);
-      sel.value = c.choice || NO_LUT;
-      sel.addEventListener("change", function () {
-        var s = readSettings();
-        s.choices[c.camera] = sel.value;
-        writeSettings(s);
-        c.choice = sel.value;
-        api.log("Colour: " + c.camera + " -> " + (lutLabel(sel.value) || "no LUT"));
-      });
-      field.appendChild(sel);
+      field.appendChild(picker(c, folders));
       root.appendChild(field);
     });
     if (!state.presets.length) root.appendChild(el("p", "desc", "No Lumetri presets of yours found. Press Make LUT presets, then in Premiere: Effects panel menu > Import Presets…"));
