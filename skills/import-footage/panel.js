@@ -21,9 +21,12 @@ module.exports = function (api) {
   function readdir(p) { return new Promise(function (ok, no) { fs.readdir(p, function (e, n) { if (e) no(e); else ok(n); }); }); }
   function stat(p) { return new Promise(function (ok) { fs.stat(p, function (e, st) { ok(e ? null : st); }); }); }
 
+  // Hidden files are skipped: a Mac writing to the server leaves a "._C1836.MP4" next to
+  // every clip (its Finder info, not video); Premiere cannot import those, and 29 of them
+  // failed an Ingest + proxies run on 23 Oct 2026. Also .DS_Store and other dot files.
   function listEntries(dirPath) {
     return readdir(dirPath).then(function (names) {
-      return Promise.all(names.map(function (name) {
+      return Promise.all(names.filter(function (name) { return name.charAt(0) !== "."; }).map(function (name) {
         var full = path.join(dirPath, name);
         return stat(full).then(function (st) { return st ? { name: name, isDir: st.isDirectory(), ref: full } : null; });
       })); // broken links / no permission come back null and are skipped, as in the original
