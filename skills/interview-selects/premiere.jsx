@@ -102,6 +102,14 @@
         var p = "";
         try { p = it.projectItem ? String(it.projectItem.getMediaPath()) : ""; } catch (eP) {}
         if (!p) { notes.push("\"" + it.name + "\" at " + T.fmt(s + offset) + " has no media file; left out."); continue; }
+        // ffmpeg can't read .R3D sound: RED clips are read from their attached proxy (as
+        // interview-sync does); without one the clip is left out (Arly Kemp, 29 Oct 2026).
+        if (/\.r3d$/i.test(p)) {
+          var px = "";
+          try { if (it.projectItem.hasProxy && it.projectItem.hasProxy()) px = String(it.projectItem.getProxyPath() || ""); } catch (eX) {}
+          if (!px) { notes.push("\"" + it.name + "\" at " + T.fmt(s + offset) + " is a RED clip without a proxy: its sound can't be read outside Premiere, so it was left out (make its proxy first)."); continue; }
+          p = px;
+        }
         out.push({ path: p, inPoint: inPt, start: cs + offset, end: ce + offset, name: String(it.name), track: tracks[k] + 1, depth: depth });
       }
     }
