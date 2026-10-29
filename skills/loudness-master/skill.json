@@ -1,0 +1,22 @@
+{
+  "id": "loudness-master",
+  "name": "Master for YouTube",
+  "description": "Masters the active sequence's whole mix to a delivery loudness, the way Mike Russell's mix-track method does: a Hard Limiter whose Input Boost is raised until the mix measures the target. Here it goes on a new \"<sequence> MASTER YouTube TOOLKIT COPY\" sequence that holds the active sequence nested as one clip, so no clip of the original changes. Each pass renders the master to a wav and measures it (EBU R128: integrated LUFS and true peak) until it lands on target. Nothing is saved.",
+  "order": 7.5,
+  "icon": "icon.svg",
+  "tint": [
+    "#1c1c1e",
+    "#000000"
+  ],
+  "progress": true,
+  "entry": "premiere.jsx",
+  "panel": "panel.js",
+  "actions": [
+    {
+      "id": "youtube",
+      "label": "Master for YouTube (-14 LUFS)",
+      "style": "primary",
+      "confirm": "Master the active sequence for YouTube (-14 LUFS integrated, true peak at or under -1 dBTP)? A sequence named \"<active sequence> MASTER YouTube TOOLKIT COPY\" is made (or reused) in the same bin with the active sequence nested in it as one clip; that nest gets one Hard Limiter whose Input Boost is set by measuring renders of the master, up to five passes. The active sequence and its clips are not changed, and nothing is saved."
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+[
+  {
+    "id": "youtube",
+    "label": "YouTube",
+    "integrated": -14,
+    "truePeak": -1,
+    "tolerance": 0.5,
+    "source": "YouTube does not publish a figure; -14 LUFS / -1 dBTP is the widely measured reference; YouTube only turns louder videos down"
+  }
+]
