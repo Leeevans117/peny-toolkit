@@ -11,6 +11,7 @@
  * Remove ums & uhs (unum): steps 1-2 on the active sequence, then fillers.js finds the
  * fillers (whisper on short clips, each checked twice, snapped to the sound) and
  * premiere.jsx "unum" cuts them on a copy "<sequence> No ums"; fillers.csv lists them all.
+ * Sync Interviews (the tile's first section) is skills/interview-sync, run by its button.
  * Work files: /tmp/peny-toolkit/interview-selects/<sequence>-<time>/. Nothing is deleted. */
 var fs = require("fs");
 var path = require("path");
@@ -350,6 +351,8 @@ module.exports = function (api) {
   function cancel() {
     cancelled = true;
     children.forEach(function (c) { try { c.kill(); } catch (e) {} });
+    // Sync Interviews runs in its own module (skills/interview-sync); stop it too.
+    if (api.skillAction) api.skillAction("interview-sync", "cancel", {});
     return Promise.resolve({ ok: true, summary: "Cancel requested; the run stops after the current step." });
   }
 

@@ -1,7 +1,7 @@
 {
   "id": "interview-selects",
   "name": "Interviews",
-  "description": "Transcribes the active interview sequence on this Mac (whisper), finds each answer with the local AI model (Ollama, no internet), groups the answers by the interviewer's question and the questions into broad themes, and puts them on a copy called \"<sequence> Cut version\": a Chapter marker per question, a Segmentation marker per theme, and the small topics as clip markers on the clip on the top video track (they belong to that footage, so they also show in other sequences that use it). About 20 minutes for an hour of interview. Then Cut, raise & trim answers (Cut versions only) raises each question's answer one track, removes the questions and dead bits in between, puts one adjustment layer per question over the answers and a row above with one layer per theme. Remove ums & uhs finds the filler words (um, uh, er, erm, ah, hmm) with whisper on this Mac, checks each one twice and cuts it from every track of a copy called \"<sequence> No ums\" (picture and sound stay in sync, links kept), with a marker at each cut and a list of them all; fillers said straight into a word are left in.",
+  "description": "Everything for interviews, in two parts. Sync Interviews lines the cameras and sound up. Select Interview Process transcribes the interview and finds the answers, cuts them, and takes out the ums.",
   "order": 6,
   "icon": "icon.svg",
   "tint": [
@@ -11,6 +11,25 @@
   "entry": "premiere.jsx",
   "panel": "panel.js",
   "inputs": [
+    {
+      "id": "link",
+      "label": "After syncing",
+      "type": "segment",
+      "options": [
+        {
+          "label": "Cameras + audio",
+          "value": "all"
+        },
+        {
+          "label": "Cameras only",
+          "value": "cameras"
+        },
+        {
+          "label": "Don't link",
+          "value": "none"
+        }
+      ]
+    },
     {
       "id": "name",
       "label": "Interviewee (optional)",
@@ -28,6 +47,14 @@
     }
   ],
   "actions": [
+    {
+      "id": "sync",
+      "label": "Sync interviews",
+      "style": "primary",
+      "skill": "interview-sync",
+      "action": "sync",
+      "confirm": "Sync every clip on this sequence to camera A by waveform? A copy called \"<sequence> Synced\" is made and the clips are moved (and linked, if chosen) on the copy only. It reads each clip's sound on this Mac, about 2 minutes per hour of footage. The original is not changed, nothing is renamed or deleted and nothing is saved."
+    },
     {
       "id": "find",
       "label": "Find answers and add markers",
@@ -51,6 +78,32 @@
       "label": "Cancel",
       "control": true,
       "style": "danger"
+    }
+  ],
+  "sections": [
+    {
+      "title": "Sync Interviews",
+      "description": "Like Premiere's Synchronize, but for every clip on the sequence in one go. Camera A (the lowest video track with clips, e.g. V1) stays put. Every other clip (camera B on V2, external wavs or lav recordings on the audio tracks, any number per track) is matched to camera A by its sound waveform and moved so the sound lines up. A clip camera A doesn't cover is matched to a clip already synced. Timecode is only a fallback (camera clocks often disagree). It all happens on a copy called \"<sequence> Synced\"; clips it isn't sure about are left where they are and listed. Link: Cameras + audio links each camera A clip with the camera B clip and the audio clips synced to it; Cameras only links the cameras and leaves the external audio unlinked; Don't link just lines them up. RED clips need their proxy (that is where the sound is read from).",
+      "inputs": [
+        "link"
+      ],
+      "actions": [
+        "sync"
+      ]
+    },
+    {
+      "title": "Select Interview Process",
+      "description": "Transcribes the active interview sequence on this Mac (whisper), finds each answer with the local AI model (Ollama, no internet), groups the answers by the interviewer's question and the questions into broad themes, and puts them on a copy called \"<sequence> Cut version\": a Chapter marker per question, a Segmentation marker per theme, and the small topics as clip markers on the clip on the top video track (they belong to that footage, so they also show in other sequences that use it). About 20 minutes for an hour of interview. Then Cut, raise & trim answers (Cut versions only) raises each question's answer one track, removes the questions and dead bits in between, puts one adjustment layer per question over the answers and a row above with one layer per theme. Remove ums & uhs finds the filler words (um, uh, er, erm, ah, hmm) with whisper on this Mac, checks each one twice and cuts it from every track of a copy called \"<sequence> No ums\" (picture and sound stay in sync, links kept), with a marker at each cut and a list of them all; fillers said straight into a word are left in.",
+      "inputs": [
+        "name",
+        "track",
+        "fillers"
+      ],
+      "actions": [
+        "find",
+        "cutraise",
+        "unum"
+      ]
     }
   ]
 }

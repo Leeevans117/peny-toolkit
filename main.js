@@ -484,6 +484,29 @@ function loadSkills() {
 }
 
 function drawSkills() {
+  // Section and "i" styles live here, not in index.html: a soft reload swaps main.js but not
+  // the page, so the style element is refilled every time.
+  var st = document.getElementById("section-style");
+  if (!st) { st = document.createElement("style"); st.id = "section-style"; document.head.appendChild(st); }
+  st.textContent = ".section { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1); }" +
+    ".section.first { margin-top: 0; padding-top: 0; border-top: 0; }" +
+    ".section-title { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }" +
+    ".info-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 22px; margin: 0 0 8px 2px; }" +
+    ".info-head.slim { justify-content: flex-end; margin: 0 0 4px; }" +
+    ".info-btn { flex: none; width: 22px; height: 22px; padding: 0; border-radius: 11px; display: inline-flex; align-items: center; justify-content: center;" +
+    " background: var(--glass); border: 1px solid var(--glass-line); color: var(--dim); cursor: pointer; transition: background .15s, color .15s, transform .15s; }" +
+    ".info-btn:hover { background: var(--glass-strong); color: var(--text); }" +
+    ".info-btn:active { transform: scale(0.92); }" +
+    ".info-btn[aria-expanded=true] { background: #fff; border-color: #fff; color: #000; }" +
+    ".info-btn svg { width: 12px; height: 12px; }" +
+    ".info-body { max-height: 0; opacity: 0; overflow: hidden; margin: 0; transition: max-height .25s ease, opacity .2s ease, margin .25s ease; }" +
+    ".info-body.open { opacity: 1; margin: 0 0 12px; }" +
+    ".card .info-body p.desc { margin: 0; padding: 10px 12px; font-size: 12.5px; line-height: 1.45; color: var(--dim);" +
+    " background: rgba(0,0,0,0.22); border: 1px solid var(--glass-line); border-radius: 14px; }";
+  // Esc closes the how-to boxes; one listener per page (a soft reload swaps it, not adds one).
+  if (window.PenyInfoEsc) document.removeEventListener("keydown", window.PenyInfoEsc);
+  window.PenyInfoEsc = function (e) { if (e.key === "Escape" || e.keyCode === 27) closeInfo(); };
+  document.addEventListener("keydown", window.PenyInfoEsc);
   var tiles = document.getElementById("tiles"), apps = document.getElementById("apps");
   skills.forEach(function (s) {
     if (s.hidden) return; // runs only from another app's button (e.g. make-safe-copy)
@@ -503,11 +526,11 @@ function drawSkills() {
     view.setAttribute("data-skill", s.id);
     var card = document.createElement("div");
     card.className = "glass card";
-    var p = document.createElement("p"); p.className = "desc"; p.textContent = s.description || ""; card.appendChild(p);
+    // How-to text sits behind an "i" (Lee, 29 Oct 2026). With sections each section has its own.
+    if (!s.sections && s.description) infoBlock(card, null, s.description);
 
-    var toggles = document.createElement("div"); toggles.className = "toggles";
     var getters = {}; // input id -> function returning its value
-    (s.inputs || []).forEach(function (inp) {
+    function drawInput(inp, card, toggles) {
       if (inp.type === "checkbox") {
         var lab = document.createElement("label"); lab.className = "toggle";
         var tl = document.createElement("span"); tl.className = "tlabel"; tl.textContent = inp.label; lab.appendChild(tl);
@@ -570,24 +593,39 @@ function drawSkills() {
         getters[inp.id] = function () { return input.value; };
       }
       card.appendChild(field);
-    });
-    if (toggles.children.length) card.appendChild(toggles);
+    }
 
-    // Buttons: normal actions first, then the ones that work while a run is going.
-    var list = s.actions || [{ id: "run", label: s.name, style: "primary" }];
-    var main = document.createElement("div"); main.className = "buttons";
+    // "sections" in skill.json split one app into titled groups, each with its own inputs
+    // and buttons (Interviews: Sync Interviews / Select Interview Process). Without it the
+    // app is one group with every input and button. Control buttons (Cancel) stay at the end.
+    var all = s.actions || [{ id: "run", label: s.name, style: "primary" }];
+    var groups = s.sections || [{ inputs: null, actions: null }];
     var ctl = document.createElement("div"); ctl.className = "buttons";
-    list.forEach(function (a) {
-      var b = document.createElement("button");
-      b.textContent = a.label;
-      b.className = "pill " + (a.style || (a.control ? "secondary" : "primary"));
-      b.setAttribute("data-action", a.id);
-      if (a.control) b.setAttribute("data-control", "1");
-      if (a.queue) b.setAttribute("data-queue-skill", s.id);
-      b.addEventListener("click", function () { pressAction(s, a, getters); });
-      (a.control ? ctl : main).appendChild(b);
+    groups.forEach(function (sec) {
+      var box = card;
+      if (s.sections) {
+        box = document.createElement("div"); box.className = "section" + (sec === groups[0] ? " first" : "");
+        infoBlock(box, sec.title || "", sec.description);
+        card.appendChild(box);
+      }
+      var toggles = document.createElement("div"); toggles.className = "toggles";
+      (s.inputs || []).forEach(function (inp) { if (!sec.inputs || sec.inputs.indexOf(inp.id) >= 0) drawInput(inp, box, toggles); });
+      if (toggles.children.length) box.appendChild(toggles);
+      // Buttons: normal actions first, then the ones that work while a run is going.
+      var main = document.createElement("div"); main.className = "buttons";
+      all.forEach(function (a) {
+        if (a.control ? sec !== groups[0] : sec.actions && sec.actions.indexOf(a.id) < 0) return;
+        var b = document.createElement("button");
+        b.textContent = a.label;
+        b.className = "pill " + (a.style || (a.control ? "secondary" : "primary"));
+        b.setAttribute("data-action", a.id);
+        if (a.control) b.setAttribute("data-control", "1");
+        if (a.queue) b.setAttribute("data-queue-skill", s.id);
+        b.addEventListener("click", function () { pressAction(s, a, getters); });
+        (a.control ? ctl : main).appendChild(b);
+      });
+      if (main.children.length) box.appendChild(main);
     });
-    card.appendChild(main);
     if (ctl.children.length) {
       var cl = document.createElement("div"); cl.className = "controls-label"; cl.textContent = "While running";
       card.appendChild(cl); card.appendChild(ctl);
@@ -604,6 +642,33 @@ function drawSkills() {
     apps.appendChild(view);
   });
   document.getElementById("back").addEventListener("click", function () { showView(null); });
+}
+
+// A header row (title, or none for a slim row) with an "i" that opens the how-to text under it.
+function infoBlock(parent, title, text) {
+  var head = document.createElement("div"); head.className = "info-head" + (title === null ? " slim" : "");
+  if (title !== null) { var h = document.createElement("div"); h.className = "section-title"; h.textContent = title; head.appendChild(h); }
+  parent.appendChild(head);
+  if (!text) return;
+  var btn = document.createElement("button"); btn.className = "info-btn"; btn.title = "How to";
+  btn.setAttribute("aria-label", "How to" + (title ? ": " + title : "")); btn.setAttribute("aria-expanded", "false");
+  btn.innerHTML = '<svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="2.3" r="1.25" fill="currentColor"/>' +
+    '<rect x="5" y="4.6" width="2" height="6" rx="1" fill="currentColor"/></svg>';
+  head.appendChild(btn);
+  var body = document.createElement("div"); body.className = "info-body";
+  var p = document.createElement("p"); p.className = "desc"; p.textContent = text; body.appendChild(p);
+  parent.appendChild(body);
+  btn.addEventListener("click", function () { setInfo(btn, body, btn.getAttribute("aria-expanded") !== "true"); });
+}
+function setInfo(btn, body, open) {
+  btn.setAttribute("aria-expanded", open ? "true" : "false");
+  body.classList.toggle("open", open);
+  body.style.maxHeight = open ? body.scrollHeight + "px" : "0px";
+}
+function closeInfo() {
+  [].forEach.call(document.querySelectorAll(".info-btn[aria-expanded=true]"), function (b) {
+    setInfo(b, b.parentNode.nextSibling, false);
+  });
 }
 
 // A button press: confirm if asked, explain + pick each prompted folder, then run.

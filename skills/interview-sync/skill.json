@@ -1,0 +1,9 @@
+{
+  "id": "interview-sync",
+  "name": "Sync Interviews",
+  "description": "Lines every clip of an interview sequence up with camera A by waveform, on a copy \"<sequence> Synced\", then links as chosen. Runs from the Interviews tile (Sync Interviews).",
+  "hidden": true,
+  "entry": "premiere.jsx",
+  "panel": "panel.js",
+  "actions": [ { "id": "sync", "label": "Sync interviews" }, { "id": "cancel", "label": "Cancel", "control": true }, { "id": "jsx", "label": "Test hook: one premiere.jsx action" } ]
+}
