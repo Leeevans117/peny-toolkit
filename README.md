@@ -47,6 +47,10 @@ one app tile per skill; tapping a tile opens that skill's view (< returns home).
    while running, all under 0.35 s) can be turned off with M and is off in Compact and
    when macOS asks for reduced motion. Blue = active/selected, green running, amber paused,
    red failed/destructive; numbers, times and paths in monospace.
+   Opening an app works like an iPhone (FLIP in main.js: a squircle grows from the tapped
+   icon, Apple's curve cubic-bezier(0.32, 0.72, 0, 1), transform/opacity only, 0.42 s);
+   Back, Esc, the logo or the home bar under every app reverse it. Icons are squircles
+   (radius 22.5%). Panel text is not selectable except inputs, log, history and statuses.
 
 3. Add `premiere.jsx` (ExtendScript, ES3: `var` only, no arrow functions, no JSON object):
 

@@ -92,6 +92,31 @@
       font: var(--fs)/var(--lh) var(--font); -webkit-font-smoothing: antialiased;
     }
     button { font: inherit; }
+    /* Panel text is not selectable (no accidental highlights while clicking); typing boxes,
+       the log, the history and status lines still are, so they can be copied. */
+    body { -webkit-user-select: none; user-select: none; }
+    input, textarea, #log, #history, .status, .info-body { -webkit-user-select: text; user-select: text; }
+
+    /* Opening an app (FLIP, like an iPhone): a squircle the colour of the icon grows from the
+       tapped icon to fill the panel, the home screen sinks behind it, the app fades in; Back
+       or the home bar runs it in reverse. Only transform and opacity move (GPU, no layout),
+       with Apple's curve. main.js drives it (flipOpen / flipClose). */
+    :root { --ios: cubic-bezier(0.32, 0.72, 0, 1); }
+    .flip-ghost { position: fixed; z-index: 6; transform-origin: 0 0; will-change: transform, opacity; pointer-events: none;
+                  background: var(--tile-bg); border: 1px solid var(--tile-line); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+    .flip-ghost svg { will-change: opacity; }
+    #home.flip-keep { display: block !important; pointer-events: none; }
+    #detail.flip-keep { display: flex !important; pointer-events: none; }
+    #detail { display: flex; flex-direction: column; }
+    #detail > #apps { flex: none; }
+    .flip-layer { will-change: transform, opacity; }
+    body.flipping .tile, body.flipping #detail .app > * { animation: none !important; }
+    /* Home bar at the foot of every app, like the iPhone's: click to go home */
+    #homebar { position: sticky; bottom: 0; flex: none; display: flex; justify-content: center; align-items: flex-end; width: 100%; height: 22px; margin-top: auto;
+               padding: 0 0 6px; background: none; border: 0; cursor: pointer; z-index: 2; }
+    #homebar span { width: 120px; max-width: 40%; height: 5px; border-radius: 3px; background: var(--dim); opacity: 0.55; transition: opacity 0.15s, transform 0.2s var(--spring); }
+    #homebar:hover span { opacity: 1; transform: scaleX(1.08); }
+    body[data-style=compact] #homebar { display: none; }
     .hidden { display: none !important; }
     ::-webkit-scrollbar { width: 8px; height: 8px; } ::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 4px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -182,7 +207,8 @@
              -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
     .tile { display: flex; flex-direction: column; align-items: center; gap: 8px; background: none; border: 0; padding: 0; min-width: 0;
             color: var(--text); cursor: pointer; position: relative; text-align: center; }
-    .tile .icon { width: var(--tile); height: var(--tile); border-radius: var(--r-tile); display: flex; align-items: center; justify-content: center; flex: none;
+    /* iOS squircle: corner radius 22.5% of the icon's width, in every style */
+    .tile .icon { width: var(--tile); height: var(--tile); border-radius: 22.5%; display: flex; align-items: center; justify-content: center; flex: none;
                   background: var(--tile-bg); border: 1px solid var(--tile-line); box-shadow: var(--tile-shadow);
                   transition: transform 0.25s var(--spring), box-shadow 0.2s var(--ease); }
     .tile .icon svg { width: var(--tile-svg); height: var(--tile-svg); }
@@ -203,7 +229,7 @@
                         padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--line-soft); }
     #tiles.list .tile:last-child { border-bottom: 0; }
     #tiles.list .tile:hover { background: var(--surface-2); }
-    #tiles.list .icon { width: var(--row-icon); height: var(--row-icon); border-radius: calc(var(--r-tile) * 0.6); grid-row: span 2; }
+    #tiles.list .icon { width: var(--row-icon); height: var(--row-icon); border-radius: 22.5%; grid-row: span 2; }
     #tiles.list .icon svg { width: calc(var(--row-icon) * 0.76); height: calc(var(--row-icon) * 0.76); }
     #tiles.list .tile:hover .icon { transform: none; }
     #tiles.list .name { max-width: none; font-size: var(--fs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -422,6 +448,7 @@
           <div class="peta" id="peta"></div>
           <div class="psub" id="psub"></div>
         </div>
+        <button id="homebar" title="Home" aria-label="Home"><span></span></button>
       </section>
     </div>
     <div id="split" title="Drag to resize"></div>
