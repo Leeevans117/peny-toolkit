@@ -1,11 +1,15 @@
 /* Interview Selects, panel side (Node). One button, all on this Mac, no internet:
  * 1. premiere.jsx "scan": the active sequence's audio pieces (nested sequences followed).
  * 2. ffmpeg rebuilds that audio as one 16 kHz mono wav in sequence time.
- * 3. whisper.cpp (large-v3-turbo + Silero voice detection) transcribes it.
- * 4. Ollama (qwen2.5:32b) picks the answers in ~9 min windows with 1 min overlap, then long
- *    answers are split (pipeline.js). Ollama is started for the run and stopped after.
- * 5. Ollama groups the answers by the interviewer's questions, and the questions into broad
- *    themes (pipeline.js group, themes).
+ * 3. whisper.cpp (large-v3-turbo) transcribes it in ~25 s pieces cut at quiet moments
+ *    (whole-file voice detection dropped quiet interviewee speech, 29 Oct 2026).
+ * 4. Ollama (qwen2.5:14b, else 32b) labels every transcript line as the interviewee's or the
+ *    interviewer's (two passes, the interviewer's only when both agree); the answers are the
+ *    runs of the interviewee's lines, and one short call names each (pipeline.js
+ *    selectsByLabels). Ollama is started for the run and stopped after.
+ * 5. The answers are grouped under the interviewer's questions (the interviewer's lines with a
+ *    "?", no model pass), and Ollama groups the questions into broad themes (pipeline.js group,
+ *    themes).
  * 6. premiere.jsx "copy": "<sequence> Cut version" (unless already on one), then "mark":
  *    question (Chapter) and theme (Segmentation) markers, topics as clip markers, read back.
  * Remove ums & uhs (unum): steps 1-2 on the active sequence, then fillers.js finds the
@@ -104,13 +108,86 @@ module.exports = function (api) {
     });
   }
 
-  function transcribe(whisper, wav, dir, duration) {
-    var started = Date.now();
-    return run(whisper, ["-m", inModelDir(WHISPER_MODEL), "--vad", "-vm", inModelDir(VAD_MODEL), "-mc", "0", "-sns", "-l", "en", "-pp",
-      "-f", wav, "-oj", "-osrt", "-of", path.join(dir, "transcript"), "-t", "8"], function (line) {
-      var m = /progress\s*=\s*(\d+)%/.exec(line);
-      if (m) api.status("Transcribing " + fmt(duration) + " of audio: " + m[1] + "% (" + Math.round((Date.now() - started) / 1000) + " s)");
-    }).then(function () { return path.join(dir, "transcript.json"); });
+  // Whisper over the whole file with VAD lost quiet interviewee speech (Arly Kemp, 29 Oct
+  // 2026: her name and home town and every line VAD took for silence), and without VAD its
+  // times drift by seconds. So the wav is cut into chunks of about 25 s at its quietest
+  // moments and each chunk is transcribed on its own, all in one whisper run (model loaded
+  // once); a line's time is its chunk's start (counted in samples) + whisper's time in it.
+  function quietCuts(wav, duration) {
+    var buf = fs.readFileSync(wav), at = 12, data = -1, size = 0;
+    while (at + 8 <= buf.length) {
+      var id = buf.toString("ascii", at, at + 4), len = buf.readUInt32LE(at + 4);
+      if (id === "data") { data = at + 8; size = Math.min(len, buf.length - data); break; }
+      at += 8 + len + (len & 1);
+    }
+    if (data < 0) return [];
+    var rate = 16000, frame = 800, n = Math.floor(size / 2 / frame), e = new Float64Array(n);
+    for (var f = 0; f < n; f++) {
+      var sum = 0;
+      for (var k = 0; k < frame; k++) { var v = buf.readInt16LE(data + 2 * (f * frame + k)); sum += v * v; }
+      e[f] = sum;
+    }
+    var cuts = [], prev = 0, step = frame / rate;
+    while (prev + 28 < duration) {
+      var lo = Math.ceil((prev + 18) / step), hi = Math.min(n - 1, Math.floor((prev + 28) / step)), best = lo;
+      for (f = lo; f <= hi; f++) if (e[f] < e[best]) best = f;
+      prev = (best + 0.5) * step;
+      cuts.push(prev);
+    }
+    return cuts;
+  }
+  function wavSamples(file) {
+    var buf = fs.readFileSync(file), at = 12;
+    while (at + 8 <= buf.length) {
+      var id = buf.toString("ascii", at, at + 4), len = buf.readUInt32LE(at + 4);
+      if (id === "data") return Math.floor(Math.min(len, buf.length - at - 8) / 2);
+      at += 8 + len + (len & 1);
+    }
+    return 0;
+  }
+  function transcribe(whisper, ffmpeg, wav, dir, duration) {
+    var started = Date.now(), cdir = path.join(dir, "chunks");
+    fs.mkdirSync(cdir, { recursive: true });
+    var cuts = quietCuts(wav, duration);
+    api.status("Cutting " + fmt(duration) + " of audio into " + (cuts.length + 1) + " pieces…");
+    var args = ["-hide_banner", "-loglevel", "error", "-y", "-i", wav, "-f", "segment", "-c:a", "pcm_s16le"];
+    if (cuts.length) args.push("-segment_times", cuts.map(function (c) { return c.toFixed(3); }).join(","));
+    args.push(path.join(cdir, "c%04d.wav"));
+    var files;
+    return run(ffmpeg, args).then(function () {
+      files = fs.readdirSync(cdir).filter(function (f) { return /^c\d+\.wav$/.test(f); }).sort().map(function (f) { return path.join(cdir, f); });
+      var wargs = ["-m", inModelDir(WHISPER_MODEL), "-mc", "0", "-sns", "-l", "en", "-oj", "-t", "8"], done = 0;
+      files.forEach(function (f) { wargs.push("-f", f); });
+      return run(whisper, wargs, function (line) {
+        if (/saving output to/.test(line)) {
+          done++;
+          api.status("Transcribing " + fmt(duration) + " of audio: " + done + " of " + files.length + " pieces (" + Math.round((Date.now() - started) / 1000) + " s)");
+        }
+      });
+    }).then(function () {
+      // Chunk starts from the samples actually in each chunk (the segment muxer cuts on
+      // packet boundaries, not at the exact times asked for).
+      var t0 = 0, lines = [];
+      files.forEach(function (f) {
+        var j = null;
+        try { j = JSON.parse(fs.readFileSync(f + ".json", "utf-8")); } catch (e) {}
+        (j && j.transcription || []).forEach(function (s) {
+          var text = String(s.text || "").trim();
+          if (!text || /^[\[(].*[\])]$/.test(text)) return;
+          lines.push({ offsets: { from: Math.round(t0 * 1000 + s.offsets.from), to: Math.round(t0 * 1000 + s.offsets.to) }, text: " " + text });
+        });
+        t0 += wavSamples(f) / 16000;
+      });
+      fs.writeFileSync(path.join(dir, "transcript.json"), JSON.stringify({ transcription: lines }, null, 1));
+      function srt(ms) {
+        function p(n, w) { n = String(n); while (n.length < w) n = "0" + n; return n; }
+        return p(Math.floor(ms / 3600000), 2) + ":" + p(Math.floor(ms / 60000) % 60, 2) + ":" + p(Math.floor(ms / 1000) % 60, 2) + "," + p(ms % 1000, 3);
+      }
+      fs.writeFileSync(path.join(dir, "transcript.srt"), lines.map(function (l, i) {
+        return (i + 1) + "\n" + srt(l.offsets.from) + " --> " + srt(l.offsets.to) + "\n" + l.text.trim() + "\n";
+      }).join("\n"));
+      return path.join(dir, "transcript.json");
+    });
   }
 
   function ollamaUp() {
@@ -125,7 +202,7 @@ module.exports = function (api) {
   function startOllama(ollama) {
     return ollamaUp().then(function (up) {
       if (up) { api.log("Ollama was already running; it is left running afterwards."); return null; }
-      var env = Object.assign({}, process.env, { OLLAMA_FLASH_ATTENTION: "1", OLLAMA_KV_CACHE_TYPE: "q8_0" });
+      var env = Object.assign({}, process.env, { OLLAMA_FLASH_ATTENTION: "1", OLLAMA_KV_CACHE_TYPE: "q8_0", OLLAMA_NUM_PARALLEL: String(pipeline.PARALLEL) });
       var child = childProcess.spawn(ollama, ["serve"], { env: env, stdio: "ignore" });
       var t0 = Date.now();
       return new Promise(function (ok, no) {
@@ -175,7 +252,7 @@ module.exports = function (api) {
       return buildAudio(ffmpeg, pieces, scan.duration, dir);
     }).then(function (wav) {
       lap("audio");
-      return transcribe(whisper, wav, dir, scan.duration);
+      return transcribe(whisper, ffmpeg, wav, dir, scan.duration);
     }).then(function (json) {
       lap("transcribe");
       var lines = pipeline.readTranscript(json);
@@ -183,23 +260,25 @@ module.exports = function (api) {
       api.status("Starting the local AI model…");
       return startOllama(ollama).then(function (child) {
         server = child;
+        return pipeline.pickModel();
+      }).then(function (model) {
+        api.log("Interview Selects: model " + model);
         var w0 = Date.now();
-        return pipeline.selects(lines, { who: (params.name || "").trim() }, function (i, n, w) {
+        return pipeline.selectsByLabels(lines, { who: (params.name || "").trim() }, function (i, n, w) {
           if (cancelled) throw { stop: "Cancelled." };
           var el = Math.round((Date.now() - w0) / 1000);
-          api.status(i >= 0 ? "Finding answers: part " + (i + 1) + " of " + n + " (" + fmt(w.ws) + " onwards, " + el + " s so far)…"
-                            : "Splitting a long answer at " + fmt(w.ws) + " (" + el + " s so far)…");
+          api.status(i >= 0 ? "Finding who speaks: part " + (i + 1) + " of " + n + " (" + fmt(w.ws) + " onwards, " + el + " s so far)…"
+                            : "Naming the answers (" + el + " s so far)…");
         });
       });
     }).then(function (r) {
       if (!r.answers.length) throw { stop: "The model found no answers. Transcript: " + path.join(dir, "transcript.srt") };
-      api.status("Making the " + r.answers.length + " topic notes brief…");
-      return pipeline.brief(r.answers, { who: (params.name || "").trim() }).then(function (b) { r.answers = b.answers; r.stats.briefTokens = b.tokens; return r; });
+      return r;
     }).then(function (r) {
       answers = r.answers; stats = r.stats;
       api.status("Grouping the " + answers.length + " answers by question…");
       var g0 = Date.now();
-      return pipeline.group(pipeline.readTranscript(path.join(dir, "transcript.json")), answers, { who: (params.name || "").trim() }, function (i, n) {
+      return pipeline.group(pipeline.readTranscript(path.join(dir, "transcript.json")), answers, { who: (params.name || "").trim(), crew: stats.crew }, function (i, n) {
         if (cancelled) throw { stop: "Cancelled." };
         api.status("Finding the interviewer's questions: part " + (i + 1) + " of " + n + " (" + Math.round((Date.now() - g0) / 1000) + " s so far)…");
       }).then(function (g) {
