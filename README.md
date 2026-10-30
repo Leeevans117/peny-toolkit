@@ -42,7 +42,7 @@ one app tile per skill; tapping a tile opens that skill's view (< returns home).
    Each action can have `"style": "primary" | "secondary" | "danger"` (white, grey,
    red outline) and `"prompts"` (folders asked for on click, each with an `"explain"` sheet).
    UI rules (Lee, 30 Oct 2026): home is the dashboard of tiles on the black-to-white fade;
-   four styles (Glass default, Studio, Bold, Compact) set only CSS variables in index.html,
+   four styles (Studio default, Glass, Bold, Compact) set only CSS variables in index.html,
    picked with S or the half-circle button; motion (tile rise, press, view slide, bar sweep
    while running, all under 0.35 s) can be turned off with M and is off in Compact and
    when macOS asks for reduced motion. Blue = active/selected, green running, amber paused,

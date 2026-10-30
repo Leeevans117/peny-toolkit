@@ -936,7 +936,7 @@ var STYLES = [
   { id: "studio", name: "Studio", text: "Calm, like Resolve or Final Cut: charcoal, flat cards", sw: "linear-gradient(180deg,#1e1f22 60%,#4a4d52)" },
   { id: "bold", name: "Bold", text: "High-contrast black and white, big type, chunky outlines", sw: "linear-gradient(180deg,#000 65%,#d6d6d6)" },
   { id: "compact", name: "Compact", text: "Dense inspector for a small panel, no motion", sw: "#1c1d20" }];
-function styleId() { var v = pref("style"); return STYLES.some(function (x) { return x.id === v; }) ? v : "glass"; }
+function styleId() { var v = pref("style"); return STYLES.some(function (x) { return x.id === v; }) ? v : "studio"; } // Lee's pick, 30 Oct 2026
 function applyStyle() {
   document.body.setAttribute("data-style", styleId());
   var motion = pref("motion") !== "off" && styleId() !== "compact";
