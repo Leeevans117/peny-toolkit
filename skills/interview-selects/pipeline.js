@@ -538,6 +538,109 @@ function notePrompt(list, who) {
     "Never describe the speaker or what they do (no \"" + (who || "Tony") + " says\", \"introduces self\", \"they mention\", \"the interviewee\", \"expresses\"). Keep names of other people and places.\n" +
     "Return ONLY JSON: {\"items\":[{\"n\":1,\"topic\":\"...\",\"note\":\"...\"}]}\n\n" + list;
 }
+// Both passes said interviewer: dropped only if it reads like it too (a question, a reaction, a
+// prompt). A line of the interviewee's that both passes got wrong stays (Tod, 30 Oct 2026).
+var INTERVIEWER = /\?|^\s*(perfect|awesome|cool|nice|great|wow|okay|ok|amazing|brilliant)\b|\bthat'?s (really |pretty |so |very )?(cool|great|awesome|nice|amazing|good)\b|\b(do|did|would|could|can|have|are|were|was|is|will) you\b|\byour\b|\bquestions?\b|\blet'?s (talk|start|go)\b|\btell (me|us)\b/i;
+function clearlyInterviewer(l) { return INTERVIEWER.test(l.text); }
+
+/* Cut edges from the sound itself, not whisper's line times (the end of a line is often early or
+ * late). Speech/silence comes from an energy floor learned per interview (20 ms frames, 2-means
+ * on dB). A start moves back to the silence before the word it lands in, then 0.25 s of handle;
+ * an end moves on to the silence after the word, then 0.5 s of handle; a handle stops short of
+ * the next speech so it never runs into a question. Answers that then touch are joined. */
+function readWavDb(file) {
+  var buf = fs.readFileSync(file), at = 12, data = -1, size = 0;
+  while (at + 8 <= buf.length) {
+    var id = buf.toString("ascii", at, at + 4), len = buf.readUInt32LE(at + 4);
+    if (id === "data") { data = at + 8; size = Math.min(len, buf.length - data); break; }
+    at += 8 + len + (len & 1);
+  }
+  if (data < 0) return null;
+  var frame = 320, n = Math.floor(size / 2 / frame), db = new Float32Array(n);
+  for (var f = 0; f < n; f++) {
+    var sum = 0;
+    for (var k = 0; k < frame; k++) { var v = buf.readInt16LE(data + 2 * (f * frame + k)) / 32768; sum += v * v; }
+    db[f] = 10 * Math.log10(sum / frame + 1e-10);
+  }
+  return db;
+}
+function speechThreshold(db) {
+  var sorted = Array.prototype.slice.call(db).sort(function (a, b) { return a - b; });
+  var lo = sorted[Math.floor(sorted.length * 0.1)], hi = sorted[Math.floor(sorted.length * 0.9)];
+  for (var it = 0; it < 20; it++) {
+    var c = (lo + hi) / 2, sl = 0, nl = 0, sh = 0, nh = 0;
+    for (var i = 0; i < db.length; i++) { if (db[i] < c) { sl += db[i]; nl++; } else { sh += db[i]; nh++; } }
+    if (!nl || !nh) break;
+    lo = sl / nl; hi = sh / nh;
+  }
+  return lo + (hi - lo) * 0.35;
+}
+// Each line's level (90th percentile of its frames: a line the two share counts by its loud part,
+// so the interviewee's words in it are kept), split in two groups.
+// "I" lines are the quiet group; null when the groups aren't at least 6 dB apart.
+function levelLabels(lines, wav, stats) {
+  var db = null;
+  try { db = readWavDb(wav); } catch (e) {}
+  if (!db || lines.length < 10) return null;
+  var lv = lines.map(function (l) {
+    var f = Math.floor(l.a / 0.02), t = Math.max(f + 1, Math.ceil(l.b / 0.02)), v = Array.prototype.slice.call(db, f, t).sort(function (x, y) { return x - y; });
+    return v.length ? v[Math.floor(v.length * 0.9)] : -100;
+  });
+  var sorted = lv.slice().sort(function (x, y) { return x - y; }), lo = sorted[Math.floor(sorted.length * 0.1)], hi = sorted[Math.floor(sorted.length * 0.9)];
+  for (var it = 0; it < 20; it++) {
+    var c = (lo + hi) / 2, sl = 0, nl = 0, sh = 0, nh = 0;
+    lv.forEach(function (x) { if (x < c) { sl += x; nl++; } else { sh += x; nh++; } });
+    if (!nl || !nh) return null;
+    lo = sl / nl; hi = sh / nh;
+  }
+  stats.levelGapDb = Math.round((hi - lo) * 10) / 10;
+  if (hi - lo < 6) return null;
+  var cut = (lo + hi) / 2;
+  stats.speakers = "lav level";
+  return lv.map(function (x) { return x < cut ? "I" : "E"; });
+}
+function safeEdges(answers, wav, stats) {
+  var db = null;
+  try { db = readWavDb(wav); } catch (e) {}
+  if (!db || !db.length) { stats.edges = "no audio to measure"; return answers; }
+  var F = 0.02, th = speechThreshold(db), n = db.length, MIN_GAP = 4; // 4 frames = 80 ms of silence
+  function speech(f) { return f >= 0 && f < n && db[f] > th; }
+  function gapAt(f) { for (var k = 0; k < MIN_GAP; k++) if (speech(f + k)) return false; return true; }
+  function onsetBack(f, limit) { // start of the speech f is in, or just after f: walks back to a gap
+    while (f > limit && !gapAt(f - MIN_GAP)) f--;
+    return Math.max(f, limit);
+  }
+  function offsetOn(f, limit) { // end of the speech f is in: walks on to a gap
+    while (f < limit && !gapAt(f)) f++;
+    return Math.min(f, limit);
+  }
+  var out = [], moved = 0;
+  answers.forEach(function (x, i) {
+    var a = Math.round(x.start / F), b = Math.round(x.end / F);
+    // Line times can be up to a second out either way, so look for the speech first.
+    var A = a, B = b, look = Math.round(1 / F), first = -1, last = -1, f;
+    for (f = a; f <= Math.min(n - 1, a + look); f++) if (speech(f)) { first = f; break; }
+    if (first >= 0) A = onsetBack(first, Math.max(0, a - look));
+    for (f = b; f >= Math.max(0, b - look); f--) if (speech(f)) { last = f; break; }
+    if (last >= 0) B = offsetOn(last, Math.min(n, b + Math.round(1.5 / F)));
+    // Handles, stopping short of other speech.
+    var head = A, tail = B, h = Math.round(0.25 / F), t = Math.round(0.5 / F);
+    while (head > 0 && A - head < h && !speech(head - 1)) head--;
+    while (tail < n && tail - B < t && !speech(tail)) tail++;
+    if (head !== a || tail !== b) moved++;
+    out.push({ start: head * F, end: Math.max(tail, head + 1) * F, topic: x.topic, outline: x.outline });
+  });
+  // Never into the answer before; touching answers join.
+  var res = [];
+  out.forEach(function (x) {
+    var p = res[res.length - 1];
+    if (p && x.start <= p.end + 0.02) { p.end = Math.max(p.end, x.end); stats.edgesJoined = (stats.edgesJoined || 0) + 1; return; }
+    res.push(x);
+  });
+  stats.edges = { threshold: Math.round(th * 10) / 10, moved: moved, of: answers.length };
+  return res;
+}
+
 function selectsByLabels(lines, opts, progress) {
   opts = opts || {};
   var stats = { model: MODEL, labelCalls: 0, promptTokens: 0, outputTokens: 0, unlabelled: 0, votesSplit: 0 }, lab = {}, wins = [], runs = [], i;
@@ -545,7 +648,12 @@ function selectsByLabels(lines, opts, progress) {
   // interviewer's only when both passes say so (her words are never cut on one say-so: one
   // pass alone put ~5 of Tahnee's lines on the interviewer).
   var votes = [{}, {}], passes = 2;
-  for (var pass = 0; pass < passes; pass++) {
+  // On the speaker's lav the interviewer is much quieter, and that tells them apart better than
+  // the model and at once (30 Oct 2026, against the other mics as a key: Tod 42/43 interviewer
+  // lines right and all 180 of his; Arly 110/121 and all 128 of hers). The model is only asked if there is no
+  // clear gap in the line levels (one shared mic, or the Audio track box filled).
+  var byLevel = opts.wav ? levelLabels(lines, opts.wav, stats) : null;
+  for (var pass = 0; !byLevel && pass < passes; pass++) {
     var off = pass ? Math.floor(LABEL_LINES / 2) : 0;
     if (off && off < lines.length) wins.push({ pass: pass, first: 0, last: off - 1, ws: lines[0].a });
     for (i = off; i < lines.length; i += LABEL_LINES) wins.push({ pass: pass, first: i, last: Math.min(lines.length, i + LABEL_LINES) - 1, ws: lines[i].a });
@@ -565,22 +673,14 @@ function selectsByLabels(lines, opts, progress) {
       });
     });
   }).then(function () {
-    for (i = 0; i < lines.length; i++) {
+    for (i = 0; byLevel && i < lines.length; i++) lab[i] = byLevel[i];
+    for (i = 0; !byLevel && i < lines.length; i++) {
       var a = votes[0][i], b = passes > 1 ? votes[1][i] : a;
-      // Split votes: a question (1.5 s or more, ending in "?") is the interviewer's.
-      var q = lines[i].b - lines[i].a >= 1.5 && /\?\s*$/.test(lines[i].text);
-      if (a === "I" && b === "I") lab[i] = "I"; else if ((a === "I" || b === "I") && q) lab[i] = "I"; else if (a || b) lab[i] = "E";
+      if (a === "I" && b === "I" && clearlyInterviewer(lines[i])) lab[i] = "I"; else if (a || b) lab[i] = "E";
       if (a && b && a !== b) stats.votesSplit++;
     }
-    // Unlabelled lines count as hers (never cut her words). An interviewer line the model
-    // labelled that runs straight on (no sentence end, next line lower case, no pause) takes
-    // the next line too, one line only (chained, it ran through Tahnee's answers).
+    // Unlabelled lines count as the interviewee's (never cut their words).
     var who = lines.map(function (l, k) { if (!lab[k]) stats.unlabelled++; return lab[k] || "E"; });
-    for (i = 0; i + 1 < lines.length; i++) {
-      var tx = lines[i].text.replace(/\s+$/, "");
-      if (lab[i] === "I" && lab[i + 1] !== "I" && (!/[.?!]$/.test(tx) || /\.\.\.$/.test(tx)) &&
-          /^[a-z]/.test(lines[i + 1].text.replace(/^\s+/, "")) && lines[i + 1].a - lines[i].b < 0.3) { who[i + 1] = "I"; stats.runOn = (stats.runOn || 0) + 1; }
-    }
     // A short interviewer reaction between two of her lines (under 1.5 s, no "?") stays in.
     var keep = who.map(function (w) { return w === "E"; });
     for (i = 1; i + 1 < lines.length; i++)
@@ -588,7 +688,7 @@ function selectsByLabels(lines, opts, progress) {
     var run = null;
     for (i = 0; i < lines.length; i++) {
       if (!keep[i]) { if (run) { runs.push(run); run = null; } continue; }
-      if (run && lines[i].a - lines[run.l].b > 3) { runs.push(run); run = null; }
+      if (run && lines[i].a - lines[run.l].b > 4) { runs.push(run); run = null; }
       if (run) run.l = i; else run = { f: i, l: i };
     }
     if (run) runs.push(run);
@@ -625,7 +725,8 @@ function selectsByLabels(lines, opts, progress) {
       });
     });
   }).then(function () {
-    return { answers: runs.map(function (r) { return { start: lines[r.f].a, end: lines[r.l].b, topic: r.topic || "Answer", outline: r.note || "" }; }), stats: stats };
+    var answers = runs.map(function (r) { return { start: lines[r.f].a, end: lines[r.l].b, topic: r.topic || "Answer", outline: r.note || "" }; });
+    return { answers: opts.wav ? safeEdges(answers, opts.wav, stats) : answers, stats: stats };
   });
 }
 

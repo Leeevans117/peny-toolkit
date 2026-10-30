@@ -38,7 +38,7 @@
     {
       "id": "track",
       "label": "Audio track (optional)",
-      "placeholder": "e.g. A1; empty = all unmuted tracks"
+      "placeholder": "e.g. A1; empty = the sequence's own sound"
     },
     {
       "id": "fillers",
@@ -107,7 +107,7 @@
         "#8a6416",
         "#2a1e06"
       ],
-      "description": "Transcribes the active interview sequence on this Mac (whisper; RED clips are read from their proxy), works out line by line who is speaking with the local AI model (Ollama, no internet), and keeps everything the interviewee says, whether or not it answers a question: intros, statements, stories. It all goes on a copy called \"<sequence> Cut version\": a Chapter marker per question, a Segmentation marker per broad theme, and the small topics as clip markers on the clip on the top video track (they belong to that footage, so they also show in other sequences that use it). The original is not changed. It stays on the sequence you started it on: you can switch to another sequence and keep working while it runs; the result goes on that sequence's copy, and if you have moved on the copy isn't opened over your work, its name is reported at the end.",
+      "description": "Transcribes the sound of the active interview sequence on this Mac (whisper): exactly what the timeline plays, so have the speaker's lav mic on the timeline. Premiere pauses for a few seconds at the start while that sound is read. works out line by line who is speaking with the local AI model (Ollama, no internet), and keeps everything the interviewee says, whether or not it answers a question: intros, statements, stories. It all goes on a copy called \"<sequence> Cut version\": a Chapter marker per question, a Segmentation marker per broad theme, and the small topics as clip markers on the clip on the top video track (they belong to that footage, so they also show in other sequences that use it). The original is not changed. It stays on the sequence you started it on: you can switch to another sequence and keep working while it runs; the result goes on that sequence's copy, and if you have moved on the copy isn't opened over your work, its name is reported at the end.",
       "inputs": [
         "name",
         "track"

@@ -1,12 +1,13 @@
 /* Interview Selects, panel side (Node). One button, all on this Mac, no internet:
  * 1. premiere.jsx "scan": the active sequence's audio pieces (nested sequences followed).
- * 2. ffmpeg rebuilds that audio as one 16 kHz mono wav in sequence time.
+ * 2. Premiere renders the sequence's own sound (the mic on the timeline), ffmpeg makes it one
+ *    16 kHz mono wav; with the Audio track box filled, ffmpeg reads that track's files instead.
  * 3. whisper.cpp (large-v3-turbo) transcribes it in ~25 s pieces cut at quiet moments
  *    (whole-file voice detection dropped quiet interviewee speech, 29 Oct 2026).
- * 4. Ollama (qwen2.5:14b, else 32b) labels every transcript line as the interviewee's or the
- *    interviewer's (two passes, the interviewer's only when both agree); the answers are the
- *    runs of the interviewee's lines, and one short call names each (pipeline.js
- *    selectsByLabels). Ollama is started for the run and stopped after.
+ * 4. Who speaks: each line's level on that sound (the interviewer is quiet on the speaker's
+ *    lav); only with no clear gap does Ollama (qwen2.5:14b, else 32b) label the lines. The answers
+ *    are the runs of the interviewee's lines, cut edges moved to measured silence with handles,
+ *    and one short Ollama call names each (pipeline.js selectsByLabels, safeEdges).
  * 5. The answers are grouped under the interviewer's questions (the interviewer's lines with a
  *    "?", no model pass), and Ollama groups the questions into broad themes (pipeline.js group,
  *    themes).
@@ -76,6 +77,45 @@ module.exports = function (api) {
     return out;
   }
 
+  // The interview's sound. Normally the sequence's own sound, rendered by Premiere: exactly
+  // the mic Lee put on the timeline (30 Oct 2026; scripting can't see which channel of a file
+  // a clip plays). 5 s per 16 min, in one script. With the "Audio track" box filled (rendering
+  // one track would mean muting the others on his sequence), that track's files are read
+  // with ffmpeg, all their channels mixed; RED clips from their proxy.
+  function sequenceAudio(ffmpeg, scan, params, dir) {
+    if ((params.track || "").trim()) return fromFiles(ffmpeg, scan, dir);
+    var raw = path.join(dir, "sequence-render.wav"), final = path.join(dir, "interview.wav");
+    api.status("Reading the sound of \"" + scan.sequence + "\"…");
+    return api.evalSkill({ action: "renderaudio", sequenceId: scan.sequenceId, sequenceName: scan.sequence, path: raw, preset: path.join(api.skillDir, "wav-float.epr") }).then(function (r) {
+      if (!r.ok) throw { stop: r.error };
+      if (!fs.existsSync(raw) || !fs.statSync(raw).size) throw { stop: "Premiere didn't write the sequence's sound (" + raw + ")." };
+      return run(ffmpeg, ["-hide_banner", "-loglevel", "error", "-y", "-i", raw, "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", final]);
+    }).then(function () {
+      try { fs.unlinkSync(raw); } catch (e) {}
+      return final;
+    });
+  }
+  function fromFiles(ffmpeg, scan, dir) {
+    var usable = scan.segments.filter(function (s) { return !/\.r3d$/i.test(s.path); });
+    if (usable.length < scan.segments.length) api.log("Interview Selects: " + (scan.segments.length - usable.length) + " RED clip(s) without a proxy left out (their sound can only be read by Premiere: empty the Audio track box, or make their proxies).");
+    if (!usable.length) throw { stop: "No readable audio on that track: RED clips need a proxy when the Audio track box is filled." };
+    var gone = usable.filter(function (s) { return !fs.existsSync(s.path); });
+    if (gone.length) throw { stop: gone.length + " audio file(s) are offline, e.g. " + gone[0].path };
+    return buildAudio(ffmpeg, joinPieces(usable), scan.duration, dir);
+  }
+
+  var streamCounts = {};
+  function audioStreams(ffmpeg, file) {
+    if (streamCounts[file]) return streamCounts[file];
+    var n = 1;
+    try {
+      var out = childProcess.execFileSync(path.join(path.dirname(ffmpeg), "ffprobe"), ["-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", file], { timeout: 60000 });
+      n = Math.max(1, Math.min(8, String(out).split("\n").filter(function (l) { return l.trim(); }).length));
+    } catch (e) {}
+    streamCounts[file] = n;
+    return n;
+  }
+
   // One wav in sequence time: each piece trimmed, delayed to its start and mixed.
   function buildAudio(ffmpeg, pieces, duration, dir) {
     var batches = [], files = [];
@@ -87,7 +127,11 @@ module.exports = function (api) {
         var args = ["-hide_banner", "-loglevel", "error", "-y"], parts = [];
         b.forEach(function (p, k) {
           args.push("-ss", p.inPoint.toFixed(4), "-t", (p.end - p.start).toFixed(4), "-i", p.path);
-          parts.push("[" + k + ":a]aformat=channel_layouts=mono,aresample=16000,adelay=" + Math.round(p.start * 1000) + ":all=1[a" + k + "]");
+          // Every audio stream of the file, mixed: the first alone is often the camera's own
+          // mic, 15-20 dB under the others (Tod, Arly: whole sentences went untranscribed).
+          var ns = audioStreams(ffmpeg, p.path), ins = "";
+          for (var st = 0; st < ns; st++) { parts.push("[" + k + ":a:" + st + "]aformat=channel_layouts=mono[s" + k + "_" + st + "]"); ins += "[s" + k + "_" + st + "]"; }
+          parts.push(ins + (ns > 1 ? "amix=inputs=" + ns + ":normalize=0," : "") + "aresample=16000,adelay=" + Math.round(p.start * 1000) + ":all=1[a" + k + "]");
         });
         var labels = b.map(function (p, k) { return "[a" + k + "]"; }).join("");
         var graph = parts.join(";") + ";" + labels + "amix=inputs=" + b.length + ":normalize=0:duration=longest,apad=whole_dur=" + duration.toFixed(3) + "[out]";
@@ -237,19 +281,17 @@ module.exports = function (api) {
     function lap(k) { times[k] = Math.round((Date.now() - t0) / 1000); }
     if (params.reuse) return markOnly(params.reuse, params);
     api.status("Reading the sequence's audio…");
-    return api.evalSkill({ action: "scan", track: params.track || "" }).then(function (r) {
+    return api.evalSkill({ action: "scan", track: params.track || "", sequenceId: params.sequenceId }).then(function (r) {
       if (!r.ok) throw { stop: r.error };
       scan = r.details;
       var safe = scan.sequence.replace(/[^A-Za-z0-9 _-]+/g, "").replace(/\s+/g, "_").slice(0, 60);
       dir = path.join(WORK_ROOT, safe + "-" + new Date().toISOString().replace(/[:.]/g, "-"));
       fs.mkdirSync(dir, { recursive: true });
-      var gone = scan.segments.filter(function (s) { return !fs.existsSync(s.path); });
-      if (gone.length) throw { stop: gone.length + " audio file(s) are offline, e.g. " + gone[0].path };
       var pieces = joinPieces(scan.segments);
       fs.writeFileSync(path.join(dir, "scan.json"), JSON.stringify(scan, null, 1));
       api.log("Interview Selects: \"" + scan.sequence + "\" " + fmt(scan.duration) + ", " + scan.segments.length + " audio piece(s) on " + scan.tracks.join(", ") +
         " (" + pieces.length + " after joining)." + (scan.notes.length ? " Notes: " + scan.notes.join(" ") : ""));
-      return buildAudio(ffmpeg, pieces, scan.duration, dir);
+      return sequenceAudio(ffmpeg, scan, params, dir);
     }).then(function (wav) {
       lap("audio");
       return transcribe(whisper, ffmpeg, wav, dir, scan.duration);
@@ -264,7 +306,7 @@ module.exports = function (api) {
       }).then(function (model) {
         api.log("Interview Selects: model " + model);
         var w0 = Date.now();
-        return pipeline.selectsByLabels(lines, { who: (params.name || "").trim() }, function (i, n, w) {
+        return pipeline.selectsByLabels(lines, { who: (params.name || "").trim(), wav: path.join(dir, "interview.wav") }, function (i, n, w) {
           if (cancelled) throw { stop: "Cancelled." };
           var el = Math.round((Date.now() - w0) / 1000);
           api.status(i >= 0 ? "Finding who speaks: part " + (i + 1) + " of " + n + " (" + fmt(w.ws) + " onwards, " + el + " s so far)…"
@@ -395,10 +437,8 @@ module.exports = function (api) {
       var safe = scan.sequence.replace(/[^A-Za-z0-9 _-]+/g, "").replace(/\s+/g, "_").slice(0, 60);
       dir = path.join(WORK_ROOT, safe + "-ums-" + new Date().toISOString().replace(/[:.]/g, "-"));
       fs.mkdirSync(dir, { recursive: true });
-      var gone = scan.segments.filter(function (s) { return !fs.existsSync(s.path); });
-      if (gone.length) throw { stop: gone.length + " audio file(s) are offline, e.g. " + gone[0].path };
       api.log("Remove ums & uhs: \"" + scan.sequence + "\" " + fmt(scan.duration) + ", " + scan.segments.length + " audio piece(s) on " + scan.tracks.join(", ") + "; removing " + words.join(", ") + ".");
-      return buildAudio(ffmpeg, joinPieces(scan.segments), scan.duration, dir);
+      return sequenceAudio(ffmpeg, scan, params, dir);
     }).then(function (wav) {
       return fillers.find(wav, scan.duration, dir, { ffmpeg: ffmpeg, whisper: whisper, model: inModelDir(WHISPER_MODEL) }, run, api.status, { words: words });
     }).then(function (r) {

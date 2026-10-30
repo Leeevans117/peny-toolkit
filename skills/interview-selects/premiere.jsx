@@ -27,6 +27,7 @@
     if (action === "copy") return backToLee(was, seq, copy(seq));
     if (action === "unum") return backToLee(was, seq, unum(seq, params));
     if (action === "mark") return mark(seq, params);
+    if (action === "renderaudio") return renderAudio(seq, params);
     if (action === "probe") return probe(seq, params);
     if (action === "dump") return T.ok("Pieces " + params.a + "-" + params.b, { pieces: around(seq, params.a, params.b) });
     if (action === "cutraise") return backToLee(was, seq, cutraise(seq, params));
@@ -66,6 +67,15 @@
       if (result.summary) result.summary += " Could not switch back to \"" + was.name + "\".";
     }
     return result;
+  }
+
+  // The sequence's own sound as a wav: exactly what the timeline plays (the mic Lee chose for
+  // the clip, mutes, levels). Scripting can't see which source channel a clip plays.
+  function renderAudio(seq, params) {
+    var ok = false, err = "";
+    try { ok = seq.exportAsMediaDirect(params.path, params.preset, 0); } catch (e) { err = String(e); }
+    if (err) return T.fail("Could not render the sequence's sound: " + err);
+    return T.ok("Rendered the sound of \"" + seq.name + "\".", { path: params.path, result: String(ok) });
   }
 
   // ---- Cut version (Lee, 20 Oct 2026: the copy is "<sequence> Cut version") ----
@@ -131,8 +141,7 @@
         if (/\.r3d$/i.test(p)) {
           var px = "";
           try { if (it.projectItem.hasProxy && it.projectItem.hasProxy()) px = String(it.projectItem.getProxyPath() || ""); } catch (eX) {}
-          if (!px) { notes.push("\"" + it.name + "\" at " + T.fmt(s + offset) + " is a RED clip without a proxy: its sound can't be read outside Premiere, so it was left out (make its proxy first)."); continue; }
-          p = px;
+          if (px) p = px;
         }
         out.push({ path: p, inPoint: inPt, start: cs + offset, end: ce + offset, name: String(it.name), track: tracks[k] + 1, depth: depth });
       }
