@@ -41,9 +41,12 @@ one app tile per skill; tapping a tile opens that skill's view (< returns home).
    a bar timed from its past runs in the History).
    Each action can have `"style": "primary" | "secondary" | "danger"` (white, grey,
    red outline) and `"prompts"` (folders asked for on click, each with an `"explain"` sheet).
-   UI rules (Lee, 30 Oct 2026): neutral greys only; blue only for active/selected/focus,
-   green for running, amber paused, red failed/destructive; numbers, times and paths in
-   monospace; no animations; shortcut keys shown in tooltips.
+   UI rules (Lee, 30 Oct 2026): home is the dashboard of tiles on the black-to-white fade;
+   four styles (Glass default, Studio, Bold, Compact) set only CSS variables in index.html,
+   picked with S or the half-circle button; motion (tile rise, press, view slide, bar sweep
+   while running, all under 0.35 s) can be turned off with M and is off in Compact and
+   when macOS asks for reduced motion. Blue = active/selected, green running, amber paused,
+   red failed/destructive; numbers, times and paths in monospace.
 
 3. Add `premiere.jsx` (ExtendScript, ES3: `var` only, no arrow functions, no JSON object):
 

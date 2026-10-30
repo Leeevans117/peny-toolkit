@@ -277,7 +277,7 @@ function drawJobs() {
       e.state === "paused" ? "Paused" : e.state === "estimating" ? "Estimating time left…" : e.state === "ok" ? leftText(e.seconds) : "";
     if (!over) { running += p.unit === "steps" ? 1 : p.running; if (e.state === "ok" && (longest === null || e.seconds > longest)) longest = e.seconds; }
     var by = !over && e.state === "ok" ? doneByText(e) : "";
-    h += '<div class="jtask' + (over && (p.failed || p.cancelled) ? " failed" : "") + '"><div class="jrow"><span class="jname">' + esc(title) +
+    h += '<div class="jtask' + (over && (p.failed || p.cancelled) ? " failed" : "") + (over ? "" : " running") + '"><div class="jrow"><span class="jname">' + esc(title) +
       '</span><span class="jval">' + (p.timer ? "" : p.finished + " of " + p.total + (p.unit === "steps" ? " steps" : "") + " · ") + pct +
       '</span></div><div class="bar"><div class="fill" style="width:' + (p.fraction * 100).toFixed(1) + '%"></div></div><div class="jeta">' +
       esc(left + (by ? " · " + by : "")) + "</div>";
@@ -377,6 +377,7 @@ function drawProgress() {
     sub.textContent = bits.join(" · ");
     box.className = "glass" + (p.failed || p.cancelled ? " failed" : p.fraction >= 1 ? " complete" : "");
   }
+  if (p && p.event !== "none" && !taskOver(p)) box.classList.add("running");
   // Apps with their own progress always show the bar; the rest once a run has one.
   if (!skill || !(skill.progress || p)) box.classList.add("hidden");
 }
@@ -419,6 +420,7 @@ function showView(id) {
   currentApp = null;
   document.getElementById("back").title = "Home";
   document.body.setAttribute("data-view", id ? "detail" : "home");
+  document.body.classList.remove("pane-home");
   document.getElementById("home").classList.toggle("hidden", !!id);
   document.getElementById("detail").classList.toggle("hidden", !id);
   var views = document.querySelectorAll(".app[data-skill]");
@@ -654,7 +656,7 @@ function drawSkills() {
       return b;
     }
     if (s.apps) {
-      var dash = document.createElement("div"); dash.className = "subtiles";
+      var dash = document.createElement("div"); dash.className = "glass subtiles";
       s.apps.forEach(function (ap, ai) {
         var t = document.createElement("button"); t.className = "tile subtile";
         t.setAttribute("data-app", ap.id); t.setAttribute("data-owner", s.id); t.setAttribute("data-actions", (ap.actions || []).join(","));
@@ -913,9 +915,11 @@ function applyLayout() {
   aux.style.height = lay === "bottom" ? (parseInt(pref("auxH"), 10) || Math.min(150, Math.round(window.innerHeight * 0.28))) + "px" : "";
   aux.style.width = lay === "side" ? (parseInt(pref("auxW"), 10) || 300) + "px" : "";
   document.getElementById("btn-layout").title = "Log and History: " + lay + " (L to change)";
-  var grid = pref("tiles") === "grid";
-  document.getElementById("tiles").className = grid ? "grid" : "";
-  document.getElementById("btn-view").classList.toggle("on", grid);
+  // Dashboard of tiles by default (Lee, 30 Oct 2026); G switches to list rows.
+  var list = pref("tiles") === "list";
+  document.getElementById("tiles").className = list ? "list" : "";
+  document.getElementById("btn-view").classList.toggle("on", list);
+  applyStyle();
   var tab = pref("tab") === "history" ? "history" : "log";
   document.getElementById("log").classList.toggle("hidden", tab !== "log");
   document.getElementById("history").classList.toggle("hidden", tab !== "history");
@@ -924,9 +928,45 @@ function applyLayout() {
   document.getElementById("aux-hint").textContent = tab === "history" ? "Undo in Premiere: ⌘Z" : "";
 }
 function cycleLayout() { pref("layout", LAYOUTS[(LAYOUTS.indexOf(pref("layout") || "bottom") + 1) % LAYOUTS.length]); applyLayout(); }
-function toggleGrid() { pref("tiles", pref("tiles") === "grid" ? "list" : "grid"); applyLayout(); }
+function toggleGrid() { pref("tiles", pref("tiles") === "list" ? "grid" : "list"); applyLayout(); }
+
+// ---- Style: four looks (index.html), S to change, M motion on/off; remembered per Mac ----
+var STYLES = [
+  { id: "glass", name: "Glass", text: "The dashboard: black fading to white, frosted cards, round buttons", sw: "linear-gradient(180deg,#000 55%,#5a5a5a 85%,#bdbdbd)" },
+  { id: "studio", name: "Studio", text: "Calm, like Resolve or Final Cut: charcoal, flat cards", sw: "linear-gradient(180deg,#1e1f22 60%,#4a4d52)" },
+  { id: "bold", name: "Bold", text: "High-contrast black and white, big type, chunky outlines", sw: "linear-gradient(180deg,#000 65%,#d6d6d6)" },
+  { id: "compact", name: "Compact", text: "Dense inspector for a small panel, no motion", sw: "#1c1d20" }];
+function styleId() { var v = pref("style"); return STYLES.some(function (x) { return x.id === v; }) ? v : "glass"; }
+function applyStyle() {
+  document.body.setAttribute("data-style", styleId());
+  var motion = pref("motion") !== "off" && styleId() !== "compact";
+  document.body.setAttribute("data-motion", motion ? "on" : "off");
+  var st = STYLES.filter(function (x) { return x.id === styleId(); })[0];
+  document.getElementById("btn-style").title = "Style: " + st.name + " (S to change, M motion " + (motion ? "on" : "off") + ")";
+}
+function setStyle(id) { pref("style", id); applyStyle(); }
+function cycleStyle() { var i = STYLES.map(function (x) { return x.id; }).indexOf(styleId()); setStyle(STYLES[(i + 1) % STYLES.length].id); }
+function toggleMotion() { pref("motion", pref("motion") === "off" ? "on" : "off"); applyStyle(); }
+function showStyles() {
+  sheet({ title: "Style", text: "", ok: "Done", cancel: "", okStyle: "primary" });
+  document.getElementById("sheet-cancel").classList.add("hidden");
+  var box = document.getElementById("sheet-text"), wrap = document.createElement("div"); wrap.className = "styles";
+  STYLES.forEach(function (x, i) {
+    var b = document.createElement("button"); b.className = x.id === styleId() ? "on" : "";
+    b.innerHTML = '<span class="sw" style="background:' + x.sw + '"></span><b>' + esc(x.name) + "</b><kbd>" + (i + 1) + "</kbd><small>" + esc(x.text) + "</small>";
+    b.addEventListener("click", function () { setStyle(x.id); [].forEach.call(wrap.children, function (c) { c.className = c === b ? "on" : ""; }); });
+    wrap.appendChild(b);
+  });
+  box.innerHTML = ""; box.appendChild(wrap);
+  var m = document.createElement("label"); m.className = "toggle";
+  m.innerHTML = '<span class="tlabel">Motion (M)</span><span class="switch"><input type="checkbox"><span class="track"></span><span class="knob"></span></span>';
+  var cb = m.querySelector("input"); cb.checked = pref("motion") !== "off";
+  cb.addEventListener("change", function () { pref("motion", cb.checked ? "on" : "off"); applyStyle(); });
+  box.appendChild(m);
+}
 function showTab(tab) {
   if (pref("layout") === "hidden") pref("layout", "bottom");
+  if (!currentView) document.body.classList.add("pane-home");
   pref("tab", tab); applyLayout();
   if (tab === "log") { var l = document.getElementById("log"); l.scrollTop = l.scrollHeight; }
 }
@@ -935,6 +975,7 @@ function initLayout() {
   document.getElementById("btn-view").addEventListener("click", toggleGrid);
   document.getElementById("btn-history").addEventListener("click", function () { showTab(pref("tab") === "history" && pref("layout") !== "hidden" ? "log" : "history"); });
   document.getElementById("btn-keys").addEventListener("click", showKeys);
+  document.getElementById("btn-style").addEventListener("click", showStyles);
   [].forEach.call(document.querySelectorAll(".auxbar .tab"), function (b) { b.addEventListener("click", function () { showTab(b.getAttribute("data-tab")); }); });
   // Drag the splitter to size the pane (height at the bottom, width on the side).
   var split = document.getElementById("split");
@@ -960,7 +1001,7 @@ function initLayout() {
 // 1-9 open an app (or an Interviews job), Esc goes back / closes, G list or icons, L pane
 // position, H History or Log, ? this list. A sheet takes Enter (OK) and Esc (Cancel).
 var KEYS = [["1 – 9", "Open an app (or a job inside Interviews)"], ["Esc", "Back, or close a how-to box or question"], ["Enter", "OK in a question"],
-  ["G", "List or icon view"], ["L", "Log and History: bottom, side, hidden"], ["H", "Switch Log / History"], ["?", "This list"]];
+  ["S", "Style: Glass, Studio, Bold, Compact"], ["M", "Motion on / off"], ["G", "Dashboard or list"], ["L", "Log and History: bottom, side, hidden"], ["H", "Switch Log / History"], ["?", "This list"]];
 function showKeys() {
   var h = '<div class="keys">' + KEYS.map(function (k) { return "<kbd>" + esc(k[0]) + "</kbd><span>" + esc(k[1]) + "</span>"; }).join("") + "</div>";
   sheet({ title: "Keyboard shortcuts", text: "", ok: "Close", cancel: "", okStyle: "secondary" });
@@ -972,6 +1013,7 @@ function onKey(e) {
   if (sh && !sh.classList.contains("hidden")) {
     if (e.key === "Escape") { e.preventDefault(); var c = document.getElementById("sheet-cancel"); (c.classList.contains("hidden") ? document.getElementById("sheet-ok") : c).click(); }
     else if (e.key === "Enter") { e.preventDefault(); document.getElementById("sheet-ok").click(); }
+    else if (/^[1-4]$/.test(e.key)) { var sb = sh.querySelectorAll(".styles button")[parseInt(e.key, 10) - 1]; if (sb) { e.preventDefault(); sb.click(); } }
     return;
   }
   var tg = e.target && e.target.tagName;
@@ -983,6 +1025,8 @@ function onKey(e) {
   }
   var k = e.key.toLowerCase();
   if (k === "g") toggleGrid();
+  else if (k === "s") cycleStyle();
+  else if (k === "m") toggleMotion();
   else if (k === "l") cycleLayout();
   else if (k === "h") showTab(pref("tab") === "history" && pref("layout") !== "hidden" ? "log" : "history");
   else if (e.key === "?") showKeys();
