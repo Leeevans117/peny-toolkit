@@ -745,12 +745,15 @@ function makeGhost(iconEl, to) {
   // The radius is fixed in the Last box's pixels: 22.5% of the icon there, so at icon size it
   // reads as the icon's squircle and grows with it.
   g.style.borderRadius = (ir.width * 0.225 * Math.max(to.width / ir.width, 1)) + "px / " + (ir.height * 0.225 * Math.max(to.height / ir.height, 1)) + "px";
+  // The icon's black face with its glyph sits on top and fades out as the ghost grows.
+  var face = document.createElement("div"); face.className = "face";
   var svg = iconEl.querySelector("svg");
   if (svg) {
     var c = svg.cloneNode(true), sw = svg.getBoundingClientRect();
     c.style.width = sw.width * to.width / ir.width + "px"; c.style.height = sw.height * to.height / ir.height + "px";
-    g.appendChild(c);
+    face.appendChild(c);
   }
+  g.appendChild(face);
   document.body.appendChild(g);
   return g;
 }
@@ -775,9 +778,12 @@ function flipOpen(tileEl, change) {
     // Scaling also stretches the corners, so the ghost is gone (fades 45%-80%) before it is
     // full size; the app fading in underneath takes over.
     ghost.animate([{ transform: invertOf(first, last), opacity: 1, offset: 0 }, { opacity: 1, offset: 0.45 }, { opacity: 0, offset: 0.8 }, { transform: "none", opacity: 0, offset: 1 }], opt),
-    ghost.firstChild ? ghost.firstChild.animate([{ opacity: 1 }, { opacity: 0, offset: 0.35 }, { opacity: 0 }], opt) : null,
-    oldV !== newV ? oldV.animate([{ transform: "scale(1)", opacity: 1 }, { transform: "scale(0.92)", opacity: 0 }], opt) : null,
-    newV.animate([{ transform: "scale(0.96)", opacity: 0 }, { transform: "scale(0.96)", opacity: 0, offset: 0.4 }, { transform: "none", opacity: 1 }], opt)
+    ghost.firstChild.animate([{ opacity: 1 }, { opacity: 0, offset: 0.4 }, { opacity: 0 }], opt),
+    // The home screen stays mostly lit until the squircle covers it, then goes.
+    oldV !== newV ? oldV.animate([{ transform: "scale(1)", opacity: 1 }, { opacity: 0.85, offset: 0.4 }, { transform: "scale(0.92)", opacity: 0 }], opt) : null,
+    // Opacity only on the app: a transform ending re-draws its text sharper in one frame,
+    // which reads as a blink right when it finishes.
+    newV.animate([{ opacity: 0 }, { opacity: 0, offset: 0.35 }, { opacity: 1 }], opt)
   ].filter(Boolean);
   runFlip(anims, [ghost], [oldV, newV], oldV);
 }
@@ -798,9 +804,9 @@ function flipClose(change, findIcon) {
   var opt = { duration: FLIP_MS, easing: "cubic-bezier(0.32, 0.72, 0, 1)", fill: "both" };
   var anims = [
     ghost.animate([{ transform: "none", opacity: 0, offset: 0 }, { opacity: 0, offset: 0.1 }, { opacity: 1, offset: 0.35 }, { transform: invertOf(first, last), opacity: 1, offset: 0.9 }, { transform: invertOf(first, last), opacity: 0, offset: 1 }], opt),
-    ghost.firstChild ? ghost.firstChild.animate([{ opacity: 0 }, { opacity: 0, offset: 0.5 }, { opacity: 1 }], opt) : null,
+    ghost.firstChild.animate([{ opacity: 0 }, { opacity: 0, offset: 0.55 }, { opacity: 1 }], opt),
     oldV !== newV ? oldV.animate([{ opacity: 1 }, { opacity: 0, offset: 0.25 }, { opacity: 0 }], opt) : null,
-    newV.animate([{ transform: oldV !== newV ? "scale(0.92)" : "scale(0.98)", opacity: 0 }, { transform: "none", opacity: 1 }], opt)
+    newV.animate([{ opacity: 0 }, { opacity: 1 }], opt)
   ].filter(Boolean);
   runFlip(anims, [ghost], [oldV, newV], oldV);
 }
@@ -1197,6 +1203,9 @@ var startError = null;
     loadHistory();
     showView(null);
     drawStates();
+    // Tiles rise in once, when the panel opens (index.html); not on every return home.
+    document.body.classList.add("intro");
+    setTimeout(function () { document.body.classList.remove("intro"); }, 700);
     try { fs.mkdirSync(HOOK_INBOX, { recursive: true }); } catch (e) {}
     if (!window.PenyLoader) fs.writeFileSync(INSTANCE_FILE, INSTANCE_ID, "utf-8");
     hookTimer = setInterval(pollHook, HOOK_POLL_MS);

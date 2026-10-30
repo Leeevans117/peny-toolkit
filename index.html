@@ -102,15 +102,17 @@
        or the home bar runs it in reverse. Only transform and opacity move (GPU, no layout),
        with Apple's curve. main.js drives it (flipOpen / flipClose). */
     :root { --ios: cubic-bezier(0.32, 0.72, 0, 1); }
+    /* The ghost is the colour of the app's screen; the black icon face on top of it fades
+       out as it grows, so the panel never goes dark mid-way (Studio's charcoal flashed black). */
     .flip-ghost { position: fixed; z-index: 6; transform-origin: 0 0; will-change: transform, opacity; pointer-events: none;
-                  background: var(--tile-bg); border: 1px solid var(--tile-line); display: flex; align-items: center; justify-content: center; overflow: hidden; }
-    .flip-ghost svg { will-change: opacity; }
+                  background: var(--ghost, #1e1f22); border: 1px solid var(--tile-line); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+    .flip-ghost .face { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: var(--tile-bg); display: flex; align-items: center; justify-content: center; }
+    body[data-style=glass] { --ghost: #0a0a0a; } body[data-style=studio] { --ghost: #222327; } body[data-style=bold] { --ghost: #000; } body[data-style=compact] { --ghost: #1c1d20; }
     #home.flip-keep { display: block !important; pointer-events: none; }
     #detail.flip-keep { display: flex !important; pointer-events: none; }
     #detail { display: flex; flex-direction: column; }
     #detail > #apps { flex: none; }
-    .flip-layer { will-change: transform, opacity; }
-    body.flipping .tile, body.flipping #detail .app > * { animation: none !important; }
+    body.flipping .tile { animation: none !important; }
     /* Home bar at the foot of every app, like the iPhone's: click to go home */
     #homebar { position: sticky; bottom: 0; flex: none; display: flex; justify-content: center; align-items: flex-end; width: 100%; height: 22px; margin-top: auto;
                padding: 0 0 6px; background: none; border: 0; cursor: pointer; z-index: 2; }
@@ -238,18 +240,15 @@
     #tiles.list .state.run { color: var(--live); } #tiles.list .state.paused { color: var(--warn); }
     #tiles.list kbd { position: static; grid-column: 4; grid-row: 1 / span 2; opacity: 1; background: none; }
     #tiles.list .badge { top: 0; bottom: 0; left: 0; width: 3px; height: auto; border-radius: 0; border: 0; animation: none; }
-    /* Entrance: tiles rise in one after another when the home screen shows */
-    body:not([data-motion=off]) #home:not(.hidden) .tile { animation: rise 0.32s var(--ease) both; }
+    /* Entrance: tiles rise in one after another, only when the panel first opens (body.intro,
+       main.js). A CSS animation tied to a view showing restarts whenever that view or a class
+       around it changes, which made the screen blink at the end of opening/closing an app. */
+    body.intro:not([data-motion=off]) #home:not(.hidden) .tile { animation: rise 0.32s var(--ease) both; }
     #home .tile:nth-child(2) { animation-delay: 0.03s; } #home .tile:nth-child(3) { animation-delay: 0.06s; } #home .tile:nth-child(4) { animation-delay: 0.09s; }
     #home .tile:nth-child(5) { animation-delay: 0.12s; } #home .tile:nth-child(6) { animation-delay: 0.15s; } #home .tile:nth-child(7) { animation-delay: 0.18s; }
     #home .tile:nth-child(8) { animation-delay: 0.21s; } #home .tile:nth-child(9) { animation-delay: 0.24s; } #home .tile:nth-child(n+10) { animation-delay: 0.27s; }
     @keyframes rise { from { opacity: 0; transform: translateY(6px) scale(0.97); } }
     body[data-style=studio] #home .tile, body[data-style=compact] #home .tile { animation: none !important; }
-    /* Opening an app: its view slides in a little */
-    body:not([data-motion=off]) #detail:not(.hidden) .app:not(.hidden) > *:not(.hidden) { animation: slidein 0.24s var(--ease) both; }
-    body[data-style=studio] #detail .app > *, body[data-style=compact] #detail .app > * { animation-name: fadein !important; animation-duration: 0.15s !important; }
-    @keyframes fadein { from { opacity: 0; } }
-    @keyframes slidein { from { opacity: 0; transform: translateX(14px); } }
 
     /* App view */
     .card { padding: var(--pad); margin-bottom: var(--gap); }
