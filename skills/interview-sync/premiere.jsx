@@ -22,9 +22,19 @@
   T.skills["interview-sync"] = function (params) {
     var action = params.action || "scan";
     var seq = T.activeSequence();
+    if (action === "apply") {
+      // Stays on the sequence it scanned, whatever is active now; if Lee has moved on he is put
+      // straight back at the end (linking needs the copy open while the script holds Premiere).
+      var r = apply(params);
+      if (seq && String(seq.sequenceID) !== String(params.sequenceId)) {
+        try { app.project.openSequence(String(seq.sequenceID)); } catch (e) {}
+        var now = T.activeSequence();
+        if (!now || String(now.sequenceID) !== String(seq.sequenceID)) { r.details = r.details || {}; r.details.activeNotRestored = String(seq.name); }
+      }
+      return r;
+    }
     if (!seq) return T.fail("No active sequence. Open the interview sequence first.");
     if (action === "scan") return scan(seq);
-    if (action === "apply") return apply(params);
     if (action === "probe") return probe(seq, params);
     return T.fail("Unknown action: " + action);
   };

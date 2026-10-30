@@ -90,7 +90,7 @@
         "#24507a",
         "#0c1c2c"
       ],
-      "description": "Like Premiere's Synchronize, but for every clip on the sequence in one go. Camera A (the lowest video track with clips, e.g. V1) stays put. Every other clip (camera B on V2, external wavs or lav recordings on the audio tracks, any number per track) is matched to camera A by its sound waveform and moved so the sound lines up. A clip camera A doesn't cover is matched to a clip already synced. Timecode is only a fallback (camera clocks often disagree). It all happens on a copy called \"<sequence> Synced\"; clips it isn't sure about are left where they are and listed. Link: Cameras + audio links each camera A clip with the camera B clip and the audio clips synced to it; Cameras only links the cameras and leaves the external audio unlinked; Don't link just lines them up. RED clips need their proxy (that is where the sound is read from).",
+      "description": "Like Premiere's Synchronize, but for every clip on the sequence in one go. Camera A (the lowest video track with clips, e.g. V1) stays put. Every other clip (camera B on V2, external wavs or lav recordings on the audio tracks, any number per track) is matched to camera A by its sound waveform and moved so the sound lines up. A clip camera A doesn't cover is matched to a clip already synced. Timecode is only a fallback (camera clocks often disagree). It all happens on a copy called \"<sequence> Synced\"; clips it isn't sure about are left where they are and listed. Link: Cameras + audio links each camera A clip with the camera B clip and the audio clips synced to it; Cameras only links the cameras and leaves the external audio unlinked; Don't link just lines them up. RED clips need their proxy (that is where the sound is read from). It stays on the sequence you started it on: you can switch to another sequence and keep working while it runs; the result goes on that sequence's copy, and if you have moved on the copy isn't opened over your work, its name is reported at the end. Premiere pauses for a moment at the end while the copy is cut or linked, and the copy's tab may open behind your sequence.",
       "inputs": [
         "link"
       ],
@@ -107,7 +107,7 @@
         "#8a6416",
         "#2a1e06"
       ],
-      "description": "Transcribes the active interview sequence on this Mac (whisper; RED clips are read from their proxy), works out line by line who is speaking with the local AI model (Ollama, no internet), and keeps everything the interviewee says, whether or not it answers a question: intros, statements, stories. It all goes on a copy called \"<sequence> Cut version\": a Chapter marker per question, a Segmentation marker per broad theme, and the small topics as clip markers on the clip on the top video track (they belong to that footage, so they also show in other sequences that use it). The original is not changed.",
+      "description": "Transcribes the active interview sequence on this Mac (whisper; RED clips are read from their proxy), works out line by line who is speaking with the local AI model (Ollama, no internet), and keeps everything the interviewee says, whether or not it answers a question: intros, statements, stories. It all goes on a copy called \"<sequence> Cut version\": a Chapter marker per question, a Segmentation marker per broad theme, and the small topics as clip markers on the clip on the top video track (they belong to that footage, so they also show in other sequences that use it). The original is not changed. It stays on the sequence you started it on: you can switch to another sequence and keep working while it runs; the result goes on that sequence's copy, and if you have moved on the copy isn't opened over your work, its name is reported at the end.",
       "inputs": [
         "name",
         "track"
@@ -125,7 +125,7 @@
         "#1f6a50",
         "#08221a"
       ],
-      "description": "On a Cut version: raises each answer one track, removes the questions and dead bits in between so the answers run back to back, puts one adjustment layer per question over the answers and a row above with one layer per theme. Links are kept. Only the Cut version changes; no footage is deleted and nothing is saved.",
+      "description": "On a Cut version: raises each answer one track, removes the questions and dead bits in between so the answers run back to back, puts one adjustment layer per question over the answers and a row above with one layer per theme. Links are kept. Only the Cut version changes; no footage is deleted and nothing is saved. Premiere is held still while this runs (under a minute for a short interview).",
       "needs": "Uses the answers from Find Answers. Run that first: this runs on the Cut version it makes.",
       "inputs": [],
       "actions": [
@@ -141,7 +141,7 @@
         "#5b3c8c",
         "#1a102c"
       ],
-      "description": "Finds the filler words (um, uh, er, erm, ah, hmm) with whisper on this Mac, checks each one twice and cuts it from every track of a copy called \"<sequence> No ums\" (picture and sound stay in sync, links kept), with a marker at each cut and a list of them all; fillers said straight into a word are left in. Works on any sequence.",
+      "description": "Finds the filler words (um, uh, er, erm, ah, hmm) with whisper on this Mac, checks each one twice and cuts it from every track of a copy called \"<sequence> No ums\" (picture and sound stay in sync, links kept), with a marker at each cut and a list of them all; fillers said straight into a word are left in. Works on any sequence. It stays on the sequence you started it on: you can switch to another sequence and keep working while it runs; the result goes on that sequence's copy, and if you have moved on the copy isn't opened over your work, its name is reported at the end. Premiere pauses for a moment at the end while the copy is cut or linked, and the copy's tab may open behind your sequence.",
       "inputs": [
         "track",
         "fillers"

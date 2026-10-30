@@ -17,16 +17,19 @@
   var T = PenyToolkit;
 
   T.skills["interview-selects"] = function (params) {
-    var seq = T.activeSequence();
+    // A job stays on the sequence it started on (Lee, 30 Oct 2026: he works on other sequences
+    // while it runs): panel.js passes its id on every call after the first.
+    var was = T.activeSequence(), seq = params.sequenceId ? T.findSequenceById(params.sequenceId) : was;
+    if (params.sequenceId && !seq) return T.fail("The sequence this job started on (" + (params.sequenceName || params.sequenceId) + ") is no longer in the open project, so nothing was changed. If you closed it or moved to another project, bring it back and run again.");
     if (!seq) return T.fail("No active sequence. Open the interview sequence first.");
     var action = params.action || "scan";
     if (action === "scan") return scan(seq, params);
-    if (action === "copy") return copy(seq);
-    if (action === "unum") return unum(seq, params);
+    if (action === "copy") return backToLee(was, seq, copy(seq));
+    if (action === "unum") return backToLee(was, seq, unum(seq, params));
     if (action === "mark") return mark(seq, params);
     if (action === "probe") return probe(seq, params);
     if (action === "dump") return T.ok("Pieces " + params.a + "-" + params.b, { pieces: around(seq, params.a, params.b) });
-    if (action === "cutraise") return cutraise(seq, params);
+    if (action === "cutraise") return backToLee(was, seq, cutraise(seq, params));
     if (action === "untest") return untest(params);
     if (action === "renote") return renote(seq, params);
     if (action === "unbase") return unbase(params);
@@ -43,6 +46,27 @@
     if (action === "topics") return T.ok("Topics", { mode: TOPICS, topics: readTopics(seq, 1 / (T.sequenceFps(seq) || 25)).list });
     return T.fail("Unknown action: " + action);
   };
+
+  // QE only works on the active sequence and a script holds Premiere still while it runs, so
+  // a QE step opens its sequence for that moment. If Lee had moved to another sequence, he is
+  // put straight back at the end of the call; if he was on the one the job started on, the
+  // job's copy stays open as before.
+  function activate(seq) {
+    var a = T.activeSequence();
+    if (a && String(a.sequenceID) === String(seq.sequenceID)) return true;
+    try { app.project.openSequence(String(seq.sequenceID)); } catch (e) {}
+    a = T.activeSequence();
+    return !!(a && String(a.sequenceID) === String(seq.sequenceID));
+  }
+  function backToLee(was, seq, result) {
+    if (!was || String(was.sequenceID) === String(seq.sequenceID)) return result;
+    if (!activate(was)) {
+      result.details = result.details || {};
+      result.details.activeNotRestored = String(was.name);
+      if (result.summary) result.summary += " Could not switch back to \"" + was.name + "\".";
+    }
+    return result;
+  }
 
   // ---- Cut version (Lee, 20 Oct 2026: the copy is "<sequence> Cut version") ----
   var CUT = "Cut version";
@@ -132,7 +156,8 @@
 
   // Duplicates seq (Sequence.clone, the way Make safe copy does), names the new sequence
   // "<name> Cut version" ("... Cut version 2" if taken), checks the original did not change
-  // and opens the copy. Only the new sequence is named; no clip is renamed.
+  // and opens the copy, unless Lee has moved to another sequence (then it stays closed and its
+  // name is reported). Only the new sequence is named; no clip is renamed.
   function copy(seq, suffix) {
     suffix = suffix || CUT;
     if (suffix === CUT && isCut(seq)) return T.ok("\"" + seq.name + "\" is already a Cut version; markers go on it.", { copyName: String(seq.name), copyId: String(seq.sequenceID), made: false });
@@ -154,12 +179,14 @@
     if (String(created.name) !== wanted) return T.fail("The copy was made as \"" + created.name + "\" but could not be named \"" + wanted + "\".");
     var original = T.findSequenceById(originalId), printAfter = original ? T.fingerprint(original) : null;
     var unchanged = !!(printAfter && printAfter.hash === printBefore.hash && printAfter.clips === printBefore.clips && String(original.name) === originalName);
-    try { app.project.openSequence(String(created.sequenceID)); } catch (e) {}
-    var active = T.activeSequence(), isActive = !!(active && String(active.sequenceID) === String(created.sequenceID));
+    var printCopy = T.fingerprint(created);
+    if (printCopy.hash !== printBefore.hash) return T.fail("The copy \"" + wanted + "\" does not match \"" + originalName + "\" (" + printCopy.clips + " vs " + printBefore.clips + " clips), so nothing was changed on it.", { copyName: wanted, copyId: String(created.sequenceID) });
+    var active = T.activeSequence(), onOriginal = !!(active && String(active.sequenceID) === originalId), isActive = false;
+    if (onOriginal) isActive = activate(created);
     var d = { copyName: wanted, copyId: String(created.sequenceID), originalName: originalName, originalUnchanged: unchanged, copyIsActive: isActive, made: true };
     if (!unchanged) return T.fail("Copy made, but the original sequence no longer matches its fingerprint. Check it before going on.", d);
-    if (!isActive) return T.fail("The copy \"" + wanted + "\" was made but is not the active sequence, so nothing was changed on it. Open it and run again.", d);
-    return T.ok("Created \"" + wanted + "\" and opened it; the original is unchanged.", d);
+    if (onOriginal && !isActive) return T.fail("The copy \"" + wanted + "\" was made but could not be opened, so nothing was changed on it. Open it and run again.", d);
+    return T.ok("Created \"" + wanted + "\"" + (isActive ? " and opened it" : "") + "; the original is unchanged.", d);
   }
 
   // ---- Remove ums & uhs ----
@@ -171,7 +198,6 @@
   // or leave less than 3 frames of a clip, are skipped. The copy is made only after the
   // checks that need no change, so a refused run leaves nothing behind.
   function unum(seq, params) {
-    if (params.sequenceId && String(seq.sequenceID) !== String(params.sequenceId)) return T.fail("The active sequence changed while the fillers were being found (now \"" + seq.name + "\"). Open the interview sequence again and run again; nothing was changed.");
     if (isNoUms(seq)) return T.fail("\"" + seq.name + "\" is already a \"" + NOUMS + "\" copy. Open the sequence it came from and run again.");
     var fps = T.sequenceFps(seq) || 25, frame = 1 / fps, half = frame / 2, i, j, list = params.fillers || [];
     if (!list.length) return T.fail("No fillers to remove.");
@@ -213,8 +239,8 @@
     var origId = String(seq.sequenceID), origPrint = T.fingerprint(seq), origMarkers = markerList(seq).length, origEnd = T.sec(seq.end);
     var c = copy(seq, NOUMS);
     if (!c.ok) return c;
-    var work = T.activeSequence();
-    if (!work || String(work.sequenceID) !== c.details.copyId) return T.fail("The copy was made but is not the active sequence; nothing was cut.", c.details);
+    var work = T.findSequenceById(c.details.copyId);
+    if (!work || !activate(work)) return T.fail("The copy was made but could not be opened for cutting; nothing was cut.", c.details);
     app.enableQE();
     var q = qe.project.getActiveSequence(), before = T.sec(work.end), want = 0;
     for (i = 0; i < cuts.length; i++) want += cuts[i].b - cuts[i].a;
@@ -435,6 +461,7 @@
     var spans = answerSpans(seq, frame);
     if (!spans.length) return T.fail("No question markers (Chapter markers with a length) on this sequence. Run Find answers first.");
     var durBefore = T.sec(seq.end);
+    if (!activate(seq)) return T.fail("\"" + seq.name + "\" could not be opened for cutting; nothing was changed.");
     app.enableQE();
     var q = qe.project.getActiveSequence();
 

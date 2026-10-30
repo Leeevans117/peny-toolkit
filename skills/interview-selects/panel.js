@@ -294,12 +294,13 @@ module.exports = function (api) {
         lap("answers");
       });
     }).then(function () {
-      api.status("Making the Cut version of the sequence…");
-      return api.evalSkill({ action: "copy" });
+      // By now Lee may be on another sequence: everything goes to the one the run started on.
+      api.status("Making the Cut version of \"" + scan.sequence + "\"…");
+      return api.evalSkill({ action: "copy", sequenceId: scan.sequenceId, sequenceName: scan.sequence });
     }).then(function (c) {
       if (!c.ok) throw { stop: c.error };
-      api.status("Adding " + questions.length + " question, " + themes.length + " theme and " + answers.length + " topic markers…");
-      return api.evalSkill({ action: "mark", answers: answers, questions: questions, themes: themes }).then(function (m) { return { copy: c, mark: m }; });
+      api.status("Adding " + questions.length + " question, " + themes.length + " theme and " + answers.length + " topic markers to \"" + c.details.copyName + "\"…");
+      return api.evalSkill({ action: "mark", sequenceId: c.details.copyId, sequenceName: c.details.copyName, answers: answers, questions: questions, themes: themes }).then(function (m) { return { copy: c, mark: m }; });
     }).then(function (o) {
       lap("total");
       var d = o.mark.details || {};
@@ -361,7 +362,7 @@ module.exports = function (api) {
     }).then(function (c) {
       if (!c.ok) return c;
       api.status("Adding question, theme and topic markers…");
-      return api.evalSkill({ action: "mark", answers: answers, questions: questions, themes: themes }).then(function (m) {
+      return api.evalSkill({ action: "mark", sequenceId: c.details.copyId, sequenceName: c.details.copyName, answers: answers, questions: questions, themes: themes }).then(function (m) {
         var d = m.details || {};
         var summary = (m.summary || m.error) + " (from " + file + ")";
         d.themeList = themes.map(function (t) { return fmt(t.start) + "-" + fmt(t.end) + " " + t.title + " (questions " + t.questions.join("-") + ")"; });
