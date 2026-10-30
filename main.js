@@ -132,7 +132,7 @@ function runAction(skillId, actionId, params, source) {
   if (params) for (var pk in params) if (params.hasOwnProperty(pk) && typeof params[pk] === "string") params[pk] = fileUrlToPath(params[pk]);
   var label = skill.name + (skill.actions ? " > " + action.label : "");
   var locks = !action.control && !queued;
-  if (locks) { running = label; runningSkill = skill.id; setButtons(); }
+  if (locks) { running = label; runningSkill = skill.id; runningAction = action.id; setButtons(); }
   log((queued ? "Queue " : "Run ") + label + " (" + source + ") " + JSON.stringify(params || {}), "warn");
 
   var p;
@@ -161,7 +161,7 @@ function runAction(skillId, actionId, params, source) {
     result = result || { ok: false, error: "No result" };
     result.skill = skill.id;
     result.action = action.id;
-    if (locks) { running = null; runningSkill = null; setButtons(); }
+    if (locks) { running = null; runningSkill = null; runningAction = null; setButtons(); }
     log((result.ok ? "OK  " : "FAIL ") + label + ": " + (result.ok ? result.summary : result.error), result.ok ? "ok" : "err");
     var d = result.details || {};
     ["failed", "skipped"].forEach(function (k) {
@@ -314,6 +314,8 @@ function initJobsDock() {
 // bar sit under every view; the bar shows in views whose skill.json has "progress": true.
 var currentView = null; // skill id, or null on the home screen
 var runningSkill = null;
+var runningAction = null;
+var currentApp = null; // an "apps" tile's id inside the current view, or null on its dashboard
 
 function setButtons() {
   var bs = document.querySelectorAll("button[data-action]");
@@ -327,6 +329,7 @@ function setButtons() {
     var badge = tiles[t].querySelector(".badge");
     if (badge) badge.classList.toggle("hidden", tiles[t].getAttribute("data-skill") !== runningSkill);
   }
+  drawAppTiles();
 }
 function setStatus(skill, text) {
   var el = document.querySelector('.status[data-skill="' + skill.id + '"]');
@@ -379,19 +382,44 @@ function iconBox(skill, cls) {
   return box;
 }
 
+// An app with "apps" in skill.json opens a mini dashboard of tiles, one per job; each tile opens
+// its own view (Lee, 30 Oct 2026: nothing suggests one job must come before another).
+function drawAppTiles() {
+  [].forEach.call(document.querySelectorAll(".subtile"), function (t) {
+    var on = t.getAttribute("data-owner") === runningSkill && (t.getAttribute("data-actions") || "").split(",").indexOf(runningAction) >= 0;
+    t.querySelector(".badge").classList.toggle("hidden", !on);
+  });
+  [].forEach.call(document.querySelectorAll(".runbox"), function (b) { b.classList.toggle("hidden", b.getAttribute("data-owner") !== runningSkill); });
+}
+function setNav(look) {
+  document.getElementById("nav-title").textContent = look.name;
+  var nav = document.getElementById("nav-icon"), box = iconBox(look, "nav-icon");
+  nav.style.background = box.style.background;
+  nav.innerHTML = box.innerHTML;
+}
+function showApp(skill, appId) {
+  currentApp = appId || null;
+  var view = document.querySelector('.app[data-skill="' + skill.id + '"]');
+  view.querySelector(".subtiles").classList.toggle("hidden", !!currentApp);
+  [].forEach.call(view.querySelectorAll(".subview"), function (v) { v.classList.toggle("hidden", v.getAttribute("data-app") !== currentApp); });
+  var app = (skill.apps || []).filter(function (a) { return a.id === currentApp; })[0];
+  setNav(app || skill);
+  document.getElementById("back").title = app ? skill.name : "Home";
+  document.getElementById("detail").scrollTop = 0;
+}
 function showView(id) {
   if (id && !findSkill(id)) id = null;
   currentView = id;
+  currentApp = null;
+  document.getElementById("back").title = "Home";
   document.getElementById("home").classList.toggle("hidden", !!id);
   document.getElementById("detail").classList.toggle("hidden", !id);
   var views = document.querySelectorAll(".app[data-skill]");
   for (var i = 0; i < views.length; i++) views[i].classList.toggle("hidden", views[i].getAttribute("data-skill") !== id);
   if (id) {
     var s = findSkill(id);
-    document.getElementById("nav-title").textContent = s.name;
-    var nav = document.getElementById("nav-icon"), look = iconBox(s, "nav-icon");
-    nav.style.background = look.style.background;
-    nav.innerHTML = look.innerHTML;
+    setNav(s);
+    if (s.apps) showApp(s, null);
     var log = document.getElementById("log");
     log.scrollTop = log.scrollHeight;
   }
@@ -456,6 +484,7 @@ function loadSkills() {
       var s = JSON.parse(fs.readFileSync(file, "utf-8"));
       s.dir = path.join(dir, n);
       if (s.icon) { try { s.iconSvg = fs.readFileSync(path.join(s.dir, s.icon), "utf-8"); } catch (e) {} }
+      (s.apps || []).forEach(function (a) { if (a.icon) { try { a.iconSvg = fs.readFileSync(path.join(s.dir, a.icon), "utf-8"); } catch (e) {} } });
       if (s.panel) {
         var factory = nodeRequire(path.join(s.dir, s.panel));
         s.module = factory({
@@ -488,8 +517,12 @@ function drawSkills() {
   // the page, so the style element is refilled every time.
   var st = document.getElementById("section-style");
   if (!st) { st = document.createElement("style"); st.id = "section-style"; document.head.appendChild(st); }
-  st.textContent = ".section { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1); }" +
-    ".section.first { margin-top: 0; padding-top: 0; border-top: 0; }" +
+  st.textContent = ".subtiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 10px; padding: 20px 12px; margin-bottom: 12px; }" +
+    ".subtile .name { max-width: none; font-size: 13px; font-weight: 600; }" +
+    ".subtile .sub { color: var(--dim); font-size: 11.5px; line-height: 1.25; text-align: center; max-width: 150px; margin-top: -3px; }" +
+    ".card p.needs { margin: 0 0 12px 2px; padding: 8px 12px; color: var(--text); font-size: 12.5px; background: var(--glass-strong); border-radius: 12px; }" +
+    ".runcard { padding: 0 4px; margin-bottom: 12px; }" +
+    ".runbox .controls-label { margin-top: 0; }" +
     ".section-title { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }" +
     ".info-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 22px; margin: 0 0 8px 2px; }" +
     ".info-head.slim { justify-content: flex-end; margin: 0 0 4px; }" +
@@ -526,8 +559,8 @@ function drawSkills() {
     view.setAttribute("data-skill", s.id);
     var card = document.createElement("div");
     card.className = "glass card";
-    // How-to text sits behind an "i" (Lee, 29 Oct 2026). With sections each section has its own.
-    if (!s.sections && s.description) infoBlock(card, null, s.description);
+    // How-to text sits behind an "i" (Lee, 29 Oct 2026). With "apps" each app's view has its own.
+    if (!s.apps && s.description) infoBlock(card, null, s.description);
 
     var getters = {}; // input id -> function returning its value
     function drawInput(inp, card, toggles) {
@@ -579,6 +612,10 @@ function drawSkills() {
         input.placeholder = inp.placeholder || "";
         input.value = recall(s, inp.id);
         input.addEventListener("change", function () { remember(s, inp.id, input.value); });
+        // The same input in two "apps" views stays one value.
+        input.addEventListener("input", function () {
+          [].forEach.call(view.querySelectorAll('input[data-input="' + inp.id + '"]'), function (o) { if (o !== input) o.value = input.value; });
+        });
         row.appendChild(input);
         if (inp.type === "folder") {
           var fb = document.createElement("button");
@@ -595,37 +632,66 @@ function drawSkills() {
       card.appendChild(field);
     }
 
-    // "sections" in skill.json split one app into titled groups, each with its own inputs
-    // and buttons (Interviews: Sync Interviews / Select Interview Process). Without it the
-    // app is one group with every input and button. Control buttons (Cancel) stay at the end.
+    // Buttons: normal actions first, then the ones that work while a run is going (control
+    // buttons, e.g. Cancel). "apps" in skill.json split an app into tiles, each with its own view
+    // holding only its inputs and buttons; "inputs"/"actions" name them. Getters hold every input.
     var all = s.actions || [{ id: "run", label: s.name, style: "primary" }];
-    var groups = s.sections || [{ inputs: null, actions: null }];
     var ctl = document.createElement("div"); ctl.className = "buttons";
-    groups.forEach(function (sec) {
-      var box = card;
-      if (s.sections) {
-        box = document.createElement("div"); box.className = "section" + (sec === groups[0] ? " first" : "");
-        infoBlock(box, sec.title || "", sec.description);
-        card.appendChild(box);
-      }
+    function drawGroup(box, inputIds, actionIds) {
       var toggles = document.createElement("div"); toggles.className = "toggles";
-      (s.inputs || []).forEach(function (inp) { if (!sec.inputs || sec.inputs.indexOf(inp.id) >= 0) drawInput(inp, box, toggles); });
+      (s.inputs || []).forEach(function (inp) { if (!inputIds || inputIds.indexOf(inp.id) >= 0) drawInput(inp, box, toggles); });
       if (toggles.children.length) box.appendChild(toggles);
-      // Buttons: normal actions first, then the ones that work while a run is going.
       var main = document.createElement("div"); main.className = "buttons";
       all.forEach(function (a) {
-        if (a.control ? sec !== groups[0] : sec.actions && sec.actions.indexOf(a.id) < 0) return;
-        var b = document.createElement("button");
-        b.textContent = a.label;
-        b.className = "pill " + (a.style || (a.control ? "secondary" : "primary"));
-        b.setAttribute("data-action", a.id);
-        if (a.control) b.setAttribute("data-control", "1");
-        if (a.queue) b.setAttribute("data-queue-skill", s.id);
-        b.addEventListener("click", function () { pressAction(s, a, getters); });
-        (a.control ? ctl : main).appendChild(b);
+        if (a.control || (actionIds && actionIds.indexOf(a.id) < 0)) return;
+        main.appendChild(actionButton(a));
       });
       if (main.children.length) box.appendChild(main);
-    });
+    }
+    function actionButton(a) {
+      var b = document.createElement("button");
+      b.textContent = a.label;
+      b.className = "pill " + (a.style || (a.control ? "secondary" : "primary"));
+      b.setAttribute("data-action", a.id);
+      if (a.control) b.setAttribute("data-control", "1");
+      if (a.queue) b.setAttribute("data-queue-skill", s.id);
+      b.addEventListener("click", function () { pressAction(s, a, getters); });
+      return b;
+    }
+    if (s.apps) {
+      var dash = document.createElement("div"); dash.className = "glass subtiles";
+      s.apps.forEach(function (ap) {
+        var t = document.createElement("button"); t.className = "tile subtile";
+        t.setAttribute("data-app", ap.id); t.setAttribute("data-owner", s.id); t.setAttribute("data-actions", (ap.actions || []).join(","));
+        t.appendChild(iconBox(ap, "icon"));
+        var bd = document.createElement("span"); bd.className = "badge hidden"; bd.title = "Running"; t.appendChild(bd);
+        var n = document.createElement("span"); n.className = "name"; n.textContent = ap.name; t.appendChild(n);
+        var su = document.createElement("span"); su.className = "sub"; su.textContent = ap.subtitle || ""; t.appendChild(su);
+        t.addEventListener("click", function () { showApp(s, ap.id); });
+        dash.appendChild(t);
+        var sv = document.createElement("div"); sv.className = "glass card subview hidden"; sv.setAttribute("data-app", ap.id);
+        if (ap.description) infoBlock(sv, null, ap.description);
+        if (ap.needs) { var nd = document.createElement("p"); nd.className = "needs"; nd.textContent = ap.needs; sv.appendChild(nd); }
+        drawGroup(sv, ap.inputs || [], ap.actions || []);
+        view.appendChild(sv);
+      });
+      view.insertBefore(dash, view.firstChild);
+      // An input no tile uses still gets its getter (every action gets every input).
+      var spare = document.createElement("div"); spare.className = "hidden";
+      (s.inputs || []).forEach(function (inp) { if (!getters[inp.id]) drawInput(inp, spare, spare); });
+      view.appendChild(spare);
+      // Status and the control buttons sit under every view; controls show while this app runs.
+      card.className = "runcard";
+      var rb = document.createElement("div"); rb.className = "runbox hidden"; rb.setAttribute("data-owner", s.id);
+      var rl = document.createElement("div"); rl.className = "controls-label"; rl.textContent = "While running"; rb.appendChild(rl);
+      var rbb = document.createElement("div"); rbb.className = "buttons";
+      all.forEach(function (a) { if (a.control) rbb.appendChild(actionButton(a)); });
+      rb.appendChild(rbb);
+      card.appendChild(rb);
+    } else {
+      drawGroup(card, null, null);
+      all.forEach(function (a) { if (a.control) ctl.appendChild(actionButton(a)); });
+    }
     if (ctl.children.length) {
       var cl = document.createElement("div"); cl.className = "controls-label"; cl.textContent = "While running";
       card.appendChild(cl); card.appendChild(ctl);
@@ -641,7 +707,9 @@ function drawSkills() {
     view.appendChild(card);
     apps.appendChild(view);
   });
-  document.getElementById("back").addEventListener("click", function () { showView(null); });
+  document.getElementById("back").addEventListener("click", function () {
+    if (currentApp) showApp(findSkill(currentView), null); else showView(null);
+  });
 }
 
 // A header row (title, or none for a slim row) with an "i" that opens the how-to text under it.

@@ -1,7 +1,7 @@
 {
   "id": "interview-selects",
   "name": "Interviews",
-  "description": "Everything for interviews, in two parts. Sync Interviews lines the cameras and sound up. Select Interview Process transcribes the interview and finds the answers, cuts them, and takes out the ums.",
+  "description": "Everything for interviews: line up the cameras and sound, transcribe and mark the answers, cut to them, take out filler words. Each job runs on its own.",
   "order": 6,
   "icon": "icon.svg",
   "tint": [
@@ -64,13 +64,13 @@
     {
       "id": "cutraise",
       "label": "Cut, raise & trim answers",
-      "style": "secondary",
+      "style": "primary",
       "confirm": "On this Cut version: cut at every question's answer, move each answer up one track, remove everything between the answers (questions, crew chat, pauses) so the answers run back to back, and add a row of theme layers above the question layers? Links are kept. Only the Cut version changes; no footage is deleted and nothing is saved."
     },
     {
       "id": "unum",
       "label": "Remove ums & uhs",
-      "style": "secondary",
+      "style": "primary",
       "confirm": "Find the ums and uhs in this sequence and cut them on a copy called \"<sequence> No ums\"? It takes about 12 minutes for an hour of interview. Every track is cut at the same place so picture and sound stay in sync; links are kept, each cut gets a marker and the list goes in a CSV. The original is not changed, no footage is deleted and nothing is saved."
     },
     {
@@ -80,9 +80,16 @@
       "style": "danger"
     }
   ],
-  "sections": [
+  "apps": [
     {
-      "title": "Sync Interviews",
+      "id": "sync",
+      "name": "Sync Interviews",
+      "subtitle": "Line up cameras and sound",
+      "icon": "icon-sync.svg",
+      "tint": [
+        "#24507a",
+        "#0c1c2c"
+      ],
       "description": "Like Premiere's Synchronize, but for every clip on the sequence in one go. Camera A (the lowest video track with clips, e.g. V1) stays put. Every other clip (camera B on V2, external wavs or lav recordings on the audio tracks, any number per track) is matched to camera A by its sound waveform and moved so the sound lines up. A clip camera A doesn't cover is matched to a clip already synced. Timecode is only a fallback (camera clocks often disagree). It all happens on a copy called \"<sequence> Synced\"; clips it isn't sure about are left where they are and listed. Link: Cameras + audio links each camera A clip with the camera B clip and the audio clips synced to it; Cameras only links the cameras and leaves the external audio unlinked; Don't link just lines them up. RED clips need their proxy (that is where the sound is read from).",
       "inputs": [
         "link"
@@ -92,16 +99,54 @@
       ]
     },
     {
-      "title": "Select Interview Process",
-      "description": "Transcribes the active interview sequence on this Mac (whisper), finds each answer with the local AI model (Ollama, no internet), groups the answers by the interviewer's question and the questions into broad themes, and puts them on a copy called \"<sequence> Cut version\": a Chapter marker per question, a Segmentation marker per theme, and the small topics as clip markers on the clip on the top video track (they belong to that footage, so they also show in other sequences that use it). About 20 minutes for an hour of interview. Then Cut, raise & trim answers (Cut versions only) raises each question's answer one track, removes the questions and dead bits in between, puts one adjustment layer per question over the answers and a row above with one layer per theme. Remove ums & uhs finds the filler words (um, uh, er, erm, ah, hmm) with whisper on this Mac, checks each one twice and cuts it from every track of a copy called \"<sequence> No ums\" (picture and sound stay in sync, links kept), with a marker at each cut and a list of them all; fillers said straight into a word are left in.",
+      "id": "find",
+      "name": "Find Answers",
+      "subtitle": "Transcribe and mark every answer",
+      "icon": "icon-find.svg",
+      "tint": [
+        "#8a6416",
+        "#2a1e06"
+      ],
+      "description": "Transcribes the active interview sequence on this Mac (whisper; RED clips are read from their proxy), works out line by line who is speaking with the local AI model (Ollama, no internet), and keeps everything the interviewee says, whether or not it answers a question: intros, statements, stories. It all goes on a copy called \"<sequence> Cut version\": a Chapter marker per question, a Segmentation marker per broad theme, and the small topics as clip markers on the clip on the top video track (they belong to that footage, so they also show in other sequences that use it). The original is not changed.",
       "inputs": [
         "name",
+        "track"
+      ],
+      "actions": [
+        "find"
+      ]
+    },
+    {
+      "id": "cut",
+      "name": "Cut, Raise & Trim",
+      "subtitle": "Cut to the answers",
+      "icon": "icon-cut.svg",
+      "tint": [
+        "#1f6a50",
+        "#08221a"
+      ],
+      "description": "On a Cut version: raises each answer one track, removes the questions and dead bits in between so the answers run back to back, puts one adjustment layer per question over the answers and a row above with one layer per theme. Links are kept. Only the Cut version changes; no footage is deleted and nothing is saved.",
+      "needs": "Uses the answers from Find Answers. Run that first: this runs on the Cut version it makes.",
+      "inputs": [],
+      "actions": [
+        "cutraise"
+      ]
+    },
+    {
+      "id": "ums",
+      "name": "Remove Ums & Uhs",
+      "subtitle": "Take out filler words",
+      "icon": "icon-ums.svg",
+      "tint": [
+        "#5b3c8c",
+        "#1a102c"
+      ],
+      "description": "Finds the filler words (um, uh, er, erm, ah, hmm) with whisper on this Mac, checks each one twice and cuts it from every track of a copy called \"<sequence> No ums\" (picture and sound stay in sync, links kept), with a marker at each cut and a list of them all; fillers said straight into a word are left in. Works on any sequence.",
+      "inputs": [
         "track",
         "fillers"
       ],
       "actions": [
-        "find",
-        "cutraise",
         "unum"
       ]
     }
