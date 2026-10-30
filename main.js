@@ -132,7 +132,8 @@ function runAction(skillId, actionId, params, source) {
   if (params) for (var pk in params) if (params.hasOwnProperty(pk) && typeof params[pk] === "string") params[pk] = fileUrlToPath(params[pk]);
   var label = skill.name + (skill.actions ? " > " + action.label : "");
   var locks = !action.control && !queued;
-  if (locks) { running = label; runningSkill = skill.id; runningAction = action.id; setButtons(); }
+  var startedAt = Date.now();
+  if (locks) { running = label; runningSkill = skill.id; runningAction = action.id; startRunTimer(skill, action); setButtons(); }
   log((queued ? "Queue " : "Run ") + label + " (" + source + ") " + JSON.stringify(params || {}), "warn");
 
   var p;
@@ -161,7 +162,7 @@ function runAction(skillId, actionId, params, source) {
     result = result || { ok: false, error: "No result" };
     result.skill = skill.id;
     result.action = action.id;
-    if (locks) { running = null; runningSkill = null; runningAction = null; setButtons(); }
+    if (locks) { running = null; runningSkill = null; runningAction = null; finishRunTimer(skill, result); setButtons(); }
     log((result.ok ? "OK  " : "FAIL ") + label + ": " + (result.ok ? result.summary : result.error), result.ok ? "ok" : "err");
     var d = result.details || {};
     ["failed", "skipped"].forEach(function (k) {
@@ -170,6 +171,8 @@ function runAction(skillId, actionId, params, source) {
       });
     });
     setStatus(skill, result.ok ? result.summary : result.error);
+    addHistory({ t: startedAt, ms: Date.now() - startedAt, skill: skill.id, app: skill.name, action: skill.actions ? action.label : "",
+      ok: !!result.ok, text: String((result.ok ? result.summary : result.error) || ""), source: source });
     return result;
   });
 }
@@ -209,7 +212,7 @@ function doneByText(e) {
 function etaText(p) {
   var e = p && p.eta;
   if (!e || p.event === "none" || p.event === "finished") return "";
-  var done = " (" + p.finished + " of " + p.total + " done)";
+  var done = p.timer ? "" : " (" + p.finished + " of " + p.total + " done)";
   if (e.state === "paused") return "Paused" + done;
   if (e.state === "estimating") return "Estimating time left…" + done;
   if (e.state !== "ok") return "";
@@ -218,6 +221,7 @@ function etaText(p) {
 }
 function showProgress(p, skill) {
   if (!p) return;
+  if (!p.timer && runTimer && skill && runTimer.skill === skill.id) stopRunTimer(false);
   p.skillId = skill ? skill.id : "proxy-automation";
   p.updatedAt = Date.now();
   tasks[p.skillId] = p;
@@ -246,11 +250,9 @@ var JOB_KEEP_MS = 10000;
 function jobsMinimised() { try { return localStorage.getItem("penytoolkit.jobs.min") === "1"; } catch (e) { return false; } }
 function clipName(label) { return String(label || "").split("/").pop().replace(/\.(r3d|mp4|mxf|mov|braw|crm)$/i, ""); }
 function esc(t) { return String(t).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
-function padViews() {
-  var dock = document.getElementById("jobs"), h = dock.classList.contains("hidden") ? 0 : dock.offsetHeight + 16;
-  var vs = document.querySelectorAll(".view");
-  for (var i = 0; i < vs.length; i++) vs[i].style.paddingBottom = (16 + h) + "px";
-}
+// The dock sits in the page's flow under the work area (index.html), so views need no padding;
+// it also refreshes the header chip and the home rows' states.
+function padViews() { drawStates(); }
 function taskOver(p) {
   return p.event === "finished" || p.event === "cancelled" || (p.eta && (p.eta.state === "done" || p.eta.state === "cancelled"));
 }
@@ -270,13 +272,13 @@ function drawJobs() {
     var host = runningSkill && runningSkill !== p.skillId && !tasks[runningSkill] ? findSkill(runningSkill) : null;
     var skill = p.skillId === "proxy-automation" && host && host.progress ? host : findSkill(p.skillId);
     var title = p.title || (skill ? skill.name : "Proxies");
-    var pct = p.percent.toFixed(p.percent % 1 ? 1 : 0) + "%";
+    var pct = p.timer && !over && e.state === "estimating" ? "–" : p.percent.toFixed(p.percent % 1 ? 1 : 0) + "%";
     var left = over ? (p.cancelled ? "Cancelled" : p.failed ? (p.unit === "steps" ? "Stopped with an error" : p.failed + " failed") : "Finished") :
       e.state === "paused" ? "Paused" : e.state === "estimating" ? "Estimating time left…" : e.state === "ok" ? leftText(e.seconds) : "";
     if (!over) { running += p.unit === "steps" ? 1 : p.running; if (e.state === "ok" && (longest === null || e.seconds > longest)) longest = e.seconds; }
     var by = !over && e.state === "ok" ? doneByText(e) : "";
     h += '<div class="jtask' + (over && (p.failed || p.cancelled) ? " failed" : "") + '"><div class="jrow"><span class="jname">' + esc(title) +
-      '</span><span class="jval">' + p.finished + " of " + p.total + (p.unit === "steps" ? " steps" : "") + " · " + pct +
+      '</span><span class="jval">' + (p.timer ? "" : p.finished + " of " + p.total + (p.unit === "steps" ? " steps" : "") + " · ") + pct +
       '</span></div><div class="bar"><div class="fill" style="width:' + (p.fraction * 100).toFixed(1) + '%"></div></div><div class="jeta">' +
       esc(left + (by ? " · " + by : "")) + "</div>";
     if (!over) (e.jobs || []).forEach(function (j) {
@@ -316,6 +318,7 @@ var currentView = null; // skill id, or null on the home screen
 var runningSkill = null;
 var runningAction = null;
 var currentApp = null; // an "apps" tile's id inside the current view, or null on its dashboard
+var lastView = null; // the app last opened, focused again on the way home
 
 function setButtons() {
   var bs = document.querySelectorAll("button[data-action]");
@@ -330,6 +333,7 @@ function setButtons() {
     if (badge) badge.classList.toggle("hidden", tiles[t].getAttribute("data-skill") !== runningSkill);
   }
   drawAppTiles();
+  drawStates();
 }
 function setStatus(skill, text) {
   var el = document.querySelector('.status[data-skill="' + skill.id + '"]');
@@ -338,24 +342,27 @@ function setStatus(skill, text) {
 
 // The bar in an app's view: that app's own task, else (Ingest + proxies) the proxy run.
 function viewTask(skill) {
-  if (!skill || !skill.progress) return null;
-  return tasks[skill.id] || (skill.id !== "colour-baseline" ? tasks["proxy-automation"] : null) || null;
+  if (!skill) return null;
+  return tasks[skill.id] || (proxyView(skill) ? tasks["proxy-automation"] : null) || null;
+}
+// Proxies and Ingest + proxies show the proxy run; every other app only its own task.
+function proxyView(skill) { return !!skill && (skill.id === "proxy-automation" || skill.id === "ingest-pipeline");
 }
 function drawProgress() {
   var skill = currentView ? findSkill(currentView) : null;
   var p = viewTask(skill);
   var box = document.getElementById("progress");
-  box.querySelector(".ptitle").textContent = p && p.title ? p.title : skill && skill.id === "colour-baseline" ? "Colour" : "Proxies";
+  box.querySelector(".ptitle").textContent = p && p.title ? p.title : skill && !proxyView(skill) ? skill.name : "Proxies";
   var count = document.getElementById("pcount"), fill = document.getElementById("pfill"), sub = document.getElementById("psub");
   if (!p) {
-    count.textContent = skill && skill.id === "colour-baseline" ? "Not run yet" : "No proxy run yet";
+    count.textContent = skill && !proxyView(skill) ? "Not run yet" : "No proxy run yet";
     fill.style.width = "0%";
     document.getElementById("peta").textContent = "";
     sub.textContent = "";
     box.className = "glass";
   } else {
     var pct = p.percent.toFixed(p.percent % 1 ? 1 : 0);
-    count.innerHTML = p.event === "none" ? "Nothing to render" :
+    count.innerHTML = p.event === "none" ? "Nothing to render" : p.timer ? "<b>" + (p.eta && p.eta.state === "estimating" && !taskOver(p) ? "–" : pct + "%") + "</b>" :
       "<b>" + p.finished + "</b> of <b>" + p.total + "</b> · <b>" + pct + "%</b>";
     fill.style.width = (p.fraction * 100) + "%";
     document.getElementById("peta").textContent = etaText(p);
@@ -370,14 +377,15 @@ function drawProgress() {
     sub.textContent = bits.join(" · ");
     box.className = "glass" + (p.failed || p.cancelled ? " failed" : p.fraction >= 1 ? " complete" : "");
   }
-  if (!(skill && skill.progress)) box.classList.add("hidden");
+  // Apps with their own progress always show the bar; the rest once a run has one.
+  if (!skill || !(skill.progress || p)) box.classList.add("hidden");
 }
 
 function iconBox(skill, cls) {
+  // Every icon is the same black Peny square (index.html); "tint" in skill.json is ignored so no
+  // app drifts into its own colour (Lee, 30 Oct 2026).
   var box = document.createElement("div");
   box.className = cls;
-  var t = skill.tint || ["#8e8e93", "#636366"];
-  box.style.background = "linear-gradient(160deg, " + t[0] + ", " + (t[1] || t[0]) + ")";
   box.innerHTML = skill.iconSvg || "";
   return box;
 }
@@ -393,9 +401,7 @@ function drawAppTiles() {
 }
 function setNav(look) {
   document.getElementById("nav-title").textContent = look.name;
-  var nav = document.getElementById("nav-icon"), box = iconBox(look, "nav-icon");
-  nav.style.background = box.style.background;
-  nav.innerHTML = box.innerHTML;
+  document.getElementById("nav-icon").innerHTML = "";
 }
 function showApp(skill, appId) {
   currentApp = appId || null;
@@ -412,6 +418,7 @@ function showView(id) {
   currentView = id;
   currentApp = null;
   document.getElementById("back").title = "Home";
+  document.body.setAttribute("data-view", id ? "detail" : "home");
   document.getElementById("home").classList.toggle("hidden", !!id);
   document.getElementById("detail").classList.toggle("hidden", !id);
   var views = document.querySelectorAll(".app[data-skill]");
@@ -422,7 +429,11 @@ function showView(id) {
     if (s.apps) showApp(s, null);
     var log = document.getElementById("log");
     log.scrollTop = log.scrollHeight;
+  } else {
+    var back = document.querySelector('.tile[data-skill="' + lastView + '"]');
+    if (back) back.focus();
   }
+  if (id) lastView = id;
   drawProgress();
 }
 
@@ -438,6 +449,7 @@ function sheet(opts) {
     no.textContent = opts.cancel || "Cancel";
     no.className = "pill " + (opts.cancelStyle || "danger");
     function done(v) { el.classList.add("hidden"); ok.onclick = no.onclick = null; resolve(v); }
+    ok.title = "Enter"; no.title = "Esc";
     ok.onclick = function () { done(true); };
     no.onclick = function () { done(false); };
     el.classList.remove("hidden");
@@ -513,32 +525,9 @@ function loadSkills() {
 }
 
 function drawSkills() {
-  // Section and "i" styles live here, not in index.html: a soft reload swaps main.js but not
-  // the page, so the style element is refilled every time.
-  var st = document.getElementById("section-style");
-  if (!st) { st = document.createElement("style"); st.id = "section-style"; document.head.appendChild(st); }
-  st.textContent = ".subtiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 10px; padding: 20px 12px; margin-bottom: 12px; }" +
-    ".subtile .name { max-width: none; font-size: 13px; font-weight: 600; }" +
-    ".subtile .sub { color: var(--dim); font-size: 11.5px; line-height: 1.25; text-align: center; max-width: 150px; margin-top: -3px; }" +
-    ".card p.needs { margin: 0 0 12px 2px; padding: 8px 12px; color: var(--text); font-size: 12.5px; background: var(--glass-strong); border-radius: 12px; }" +
-    ".runcard { padding: 0 4px; margin-bottom: 12px; }" +
-    ".runbox .controls-label { margin-top: 0; }" +
-    ".section-title { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }" +
-    ".info-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 22px; margin: 0 0 8px 2px; }" +
-    ".info-head.slim { justify-content: flex-end; margin: 0 0 4px; }" +
-    ".info-btn { flex: none; width: 22px; height: 22px; padding: 0; border-radius: 11px; display: inline-flex; align-items: center; justify-content: center;" +
-    " background: var(--glass); border: 1px solid var(--glass-line); color: var(--dim); cursor: pointer; transition: background .15s, color .15s, transform .15s; }" +
-    ".info-btn:hover { background: var(--glass-strong); color: var(--text); }" +
-    ".info-btn:active { transform: scale(0.92); }" +
-    ".info-btn[aria-expanded=true] { background: #fff; border-color: #fff; color: #000; }" +
-    ".info-btn svg { width: 12px; height: 12px; }" +
-    ".info-body { max-height: 0; opacity: 0; overflow: hidden; margin: 0; transition: max-height .25s ease, opacity .2s ease, margin .25s ease; }" +
-    ".info-body.open { opacity: 1; margin: 0 0 12px; }" +
-    ".card .info-body p.desc { margin: 0; padding: 10px 12px; font-size: 12.5px; line-height: 1.45; color: var(--dim);" +
-    " background: rgba(0,0,0,0.22); border: 1px solid var(--glass-line); border-radius: 14px; }";
-  // Esc closes the how-to boxes; one listener per page (a soft reload swaps it, not adds one).
+  // Keys: one listener per page (a soft reload swaps it, not adds one). See onKey().
   if (window.PenyInfoEsc) document.removeEventListener("keydown", window.PenyInfoEsc);
-  window.PenyInfoEsc = function (e) { if (e.key === "Escape" || e.keyCode === 27) closeInfo(); };
+  window.PenyInfoEsc = onKey;
   document.addEventListener("keydown", window.PenyInfoEsc);
   var tiles = document.getElementById("tiles"), apps = document.getElementById("apps");
   skills.forEach(function (s) {
@@ -550,6 +539,12 @@ function drawSkills() {
     tile.appendChild(iconBox(s, "icon"));
     var badge = document.createElement("span"); badge.className = "badge hidden"; badge.title = "Running"; tile.appendChild(badge);
     var nm = document.createElement("span"); nm.className = "name"; nm.textContent = s.name; tile.appendChild(nm);
+    // List rows: first sentence of the how-to, the app's state, its number key.
+    var sb = document.createElement("span"); sb.className = "sub"; sb.textContent = s.subtitle || firstSentence(s.description); tile.appendChild(sb);
+    var sta = document.createElement("span"); sta.className = "state"; tile.appendChild(sta);
+    var n = tiles.children.length + 1;
+    if (n <= 9) { var kb = document.createElement("kbd"); kb.textContent = n; tile.appendChild(kb); }
+    tile.title = s.name + (n <= 9 ? " (" + n + ")" : "");
     tile.addEventListener("click", function () { showView(s.id); });
     tiles.appendChild(tile);
 
@@ -659,14 +654,15 @@ function drawSkills() {
       return b;
     }
     if (s.apps) {
-      var dash = document.createElement("div"); dash.className = "glass subtiles";
-      s.apps.forEach(function (ap) {
+      var dash = document.createElement("div"); dash.className = "subtiles";
+      s.apps.forEach(function (ap, ai) {
         var t = document.createElement("button"); t.className = "tile subtile";
         t.setAttribute("data-app", ap.id); t.setAttribute("data-owner", s.id); t.setAttribute("data-actions", (ap.actions || []).join(","));
         t.appendChild(iconBox(ap, "icon"));
         var bd = document.createElement("span"); bd.className = "badge hidden"; bd.title = "Running"; t.appendChild(bd);
         var n = document.createElement("span"); n.className = "name"; n.textContent = ap.name; t.appendChild(n);
         var su = document.createElement("span"); su.className = "sub"; su.textContent = ap.subtitle || ""; t.appendChild(su);
+        if (ai < 9) { var kb2 = document.createElement("kbd"); kb2.textContent = ai + 1; t.appendChild(kb2); t.title = ap.name + " (" + (ai + 1) + ")"; }
         t.addEventListener("click", function () { showApp(s, ap.id); });
         dash.appendChild(t);
         var sv = document.createElement("div"); sv.className = "glass card subview hidden"; sv.setAttribute("data-app", ap.id);
@@ -707,10 +703,12 @@ function drawSkills() {
     view.appendChild(card);
     apps.appendChild(view);
   });
-  document.getElementById("back").addEventListener("click", function () {
-    if (currentApp) showApp(findSkill(currentView), null); else showView(null);
-  });
+  document.getElementById("back").addEventListener("click", goBack);
+  document.getElementById("home-title").addEventListener("click", function () { showView(null); });
+  document.getElementById("logo").addEventListener("click", function () { showView(null); });
 }
+function goBack() { if (currentApp) showApp(findSkill(currentView), null); else if (currentView) showView(null); }
+function firstSentence(t) { var m = /^[^.]*[.]/.exec(String(t || "")); return m ? m[0] : String(t || ""); }
 
 // A header row (title, or none for a slim row) with an "i" that opens the how-to text under it.
 function infoBlock(parent, title, text) {
@@ -731,7 +729,6 @@ function infoBlock(parent, title, text) {
 function setInfo(btn, body, open) {
   btn.setAttribute("aria-expanded", open ? "true" : "false");
   body.classList.toggle("open", open);
-  body.style.maxHeight = open ? body.scrollHeight + "px" : "0px";
 }
 function closeInfo() {
   [].forEach.call(document.querySelectorAll(".info-btn[aria-expanded=true]"), function (b) {
@@ -765,6 +762,237 @@ function pressAction(s, a, getters) {
     });
   });
   chain.then(function (go) { if (go) runAction(s.id, a.id, params, "button"); });
+}
+
+// ---- Run timer: a bar and time left for every run ----
+// Apps that report their own progress (Proxies, Ingest + proxies, Colour, Sound Pass, Master
+// for YouTube, Selects) keep it: the first report they send stops this timer. Every other
+// run gets this one: the bar moves by how long the same app + button took before (median of
+// the last 5 good runs in the History), held under 95% until the run ends. With no earlier
+// run there is no estimate: the bar shows elapsed time only and says it is learning.
+var runTimer = null;
+function pastSeconds(skillId, actionLabel) {
+  var t = history.filter(function (h) { return h.ok && h.skill === skillId && (h.action || "") === (actionLabel || "") && h.ms > 0; })
+    .slice(0, 5).map(function (h) { return h.ms / 1000; }).sort(function (a, b) { return a - b; });
+  return t.length ? t[Math.floor(t.length / 2)] : null;
+}
+function clockText(sec) { sec = Math.max(0, Math.round(sec)); var m = Math.floor(sec / 60), x = sec % 60; return m + ":" + (x < 10 ? "0" : "") + x; }
+function runTimerReport(event) {
+  var r = runTimer; if (!r) return;
+  var el = (Date.now() - r.at) / 1000, exp = r.expected;
+  var over = event === "finished" || event === "cancelled";
+  var frac = over ? 1 : exp ? Math.min(el / exp, 0.95) : 0;
+  var left = exp ? Math.max(exp - el, 0) : null;
+  var label = (r.label ? r.label + " · " : "") + clockText(el) + " elapsed" +
+    (!exp ? " · first run, learning its time" : el > exp ? " · longer than usual (" + clockText(exp) + ")" : "");
+  var eta = over ? { state: event === "cancelled" ? "cancelled" : "done", jobs: [] } :
+    exp && el <= exp ? { state: "ok", seconds: Math.round(left), finishAt: r.at + exp * 1000, jobs: [{ label: label, fraction: frac, seconds: Math.round(left) }] } :
+    { state: "estimating", jobs: [{ label: label, fraction: frac, seconds: null }] };
+  showProgress({ timer: true, title: r.title, unit: "steps", total: 1, finished: over ? 1 : 0, ok: over && !r.failed ? 1 : 0, failed: r.failed ? 1 : 0,
+    running: over ? 0 : 1, queued: 0, fraction: frac, percent: frac * 100, event: event, eta: eta }, findSkill(r.skill));
+}
+function startRunTimer(skill, action) {
+  stopRunTimer(false);
+  var label = skill.actions ? action.label : "";
+  runTimer = { skill: skill.id, title: skill.name + (label ? " · " + label : ""), label: label, at: Date.now(), expected: pastSeconds(skill.id, label) };
+  runTimer.tick = setInterval(function () { runTimerReport("tick"); }, 1000);
+  runTimerReport("job-start");
+}
+function stopRunTimer(report) {
+  if (!runTimer) return;
+  clearInterval(runTimer.tick);
+  if (report) runTimerReport(report);
+  runTimer = null;
+}
+function finishRunTimer(skill, result) {
+  if (!runTimer || runTimer.skill !== skill.id) return;
+  runTimer.failed = !result.ok;
+  clearInterval(runTimer.tick);
+  runTimerReport(/cancel/i.test(result.error || "") ? "cancelled" : "finished");
+  runTimer = null;
+}
+
+// ---- History: every run, newest first, kept in ~/.peny-toolkit/history.json ----
+// Shows what ran, when, how long and what it said, so a run can be checked and undone in
+// Premiere (Edit > Undo, or Window > History). The toolkit itself does not undo.
+var HISTORY_FILE = path.join(os.homedir(), ".peny-toolkit", "history.json");
+var history = [];
+function loadHistory() {
+  try { history = JSON.parse(fs.readFileSync(HISTORY_FILE, "utf-8")) || []; } catch (e) { history = historyFromLog(); }
+  drawHistory();
+}
+// First start with no history file: rebuild it from the log's "Run <app> > <button> (source)"
+// and "OK  / FAIL <app> > <button>: ..." lines (last 4 MB), so time-left estimates start from
+// real past runs.
+function historyFromLog() {
+  var out = [], text = "";
+  try {
+    var size = fs.statSync(LOG_FILE).size, len = Math.min(size, 4 * 1024 * 1024), fd = fs.openSync(LOG_FILE, "r");
+    var buf = nodeRequire("buffer").Buffer.alloc(len); fs.readSync(fd, buf, 0, len, size - len); fs.closeSync(fd); text = buf.toString("utf-8");
+  } catch (e) { return out; }
+  var open = {}, re = /^(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)\.(\d{3}) \[panel\] (Run|OK|FAIL) +(.+)$/;
+  text.split("\n").forEach(function (line) {
+    if (line.indexOf("[panel] Panel open") > 0) { open = {}; return; } // nothing runs across a (re)start
+    var m = re.exec(line); if (!m) return;
+    var t = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6], +m[7]).getTime(), rest = m[9];
+    if (m[8] === "Run") {
+      var r = /^(.+?) \(([^)]*)\) [{\[]/.exec(rest); if (r) open[r[1]] = { t: t, source: r[2] };
+      return;
+    }
+    var c = rest.indexOf(": "), label = c >= 0 ? rest.slice(0, c) : rest, st = open[label];
+    if (!st) return;
+    delete open[label];
+    var gt = label.indexOf(" > "), name = gt >= 0 ? label.slice(0, gt) : label, act = gt >= 0 ? label.slice(gt + 3) : "";
+    var sk = skills.filter(function (x) { return x.name === name; })[0];
+    if (!sk || /^(Cancel|Pause|Resume)$/.test(act)) return;
+    out.unshift({ t: st.t, ms: t - st.t, skill: sk.id, app: name, action: act, ok: m[8] !== "FAIL", text: c >= 0 ? rest.slice(c + 2) : "", source: st.source });
+  });
+  return out.slice(0, 200);
+}
+function addHistory(h) {
+  history.unshift(h);
+  if (history.length > 200) history.length = 200;
+  try { fs.mkdirSync(path.dirname(HISTORY_FILE), { recursive: true }); fs.writeFileSync(HISTORY_FILE, JSON.stringify(history), "utf-8"); }
+  catch (e) { log("Could not save history: " + e.message, "err"); }
+  drawHistory();
+  drawStates();
+}
+function hhmm(t) { var d = new Date(t); return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2) + ":" + ("0" + d.getSeconds()).slice(-2); }
+// Time today ("08:14:03", or "08:14" short), else the date ("29 Oct").
+function whenText(t, short) {
+  if (new Date(t).toDateString() !== new Date().toDateString()) return new Date(t).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+  return short ? hhmm(t).slice(0, 5) : hhmm(t);
+}
+function drawHistory() {
+  var box = document.getElementById("history");
+  if (!box) return;
+  var h = '<div class="hnote">Every run, newest first. To undo a change in the project use Premiere: <b>Edit &gt; Undo</b> (⌘Z) or <b>Window &gt; History</b>.</div>';
+  history.forEach(function (r) {
+    h += '<div class="hrow' + (r.ok ? "" : " fail") + '" title="' + esc(new Date(r.t).toString()) + '"><span class="hmark">' + (r.ok ? "✓" : "✕") +
+      '</span><span class="htime">' + whenText(r.t, false) +
+      '</span><span class="hwhat">' + esc(r.app + (r.action ? " · " + r.action : "")) + ' <span class="hdur">' + clockText(r.ms / 1000) + "</span>" +
+      (r.source && r.source !== "button" ? ' <span class="hsrc">' + esc(r.source) + "</span>" : "") +
+      '</span><span class="hsum">' + esc(r.text) + "</span></div>";
+  });
+  box.innerHTML = h;
+  document.getElementById("hist-count").textContent = history.length ? history.length : "";
+}
+
+// ---- State: header chip and each home row ----
+function drawStates() {
+  var chip = document.getElementById("chip");
+  if (!chip) return;
+  var live = Object.keys(tasks).map(function (k) { return tasks[k]; }).filter(function (p) { return p.event !== "none" && !taskOver(p); });
+  var paused = live.some(function (p) { return p.paused || (p.eta && p.eta.state === "paused"); });
+  var rendering = 0; live.forEach(function (p) { if (p.unit !== "steps") rendering += p.running || 0; });
+  var last = history[0];
+  if (running) { chip.className = "chip " + (paused ? "paused" : "run"); chip.textContent = paused ? "Paused · " + running : rendering ? "Rendering " + rendering + " · " + running : "Running · " + running; }
+  else if (live.length) { chip.className = "chip " + (paused ? "paused" : "run"); chip.textContent = paused ? "Paused" : rendering ? "Rendering " + rendering : live.length + " running"; }
+  else if (last && !last.ok && Date.now() - last.t < 600000) { chip.className = "chip fail"; chip.textContent = "Failed · " + last.app; }
+  else { chip.className = "chip live"; chip.textContent = "Ready"; }
+  chip.title = chip.textContent;
+  [].forEach.call(document.querySelectorAll("#tiles .tile[data-skill]"), function (t) {
+    var id = t.getAttribute("data-skill"), st = t.querySelector(".state"), p = tasks[id], r = null;
+    for (var i = 0; i < history.length; i++) if (history[i].skill === id) { r = history[i]; break; }
+    var txt = "", cls = "state";
+    if (runningSkill === id || (p && p.event !== "none" && !taskOver(p))) {
+      cls += p && p.paused ? " paused" : " run";
+      txt = p && p.event !== "none" && !taskOver(p) ? (p.unit === "steps" ? Math.floor(p.percent) + "%" : p.finished + "/" + p.total) : "running";
+    } else if (r) { cls += r.ok ? "" : " fail"; txt = (r.ok ? "✓ " : "✕ ") + whenText(r.t, true); t.title = t.title.split(" · ")[0] + " · last run " + new Date(r.t).toLocaleString("en-GB") + (r.ok ? "" : " (failed)"); }
+    st.className = cls; st.textContent = txt;
+  });
+}
+
+// ---- Layout: log / history pane at the bottom, on the side or hidden; list or icon view ----
+// Remembered per Mac (localStorage). Premiere docks the whole panel; these arrange inside it.
+function pref(k, v) { try { if (v === undefined) return localStorage.getItem("penytoolkit.ui." + k); localStorage.setItem("penytoolkit.ui." + k, v); } catch (e) { return null; } }
+var LAYOUTS = ["bottom", "side", "hidden"];
+function applyLayout() {
+  var work = document.getElementById("work"), lay = pref("layout") || "bottom", aux = document.getElementById("aux");
+  work.className = lay === "side" ? "side" : lay === "hidden" ? "nolog" : "";
+  aux.style.height = lay === "bottom" ? (parseInt(pref("auxH"), 10) || Math.min(150, Math.round(window.innerHeight * 0.28))) + "px" : "";
+  aux.style.width = lay === "side" ? (parseInt(pref("auxW"), 10) || 300) + "px" : "";
+  document.getElementById("btn-layout").title = "Log and History: " + lay + " (L to change)";
+  var grid = pref("tiles") === "grid";
+  document.getElementById("tiles").className = grid ? "grid" : "";
+  document.getElementById("btn-view").classList.toggle("on", grid);
+  var tab = pref("tab") === "history" ? "history" : "log";
+  document.getElementById("log").classList.toggle("hidden", tab !== "log");
+  document.getElementById("history").classList.toggle("hidden", tab !== "history");
+  [].forEach.call(document.querySelectorAll(".auxbar .tab"), function (b) { b.classList.toggle("on", b.getAttribute("data-tab") === tab); });
+  document.getElementById("btn-history").classList.toggle("on", tab === "history" && lay !== "hidden");
+  document.getElementById("aux-hint").textContent = tab === "history" ? "Undo in Premiere: ⌘Z" : "";
+}
+function cycleLayout() { pref("layout", LAYOUTS[(LAYOUTS.indexOf(pref("layout") || "bottom") + 1) % LAYOUTS.length]); applyLayout(); }
+function toggleGrid() { pref("tiles", pref("tiles") === "grid" ? "list" : "grid"); applyLayout(); }
+function showTab(tab) {
+  if (pref("layout") === "hidden") pref("layout", "bottom");
+  pref("tab", tab); applyLayout();
+  if (tab === "log") { var l = document.getElementById("log"); l.scrollTop = l.scrollHeight; }
+}
+function initLayout() {
+  document.getElementById("btn-layout").addEventListener("click", cycleLayout);
+  document.getElementById("btn-view").addEventListener("click", toggleGrid);
+  document.getElementById("btn-history").addEventListener("click", function () { showTab(pref("tab") === "history" && pref("layout") !== "hidden" ? "log" : "history"); });
+  document.getElementById("btn-keys").addEventListener("click", showKeys);
+  [].forEach.call(document.querySelectorAll(".auxbar .tab"), function (b) { b.addEventListener("click", function () { showTab(b.getAttribute("data-tab")); }); });
+  // Drag the splitter to size the pane (height at the bottom, width on the side).
+  var split = document.getElementById("split");
+  split.addEventListener("mousedown", function (e) {
+    e.preventDefault();
+    var side = pref("layout") === "side", aux = document.getElementById("aux"), start = side ? e.clientX : e.clientY, size = side ? aux.offsetWidth : aux.offsetHeight;
+    split.classList.add("drag");
+    function move(ev) {
+      var work = document.getElementById("work"), max = (side ? work.offsetWidth : work.offsetHeight) - 80;
+      var v = Math.max(60, Math.min(max, size + start - (side ? ev.clientX : ev.clientY)));
+      if (side) aux.style.width = v + "px"; else aux.style.height = v + "px";
+    }
+    function up() {
+      document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); split.classList.remove("drag");
+      pref(side ? "auxW" : "auxH", String(side ? aux.offsetWidth : aux.offsetHeight));
+    }
+    document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
+  });
+  applyLayout();
+}
+
+// ---- Keys (when the panel has focus; never while typing in a box) ----
+// 1-9 open an app (or an Interviews job), Esc goes back / closes, G list or icons, L pane
+// position, H History or Log, ? this list. A sheet takes Enter (OK) and Esc (Cancel).
+var KEYS = [["1 – 9", "Open an app (or a job inside Interviews)"], ["Esc", "Back, or close a how-to box or question"], ["Enter", "OK in a question"],
+  ["G", "List or icon view"], ["L", "Log and History: bottom, side, hidden"], ["H", "Switch Log / History"], ["?", "This list"]];
+function showKeys() {
+  var h = '<div class="keys">' + KEYS.map(function (k) { return "<kbd>" + esc(k[0]) + "</kbd><span>" + esc(k[1]) + "</span>"; }).join("") + "</div>";
+  sheet({ title: "Keyboard shortcuts", text: "", ok: "Close", cancel: "", okStyle: "secondary" });
+  document.getElementById("sheet-text").innerHTML = h + '<div>Keys work when the Toolkit panel is in front (click it once).</div>';
+  document.getElementById("sheet-cancel").classList.add("hidden");
+}
+function onKey(e) {
+  var sh = document.getElementById("sheet");
+  if (sh && !sh.classList.contains("hidden")) {
+    if (e.key === "Escape") { e.preventDefault(); var c = document.getElementById("sheet-cancel"); (c.classList.contains("hidden") ? document.getElementById("sheet-ok") : c).click(); }
+    else if (e.key === "Enter") { e.preventDefault(); document.getElementById("sheet-ok").click(); }
+    return;
+  }
+  var tg = e.target && e.target.tagName;
+  if (tg === "INPUT" || tg === "TEXTAREA" || tg === "SELECT") { if (e.key === "Escape") e.target.blur(); return; }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === "Escape") {
+    if (document.querySelector(".info-btn[aria-expanded=true]")) closeInfo(); else goBack();
+    e.preventDefault(); return;
+  }
+  var k = e.key.toLowerCase();
+  if (k === "g") toggleGrid();
+  else if (k === "l") cycleLayout();
+  else if (k === "h") showTab(pref("tab") === "history" && pref("layout") !== "hidden" ? "log" : "history");
+  else if (e.key === "?") showKeys();
+  else if (/^[1-9]$/.test(e.key)) {
+    var n = parseInt(e.key, 10) - 1;
+    if (!currentView) { var t = document.querySelectorAll("#tiles .tile")[n]; if (t) t.click(); }
+    else if (!currentApp) { var st = document.querySelectorAll('.app[data-skill="' + currentView + '"] .subtile')[n]; if (st) st.click(); }
+    else return;
+  } else return;
+  e.preventDefault();
 }
 
 // ---- Test hook ----
@@ -812,7 +1040,10 @@ var startError = null;
     loadSkills();
     drawSkills();
     initJobsDock();
+    initLayout();
+    loadHistory();
     showView(null);
+    drawStates();
     try { fs.mkdirSync(HOOK_INBOX, { recursive: true }); } catch (e) {}
     if (!window.PenyLoader) fs.writeFileSync(INSTANCE_FILE, INSTANCE_ID, "utf-8");
     hookTimer = setInterval(pollHook, HOOK_POLL_MS);
@@ -843,6 +1074,7 @@ function isBusy() {
 // click handlers sit on elements loader.js throws away.
 function stop() {
   if (hookTimer) { clearInterval(hookTimer); hookTimer = null; }
+  stopRunTimer(false);
   if (updates) { updates.stop(); updates = null; }
   skills = [];
 }

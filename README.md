@@ -32,11 +32,18 @@ one app tile per skill; tapping a tile opens that skill's view (< returns home).
    `"options": [{"label", "value"} or {"label", "text": true, "placeholder"}]`; a text option
    shows a text box whose value is used). Values are passed to the skill as `params.<id>`.
 
-   Tile and look: `"order"` (position on the home screen), `"icon": "icon.svg"` (white
-   glyph, drawn on a rounded square), `"tint": ["#top", "#bottom"]` (icon gradient),
-   `"progress": true` (shows the proxy progress bar above the log in this view).
-   Each action can have `"style": "primary" | "secondary" | "danger"` (blue, grey glass,
-   red pill) and `"prompts"` (folders asked for on click, each with an `"explain"` sheet).
+   Tile and look: `"order"` (position on the home screen and its number key 1-9),
+   `"icon": "icon.svg"` (white glyph inside the Peny folded-line frame: start every icon
+   with `<path d="M22 28.5H7a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h18a3 3 0 0 1 3 3v24"
+   stroke-width="2.2"/>` and keep the glyph inside x 8-24, y 8-24; drawn on the black Peny
+   square, `"tint"` is ignored), `"subtitle"` (home row text; else the description's first
+   sentence), `"progress": true` (the app reports its own progress; every other app gets
+   a bar timed from its past runs in the History).
+   Each action can have `"style": "primary" | "secondary" | "danger"` (white, grey,
+   red outline) and `"prompts"` (folders asked for on click, each with an `"explain"` sheet).
+   UI rules (Lee, 30 Oct 2026): neutral greys only; blue only for active/selected/focus,
+   green for running, amber paused, red failed/destructive; numbers, times and paths in
+   monospace; no animations; shortcut keys shown in tooltips.
 
 3. Add `premiere.jsx` (ExtendScript, ES3: `var` only, no arrow functions, no JSON object):
 
