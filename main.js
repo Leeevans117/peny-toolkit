@@ -813,7 +813,9 @@ function makeFace(look, I, M) {
     f.appendChild(g);
   }
   document.body.appendChild(f);
-  var k = Math.min(M.width, M.height) / I.width;
+  // The glyph only grows a little (it is gone long before the window is full size), so it
+  // fades rather than balloons across the screen (Lee, 4 Nov: "logo doesn't disappear").
+  var k = Math.min(Math.min(M.width, M.height) / I.width, 1.6);
   var glyphEnd = "translate(" + (M.left + M.width / 2 - (I.left + I.width / 2)) + "px," + (M.top + M.height / 2 - (I.top + I.height / 2)) + "px) scale(" + k + ")";
   return { el: f, glyph: g, glyphEnd: glyphEnd };
 }
@@ -846,11 +848,12 @@ function flipOpen(tileEl, change) {
   var anims = [
     win.animate([{ clipPath: clipOf(I, M) }, { clipPath: clipOf(null, M) }], geo),
     face.el.animate([{ clipPath: clipOf(I, M) }, { clipPath: clipOf(null, M) }], geo),
-    face.el.animate([{ opacity: 1 }, { opacity: 0, offset: 0.32, easing: "ease-out" }, { opacity: 0 }], lin),
+    face.el.animate([{ opacity: 1, easing: "ease-out" }, { opacity: 0, offset: 0.28 }, { opacity: 0 }], lin),
     behind.animate([{ transform: "scale(1)", opacity: 1 }, { transform: "scale(0.94)", opacity: 0.45 }], geo),
     win.animate([{ opacity: 0.6 }, { opacity: 1, offset: 0.25 }, { opacity: 1 }], lin)
   ].concat(settle(win, I, 0.86, 1, geo));
-  if (face.glyph) anims.push(face.glyph.animate([{ transform: "none" }, { transform: face.glyphEnd }], geo));
+  if (face.glyph) anims.push(face.glyph.animate([{ transform: "none" }, { transform: face.glyphEnd }], geo),
+    face.glyph.animate([{ opacity: 1, easing: "ease-out" }, { opacity: 0, offset: 0.14 }, { opacity: 0 }], lin));
   runFlip(anims, ms, function () {
     if (face.el.parentNode) face.el.parentNode.removeChild(face.el);
     if (snap && snap.parentNode) snap.parentNode.removeChild(snap);
@@ -883,7 +886,8 @@ function flipClose(change, findIcon) {
     face.el.animate([{ opacity: 0 }, { opacity: 0, offset: 0.2 }, { opacity: 1, offset: 0.6, easing: "ease-in" }, { opacity: 1 }], lin),
     newV.animate([{ transform: "scale(0.94)", opacity: 0.45 }, { transform: "scale(1)", opacity: 1 }], geo)
   ].concat(settle(win, I, 1, 0.86, geo));
-  if (face.glyph) anims.push(face.glyph.animate([{ transform: face.glyphEnd }, { transform: "none" }], geo));
+  if (face.glyph) anims.push(face.glyph.animate([{ transform: face.glyphEnd }, { transform: "none" }], geo),
+    face.glyph.animate([{ opacity: 0 }, { opacity: 0, offset: 0.55, easing: "ease-in" }, { opacity: 1, offset: 0.85 }, { opacity: 1 }], lin));
   runFlip(anims, ms, function () {
     if (face.el.parentNode) face.el.parentNode.removeChild(face.el);
     if (snap.parentNode) snap.parentNode.removeChild(snap);
