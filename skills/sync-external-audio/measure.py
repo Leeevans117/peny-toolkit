@@ -21,6 +21,13 @@ against the recorder wavs.
      search there is accepted only on a strict rule: two channels agree with ratio >= 4, or
      one channel alone with ratio >= 8 inside that +-3 s window (Lee's 2.9 s D072 clip: a:0 ratio
      24 at 217.912 s vs 217.891 s placed by hand; a:2 was noise).
+  Camera clock: the clip's "clock" (RED: REDline "Timestamp", from the panel) or the file
+  name's HHMMSS. Before step 3, a match more than 2 s from where the other clips of its
+  recording put it (median of their recorder-minus-camera offsets, 3+ clips) is undone and
+  retried by step 3 (Lake Placid A005 Komodo + DJI Mic, 4 Nov 2026: 17 of 21 matches
+  agreed to 1.0 s, 4 weak ones were 10-306 s off).
+  Wavs: a file shorter than ~1 h starts a new recording unless its name time is the previous
+  file's plus its length (DJI Mic splits every ~30 min).
 Input: JSON on stdin {ffmpeg, cacheDir, clips:[{id, path, inPoint, duration, name}],
 wavs:[{path, duration}]}. Output: JSON on stdout {results:[...]}. Progress lines on stderr.
 """
@@ -80,9 +87,11 @@ def peak_ratio(lags_idx_vals, sr):
 def channels(ffmpeg, clip, length):
     """Camera audio channels as {stream index: 2 kHz signal}, exact copies dropped."""
     out = {}
+    clip["readable"] = False
     for s in range(8):
-        c = decode(ffmpeg, clip["path"], COARSE_SR, clip["inPoint"], length, s)
+        c = decode(ffmpeg, clip["path"], COARSE_SR, clip.get("audioIn", clip["inPoint"]), length, s)
         if c is None: break
+        clip["readable"] = True
         if len(c) < MIN_SECONDS * COARSE_SR or np.abs(c).max() == 0: continue
         cn = c / (np.linalg.norm(c) or 1)
         if any(abs(float(np.dot(cn, o[1]))) > 0.999 for o in out.values() if len(o[1]) == len(cn)): continue
@@ -98,19 +107,30 @@ def fine(ffmpeg, wav, clip, approx, streams, sr=FINE_SR, pad=FINE_PAD):
     out = {}
     if wseg is None or len(wseg) < sr: return out
     for s in streams:
-        c = decode(ffmpeg, clip["path"], sr, clip["inPoint"], length, s)
+        c = decode(ffmpeg, clip["path"], sr, clip.get("audioIn", clip["inPoint"]), length, s)
         if c is None or len(c) < MIN_SECONDS * sr or np.abs(c).max() == 0: continue
         n = 1 << int(np.ceil(np.log2(len(wseg) + len(c))))
-        res = gcc_peak(np.fft.rfft(wseg, n), n, c, -len(c) + 1, len(wseg))
+        # Only within +-pad of the estimate. Searching every lag of the window let a clip
+        # land up to its own length away (Lake Placid A099: 10.7 s off the camera clock).
+        res = gcc_peak(np.fft.rfft(wseg, n), n, c, 0, int(round((approx - w0 + pad) * sr)))
         lag, ratio = peak_ratio(res, sr)
         if lag is not None: out[s] = (w0 + lag / sr, ratio)
     return out
 
 
 def clock(name):
+    """Seconds of day from a file name's HHMMSS (Canon H260703_153021, DJI DJI_38_20261005_020529)."""
     m = re.search(r"(\d{6})_(\d{2})(\d{2})(\d{2})", name)  # Canon: H260703_153021
     if not m: return None
     return int(m.group(2)) * 3600 + int(m.group(3)) * 60 + int(m.group(4))
+
+
+def clip_clock(clip):
+    """Camera start time of day: the panel's (RED: REDline "Timestamp") or the file name's."""
+    return clip["clock"] if clip.get("clock") is not None else clock(clip["name"])
+
+
+CLOCK_TOL = 2.0  # s; a measured clip this far from where the other clips' clocks put it is wrong
 
 
 def accept(f, coarse=None, strict=False):
@@ -136,7 +156,12 @@ def main():
     # Recordings: a ~1 h file continues into the next numbered file with no gap.
     rec = 0
     for i, w in enumerate(wavs):
-        if i and wavs[i - 1]["duration"] < 3590: rec += 1
+        # DJI Mic splits every ~30 min: a file whose name time is the previous one's plus its
+        # length (to 3 s) continues it (Lake Placid, 4 Oct 2026: 020529 + 1845.9 s = 023614).
+        if i:
+            p, c0, c1 = wavs[i - 1], clock(os.path.basename(wavs[i - 1]["path"])), clock(os.path.basename(w["path"]))
+            chained = c0 is not None and c1 is not None and abs((c1 - c0 - p["duration"] + 43200) % 86400 - 43200) <= 3
+            if p["duration"] < 3590 and not chained: rec += 1
         w["recording"] = rec
         w["recStart"] = 0.0 if i == 0 or wavs[i - 1]["recording"] != rec else wavs[i - 1]["recStart"] + wavs[i - 1]["duration"]
     clipN = int(CLIP_SECONDS * COARSE_SR)
@@ -163,7 +188,10 @@ def main():
         if length < MIN_SECONDS: r["reason"] = "clip too short to measure"; continue
         chans = channels(ffmpeg, clip, length)
         clip["streams"] = sorted(chans)
-        if not chans: r["reason"] = "no camera audio to measure"; continue
+        if not chans:
+            src = {"proxy": "its proxy", "redline": "the R3D (REDline)"}.get(clip.get("source"), "the camera file")
+            r["reason"] = ("camera sound is silent in " + src) if clip["readable"] else ("no camera sound could be read from " + src + " (" + os.path.basename(clip["path"]) + ")")
+            continue
         hits = []  # best coarse hit per channel: (ratio, channel, wav index, seconds)
         for ch, c in chans.items():
             best = None
@@ -186,23 +214,42 @@ def main():
                 r.update(synced=True, wav=wavs[wi]["path"], wavTime=round(t, 4), recording=wavs[wi]["recording"],
                          recTime=wavs[wi]["recStart"] + t)
                 break
+    # Clock check: in one recording, (recorder time - camera clock) is the same for every
+    # clip to about a second (Lake Placid A005 Komodo + DJI: 17 clips within 1.0 s). A match
+    # far off the others' agreed offset is a false peak (there: 4 weak matches 10-306 s
+    # off, from mic channels so alike that they "agreed"), so it is undone and retried at the
+    # clock's estimate below. Needs 3 clips with clocks in the recording.
+    byrec = {}
+    for r, c in zip(results, job["clips"]):
+        if r["synced"] and clip_clock(c) is not None:
+            byrec.setdefault(r["recording"], []).append((r, r["recTime"] - c["inPoint"] - clip_clock(c)))
+    for rec, items in byrec.items():
+        if len(items) < 3: continue
+        for r, off in items:
+            others = sorted(o for x, o in items if x is not r)
+            med = others[len(others) // 2] if len(others) % 2 else (others[len(others) // 2 - 1] + others[len(others) // 2]) / 2
+            if abs(off - med) > CLOCK_TOL:
+                r.update(synced=False, rejected={"wav": os.path.basename(r["wav"]), "wavTime": r["wavTime"], "clockOff": round(off - med, 2)},
+                         why="match at %.3f s in %s rejected: %.1f s from where the other clips' camera clocks put it" % (r["wavTime"], os.path.basename(r["wav"]), off - med))
+                for k in ("wav", "wavTime", "recording", "recTime"): r.pop(k, None)
     # Second pass: predict failed clips from a synced clip's camera clock.
-    anchors = [(r, c) for r, c in zip(results, job["clips"]) if r["synced"] and clock(c["name"]) is not None]
+    anchors = [(r, c) for r, c in zip(results, job["clips"]) if r["synced"] and clip_clock(c) is not None]
     for r, clip in zip(results, job["clips"]):
-        if r["synced"] or clock(clip["name"]) is None or not anchors or clip["duration"] < MIN_SECONDS: continue
-        ar, ac = min(anchors, key=lambda a: abs(clock(a[1]["name"]) - clock(clip["name"])))
-        rt = ar["recTime"] + (clock(clip["name"]) - clock(ac["name"])) + (clip["inPoint"] - ac["inPoint"])
+        if r["synced"] or clip_clock(clip) is None or not anchors or clip["duration"] < MIN_SECONDS: continue
+        ar, ac = min(anchors, key=lambda a: abs(clip_clock(a[1]) - clip_clock(clip)))
+        rt = ar["recTime"] + (clip_clock(clip) - clip_clock(ac)) + (clip["inPoint"] - ac["inPoint"])
         cands = [w for w in wavs if w["recording"] == ar["recording"] and w["recStart"] <= rt < w["recStart"] + w["duration"]]
         if not cands: continue
         w = cands[0]
         streams = clip.get("streams") or sorted(channels(ffmpeg, clip, min(clip["duration"], CLIP_SECONDS)))
         f = fine(ffmpeg, w, clip, rt - w["recStart"], streams, pad=FINE_PAD)
         t, why = accept(f, strict=True)
-        r["why"] = "camera clock from " + ac["name"] + "; " + why
+        r["why"] = (r["why"] + "; " if r.get("rejected") else "") + "camera clock from " + ac["name"] + "; " + why
         if t is not None:
             r.update(synced=True, wav=w["path"], wavTime=round(t, 4), recording=w["recording"], recTime=w["recStart"] + t)
             r.pop("reason", None)
-    for r in results:
+    for r, clip in zip(results, job["clips"]):
+        r["clock"] = clip_clock(clip)
         if not r["synced"] and "reason" not in r: r["reason"] = r.get("why", "no confident match")
     json.dump({"results": results, "wavs": [{"path": w["path"], "duration": w["duration"], "recording": w["recording"]} for w in wavs]}, sys.stdout)
 

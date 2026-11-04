@@ -25,6 +25,127 @@ function q64(x) { return Math.round(x * 64) / 64; }
 function floor64(x) { return Math.floor(x * 64) / 64; }
 function clock(name) { var m = /(\d{6})_(\d{2})(\d{2})(\d{2})/.exec(name); return m ? (+m[2]) * 3600 + (+m[3]) * 60 + (+m[4]) : null; }
 
+// Sound of RED clips with no proxy attached. ffmpeg can't decode the audio inside an .R3D
+// and REDline has no audio-only export, so REDline renders the measured stretch (the clip's
+// first <=120 s from its in-point, +1 s) as a 192x108 ProRes Proxy .mov, which carries the
+// camera channels; ffmpeg copies each channel to its own mono stream (measure.py tries
+// streams one by one, as in a proxy) and the render is deleted. Tested 4 Nov 2026
+// on Data's Mac mini (REDline 65.1.3, Komodo-X): the sound is sample-identical to the
+// Toolkit proxy's, starts exactly on --start (0-based), ~24 s per 120 s of sound with the GPU
+// on (47 s on CPU). REDline's channel order differs from the proxy's (ch1 = proxy a:3, ch2 =
+// a:0 ...); it does not matter here, every channel is tried on its own. Slow-motion R3Ds have
+// no camera audio ("Camera Audio Channels: 0") and are reported, not rendered.
+var REDLINE = ["/usr/local/bin/REDline", "/Applications/REDCINE-X Professional/REDCINE-X PRO.app/Contents/MacOS/REDline"];
+var RED_SECONDS = 120, RED_AT_ONCE = 2;
+function redlineAudio(ffmpeg, api) {
+  var redline = firstExisting(REDLINE);
+  var dir = path.join(process.env.HOME || "/tmp", "Library", "Caches", "PenyToolkit", "sync-audio");
+  var meta = {}, made = [];
+  function run(cmd, args) {
+    return new Promise(function (ok) {
+      childProcess.execFile(cmd, args, { maxBuffer: 32 * 1024 * 1024 }, function (e, out, err) {
+        ok({ error: e, out: String(out || ""), err: String(err || "") });
+      });
+    });
+  }
+  // Exact rates for the rounded ones REDline prints (23.976 -> 24000/1001).
+  function exactFps(x) {
+    var nd = [24, 30, 48, 60, 120];
+    for (var i = 0; i < nd.length; i++) if (Math.abs(x - nd[i] * 1000 / 1001) < 0.002) return nd[i] * 1000 / 1001;
+    return x;
+  }
+  function info(r3d) {
+    if (meta[r3d]) return meta[r3d];
+    meta[r3d] = run(redline, ["--i", r3d, "--printMeta", "1"]).then(function (r) {
+      var t = r.out + "\n" + r.err;
+      var fps = /^FPS:\s*([\d.]+)/m.exec(t), frames = /^Total Frames:\s*(\d+)/m.exec(t), ch = /^Camera Audio Channels:\s*(\d+)/m.exec(t);
+      var ts = /^Timestamp:\s*(\d{1,6})\s*$/m.exec(t), hms = ts ? ("000000" + ts[1]).slice(-6) : null;
+      if (!fps || !frames) return { error: "REDline could not read the clip's metadata" + (r.error ? " (" + r.error.message.split("\n")[0] + ")" : "") };
+      return { fps: exactFps(parseFloat(fps[1])), frames: +frames[1], channels: ch ? +ch[1] : null,
+        clock: hms ? (+hms.slice(0, 2)) * 3600 + (+hms.slice(2, 4)) * 60 + (+hms.slice(4)) : undefined };
+    });
+    return meta[r3d];
+  }
+  function one(c) {
+    return info(c.path).then(function (m) {
+      if (m.error) return m.error;
+      if (m.channels === 0) return "RED clip has no camera audio (REDline: 0 audio channels, e.g. slow motion)";
+      var start = Math.max(0, Math.floor(c.inPoint * m.fps + 1e-6));
+      if (start >= m.frames) return "in-point is past the end of the R3D (" + m.frames + " frames)";
+      var count = Math.min(Math.ceil((Math.min(c.duration, RED_SECONDS) + 1) * m.fps), m.frames - start);
+      var base = "sync-" + process.pid + "-" + String(c.id).replace(/[^\w.-]/g, "_");
+      var mov = path.join(dir, base + ".mov"), wav = path.join(dir, base + "-sound.mov"); // one mono stream per channel
+      [mov, wav].forEach(function (f) { try { fs.unlinkSync(f); } catch (e) {} });
+      return run(redline, ["--i", c.path, "--outDir", dir, "--o", base, "--format", "201", "--PRcodec", "3", "--res", "8",
+        "--resizeX", "192", "--resizeY", "108", "--fit", "3", "--filter", "0", "--start", String(start), "--frameCount", String(count)]).then(function (r) {
+        if (!fs.existsSync(mov)) {
+          var line = (r.out + "\n" + r.err).split("\n").filter(function (l) { return /error|fail|unable/i.test(l); }).pop();
+          return "REDline did not write the sound" + (line ? ": " + line.replace(/^\[[^\]]*\]<[^>]*>\s*/, "").trim() : "");
+        }
+        // REDline writes one multichannel stream; measure.py tries each *stream* on its own
+        // (as in a proxy: 4 mono streams), so every channel becomes its own mono stream.
+        return run(path.join(path.dirname(ffmpeg), "ffprobe"), ["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=channels", "-of", "csv=p=0", mov]).then(function (p) {
+          var n = parseInt(p.out, 10) || 0;
+          if (!n) return { error: true };
+          var fc = [], maps = [];
+          for (var k = 0; k < n; k++) { fc.push("[0:a:0]pan=mono|c0=c" + k + "[c" + k + "]"); maps.push("-map", "[c" + k + "]"); }
+          return run(ffmpeg, ["-v", "error", "-nostdin", "-y", "-i", mov, "-filter_complex", fc.join(";")].concat(maps, ["-c:a", "pcm_s24le", "-f", "mov", wav]));
+        }).then(function (f) {
+          try { fs.unlinkSync(mov); } catch (e) {}
+          if (f.error || !fs.existsSync(wav)) { try { fs.unlinkSync(wav); } catch (e) {} return "RED clip has no camera audio (REDline wrote no sound" + (m.channels === null ? "" : ", " + m.channels + " channels in metadata") + ")"; }
+          made.push(wav);
+          c.path = wav;
+          c.audioIn = c.inPoint - start / m.fps; // the wav starts on frame `start`
+          return null;
+        });
+      });
+    }).catch(function (e) { return "REDline failed: " + (e && e.message ? e.message : String(e)); });
+  }
+  return {
+    available: function () { return !!redline; },
+    // Renders the sound of every clip with source "redline"; clips that fail are taken out
+    // of `clips` (in place) and added to `unread` with the reason.
+    prepare: function (clips, unread) {
+      var todo = clips.filter(function (c) { return c.source === "redline"; });
+      // Camera clock of every RED clip (proxy or not) for measure.py's clock check:
+      // REDline "Timestamp" (HHMMSS, time of day the clip started).
+      var reds = redline ? clips.filter(function (c) { return c.red && fs.existsSync(c.media || ""); }) : [];
+      var clocks = reds.reduce(function (p, c, i) {
+        return p.then(function () {
+          api.status("Reading RED clip clocks " + (i + 1) + "/" + reds.length);
+          return info(c.media).then(function (m) { if (m.clock !== undefined) c.clock = m.clock; });
+        });
+      }, Promise.resolve());
+      if (!todo.length) return clocks;
+      try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
+      var next = 0, done = 0, failed = {};
+      return clocks.then(function () {
+        function worker() {
+          if (next >= todo.length) return Promise.resolve();
+          var c = todo[next++];
+          return one(c).then(function (why) {
+            done++;
+            api.status("Reading RED sound " + done + "/" + todo.length + " " + c.name);
+            api.log("  Reading RED sound " + done + "/" + todo.length + " " + c.name + (why ? " - " + why : ""));
+            if (why) failed[c.id] = why;
+            return worker();
+          });
+        }
+        var workers = [];
+        for (var i = 0; i < Math.min(RED_AT_ONCE, todo.length); i++) workers.push(worker());
+        return Promise.all(workers).then(function () {
+          for (var k = clips.length - 1; k >= 0; k--) {
+            var c = clips[k];
+            if (c.source === "redline" && failed[c.id]) { unread.push({ name: c.name, time: c.start, reason: failed[c.id] }); clips.splice(k, 1); }
+          }
+        });
+      });
+    },
+    // Deletes the sound files this run wrote (~70 MB per 120 s clip).
+    cleanup: function () { made.forEach(function (f) { try { fs.unlinkSync(f); } catch (e) {} }); made = []; }
+  };
+}
+
 module.exports = function (api) {
   function pythonWithNumpy() {
     for (var i = 0; i < PYTHON.length; i++) {
@@ -66,7 +187,8 @@ module.exports = function (api) {
     var ffprobe = path.join(path.dirname(ffmpeg), "ffprobe");
     var python = pythonWithNumpy();
     if (!python) return Promise.resolve({ ok: false, error: "No python3 with numpy found (looked in " + PYTHON.join(", ") + ")." });
-    var scan, wavInfo = [];
+    var scan, wavInfo = [], unread = [];
+    var redAudio = redlineAudio(ffmpeg, api);
     api.status("Reading the timeline…");
     return api.evalSkill({ action: "scan" }).then(function (r) {
       if (!r.ok) throw { stop: r.error };
@@ -76,13 +198,36 @@ module.exports = function (api) {
     }).then(function () {
       var bad = wavInfo.filter(function (w) { return !w.duration; });
       if (bad.length) throw { stop: "Could not read " + bad.map(function (w) { return w.path; }).join(", ") };
-      var clips = scan.cams.filter(function (c) { return c.path && fs.existsSync(c.path); });
-      api.log("Sync: " + clips.length + " camera clip(s) against " + wavInfo.length + " wav(s) on A" + (scan.track + 1));
-      return measure(python, { ffmpeg: ffmpeg, wavs: wavInfo, clips: clips.map(function (c) {
-        return { id: c.nodeId, name: c.name, path: c.path, inPoint: c.inPoint, duration: c.end - c.start };
-      }) });
+      // Where ffmpeg reads each camera clip's sound. ffmpeg can't decode the sound inside a
+      // RED .R3D (it fails at once, so every R3D came back "no camera audio to measure":
+      // Lee's 172-clip run on 4 Nov 2026). RED clips are read from the proxy Premiere has
+      // attached (Toolkit RED proxies carry the camera channels, same timing as the R3D),
+      // or, with no proxy, from the first minutes of the R3D's sound written out by REDline.
+      var clips = [];
+      unread = [];
+      scan.cams.forEach(function (c) {
+        var isRed = /\.r3d$/i.test(c.path || "");
+        var src = null, how = "media";
+        if (c.path && !isRed && fs.existsSync(c.path)) src = c.path;
+        else if (c.proxy && fs.existsSync(c.proxy)) { src = c.proxy; how = "proxy"; }
+        else if (isRed && fs.existsSync(c.path) && redAudio.available()) { src = c.path; how = "redline"; }
+        if (!src) {
+          unread.push({ name: c.name, time: c.start, reason: !c.path || !fs.existsSync(c.path) ? "media file not found (offline)" :
+            "RED clip: ffmpeg can't read the sound inside an .R3D and there is no proxy attached or REDline installed" });
+          return;
+        }
+        clips.push({ id: c.nodeId, name: c.name, path: src, source: how, red: isRed, media: c.path, start: c.start, inPoint: c.inPoint, duration: c.end - c.start });
+      });
+      var bySource = {};
+      clips.forEach(function (c) { bySource[c.source] = (bySource[c.source] || 0) + 1; });
+      api.log("Sync: " + clips.length + " camera clip(s) against " + wavInfo.length + " wav(s) on A" + (scan.track + 1) +
+        " (sound read from: " + Object.keys(bySource).map(function (k) { return bySource[k] + " " + (k === "media" ? "camera file" : k === "proxy" ? "attached proxy" : "R3D via REDline"); }).join(", ") +
+        (unread.length ? "; " + unread.length + " can't be read" : "") + ")");
+      return redAudio.prepare(clips, unread).then(function () {
+        return measure(python, { ffmpeg: ffmpeg, wavs: wavInfo, clips: clips });
+      }).then(function (m) { redAudio.cleanup(); return m; }, function (e) { redAudio.cleanup(); throw e; });
     }).then(function (m) {
-      var byId = {}, pieces = [], synced = [], unsynced = [];
+      var byId = {}, pieces = [], synced = [], unsynced = unread.slice();
       scan.cams.forEach(function (c) { byId[c.nodeId] = c; });
       m.results.forEach(function (r) {
         var cam = byId[r.id];
@@ -106,7 +251,7 @@ module.exports = function (api) {
         }
         // Wall clock of the wav's start from this clip (camera filename time); these should
         // agree across clips of one recording to about a second.
-        var cl = clock(r.name);
+        var cl = r.clock !== undefined && r.clock !== null ? r.clock : clock(r.name);
         if (cl !== null) rec.wavStartClock = cl + cam.inPoint - r.recTime;
         synced.push(rec);
       });

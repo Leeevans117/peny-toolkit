@@ -12,6 +12,11 @@
   S.items = S.items || {}; // media path -> ProjectItem of the wav, filled by "scan"
 
   function mediaPath(item) { try { return String(item.getMediaPath()); } catch (e) { return ""; } }
+  // Attached proxy (RED: ffmpeg can't read the sound inside an .R3D, the proxy has it).
+  function proxyPath(item) {
+    try { if (item && item.hasProxy && item.hasProxy()) return String(item.getProxyPath() || ""); } catch (e) {}
+    return "";
+  }
 
   function scan(seq) {
     var cams = [], names = {}, t, c;
@@ -21,7 +26,7 @@
         var v = vc[c], pi = v.projectItem;
         if (!pi) continue;
         names[String(v.name)] = true;
-        cams.push({ nodeId: String(v.nodeId), name: String(v.name), path: mediaPath(pi), track: t,
+        cams.push({ nodeId: String(v.nodeId), name: String(v.name), path: mediaPath(pi), proxy: proxyPath(pi), track: t,
           start: T.sec(v.start.ticks), end: T.sec(v.end.ticks), inPoint: T.sec(v.inPoint.ticks) });
       }
     }
