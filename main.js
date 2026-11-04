@@ -162,7 +162,11 @@ function runAction(skillId, actionId, params, source) {
     result = result || { ok: false, error: "No result" };
     result.skill = skill.id;
     result.action = action.id;
-    if (locks) { running = null; runningSkill = null; runningAction = null; finishRunTimer(skill, result); setButtons(); }
+    if (locks) {
+      running = null; runningSkill = null; runningAction = null;
+      runEnded[skill.id] = { start: startedAt, at: Date.now(), ok: !!result.ok, cancelled: /cancel/i.test(result.error || "") };
+      finishRunTimer(skill, result); setButtons(); drawProgress(); drawJobs();
+    }
     log((result.ok ? "OK  " : "FAIL ") + label + ": " + (result.ok ? result.summary : result.error), result.ok ? "ok" : "err");
     var d = result.details || {};
     ["failed", "skipped"].forEach(function (k) {
@@ -184,6 +188,7 @@ function runAction(skillId, actionId, params, source) {
 // Start/finish events go to the log; ticks are written to the log file at most every 3 s.
 var lastProgressFileAt = 0;
 var tasks = {};
+var runEnded = {}; // skill id -> { start, at, ok, cancelled } of its last run (button or hook)
 function progressText(p) {
   if (p.event === "none") return "Nothing to render" + (p.already ? " (" + p.already + " already have proxies)" : "");
   return p.finished + " of " + p.total + " " + (p.unit || "proxies") + " done · " + p.percent.toFixed(p.percent % 1 ? 1 : 0) + "%";
@@ -221,7 +226,14 @@ function etaText(p) {
 }
 function showProgress(p, skill) {
   if (!p) return;
-  if (!p.timer && runTimer && skill && runTimer.skill === skill.id) stopRunTimer(false);
+  // A run's own progress replaces its timer bar. Ingest + Proxies reports through the Proxies
+  // skill, so any own report during a run counts; the timer's last report is dropped, or its
+  // bar would sit at 95% "Estimating time left…" for the whole render (World Champs, 3 Nov 2026).
+  if (!p.timer && runTimer && skill && (runTimer.skill === skill.id || runTimer.skill === runningSkill)) {
+    var owner = runTimer.skill;
+    stopRunTimer(false);
+    if (owner !== skill.id) delete tasks[owner];
+  }
   p.skillId = skill ? skill.id : "proxy-automation";
   p.updatedAt = Date.now();
   tasks[p.skillId] = p;
@@ -338,8 +350,21 @@ function setButtons() {
 function setStatus(skill, text) {
   var el = document.querySelector('.status[data-skill="' + skill.id + '"]');
   if (el) el.textContent = text || "";
+  if (runningSkill === skill.id && currentView === skill.id) drawProgress(); // "still working: <step>" under the bar
 }
 
+function statusText(skill) {
+  var el = document.querySelector('.status[data-skill="' + skill.id + '"]');
+  return el && el.textContent ? el.textContent : "finishing…";
+}
+// "Finished at 00:15" / "Stopped with an error at 00:15" / "Cancelled at 00:15" under a bar
+// whose run is over, from the run's real end (runAction) or else the task's last report.
+function endText(p, end) {
+  var t = hhmm(end ? end.at : p.updatedAt).slice(0, 5);
+  if (p.cancelled || (end && end.cancelled)) return "Cancelled at " + t;
+  if (p.failed || (end && !end.ok)) return "Stopped with an error at " + t;
+  return "Finished at " + t;
+}
 // The bar in an app's view: that app's own task, else (Ingest + proxies) the proxy run.
 function viewTask(skill) {
   if (!skill) return null;
@@ -365,7 +390,12 @@ function drawProgress() {
     count.innerHTML = p.event === "none" ? "Nothing to render" : p.timer ? "<b>" + (p.eta && p.eta.state === "estimating" && !taskOver(p) ? "–" : pct + "%") + "</b>" :
       "<b>" + p.finished + "</b> of <b>" + p.total + "</b> · <b>" + pct + "%</b>";
     fill.style.width = (p.fraction * 100) + "%";
-    document.getElementById("peta").textContent = etaText(p);
+    // The bar shows the proxy run inside Ingest + Proxies: when the renders are done but the
+    // run is still attaching and saving, say so; once the whole run has ended, say Finished.
+    var over = taskOver(p), still = over && skill && runningSkill === skill.id && p.skillId !== skill.id;
+    var end = skill && runEnded[skill.id] && p.updatedAt >= runEnded[skill.id].start ? runEnded[skill.id] : null;
+    document.getElementById("peta").textContent = still ? "Renders done · still working: " + statusText(skill) :
+      over ? endText(p, end) : etaText(p);
     var bits = [];
     if (p.unit === "steps") { if (p.running && p.eta && p.eta.jobs && p.eta.jobs[0]) bits.push(p.eta.jobs[0].label + "…"); }
     else if (p.running) bits.push(p.running + " rendering");
@@ -375,9 +405,10 @@ function drawProgress() {
     if (p.cancelled) bits.push("cancelled");
     if (p.already) bits.push(p.already + " already had proxies");
     sub.textContent = bits.join(" · ");
-    box.className = "glass" + (p.failed || p.cancelled ? " failed" : p.fraction >= 1 ? " complete" : "");
+    var bad = p.failed || p.cancelled || (end && !end.ok);
+    box.className = "glass" + (bad ? " failed" : p.fraction >= 1 && !still ? " complete" : "");
   }
-  if (p && p.event !== "none" && !taskOver(p)) box.classList.add("running");
+  if (p && p.event !== "none" && (!taskOver(p) || (skill && runningSkill === skill.id))) box.classList.add("running");
   // Apps with their own progress always show the bar; the rest once a run has one.
   if (!skill || !(skill.progress || p)) box.classList.add("hidden");
 }
