@@ -6,6 +6,7 @@
 //   "copy"   - Make safe copy unless the active sequence already is a TOOLKIT COPY.
 //   "set"    - on a TOOLKIT COPY: gives each listed clip one Hard Limiter (added with QE if it
 //              has none) and sets Bypass / Input Boost / Maximum Amplitude, then reads them back.
+//              resetVolume: true first removes the clip's Volume > Level keyframes and sets 0 dB.
 //   "render" - on a TOOLKIT COPY: renders the sequence's audio (only the voice tracks unmuted)
 //              to a 32-bit float wav with exportAsMediaDirect, then restores mutes and in/out.
 //              Used to measure what Premiere's meters see.
@@ -13,8 +14,10 @@
 // Hard Limiter values (measured by render on Premiere 26.5.2, 3 Oct 2026):
 //   Input Boost dB = (v - 2/3) * 150, Maximum Amplitude dB = (v - 1) * 100.
 //   Lee's V1 preset: Max 0.97 (-3 dB), Boost 0.70667 (+6 dB), Look-Ahead 0.13333, Release 0.375.
-// Clip gain cannot be set from a script (QE staticClipGain reads but ignores writes), so the
-// level is set with the limiter's Input Boost; Lee's clip gain is left as it is.
+// Clip gain cannot be set from a script (QE staticClipGain reads but ignores writes; checked
+// again 23 Oct 2026: no ExtendScript, QE or UXP call sets Audio Gain, an open Adobe feature
+// request), so the bulk of the level goes in the limiter's Input Boost, which sounds the same;
+// Lee's clip gain is left as it is.
 (function () {
   var T = PenyToolkit;
   var HL = "Hard Limiter";
@@ -30,6 +33,7 @@
     if (action === "render") return render(seq, params);
     if (action === "probe") return probe(seq, params);
     if (action === "keys") return keys(seq, params);
+    if (action === "markers") return markers(seq, params);
     return T.fail("Unknown action: " + action);
   };
 
@@ -107,10 +111,11 @@
     } catch (e) {}
     return out;
   }
+  // "A5, A6", "A5 A6", "a5; a6", "5 and 6" -> {4: true, 5: true}; null for none.
   function trackFilter(text) {
-    var s = String(text || "").replace(/\s+/g, "").toUpperCase();
+    var s = String(text || "").toUpperCase().replace(/\bAND\b/g, " ").replace(/^[\s,;]+|[\s,;]+$/g, "");
     if (!s) return null;
-    var out = {}, parts = s.split(","), any = false;
+    var out = {}, parts = s.split(/[\s,;]+/), any = false;
     for (var i = 0; i < parts.length; i++) { var n = parseInt(parts[i].replace(/^A/, ""), 10); if (n > 0) { out[n - 1] = true; any = true; } }
     return any ? out : null;
   }
@@ -147,7 +152,7 @@
     for (var s in skipped) if (skipped.hasOwnProperty(s)) sk.push(s + (skipped[s] === true ? "" : " x" + skipped[s]));
     if (!clips.length) return T.fail("No interview voice clips found (looked for .wav audio, directly or in nested sequences, on unmuted tracks). Skipped: " + (sk.join(", ") || "nothing"), { tracks: tracks });
     return T.ok("Found " + clips.length + " voice clip(s).", { sequence: String(seq.name), sequenceId: String(seq.sequenceID), isCopy: T.isToolkitCopy(seq),
-      end: T.sec(seq.end), tracks: tracks, clips: clips, skipped: sk });
+      end: T.sec(seq.end), fps: T.sequenceFps(seq), tracks: tracks, clips: clips, skipped: sk });
   }
 
   function copy() {
@@ -188,7 +193,7 @@
   // params.clips: [{track, nodeId, bypass, boost, max}] (boost/max are Hard Limiter values 0..1).
   function set(seq, params) {
     if (!T.isToolkitCopy(seq)) return T.fail("Sound Pass only changes a TOOLKIT COPY; \"" + seq.name + "\" is not one.");
-    var list = params.clips || [], done = 0, failed = [], added = 0;
+    var list = params.clips || [], done = 0, failed = [], added = 0, volReset = 0;
     for (var i = 0; i < list.length; i++) {
       var c = list[i], it = itemByNode(seq, c.track, c.nodeId);
       if (!it) { failed.push({ nodeId: c.nodeId, error: "clip not found" }); continue; }
@@ -199,6 +204,15 @@
         comp = it ? findComponent(it, HL) : null;
         if (!comp) { failed.push({ nodeId: c.nodeId, error: err || "Hard Limiter did not appear" }); continue; }
         added++;
+      }
+      if (c.resetVolume) {
+        var lv = prop(findComponent(it, "Volume"), "Level");
+        if (lv.isTimeVarying()) lv.setTimeVarying(false);
+        lv.setValue(Math.pow(10, -15 / 20), true);
+        it = itemByNode(seq, c.track, c.nodeId);
+        if (volumeDb(it) !== 0) { failed.push({ nodeId: c.nodeId, error: "Volume keyframes not cleared (now " + volumeDb(it) + ")" }); continue; }
+        volReset++;
+        comp = findComponent(it, HL);
       }
       prop(comp, "Look-Ahead Time").setValue(0.1333329826593399, true);
       prop(comp, "Release Time").setValue(0.375, true);
@@ -212,7 +226,7 @@
       else failed.push({ nodeId: c.nodeId, start: T.fmt(it.start.seconds), wanted: c, got: s });
     }
     var r = failed.length ? T.fail(failed.length + " of " + list.length + " clip(s) did not take the limiter settings.") : T.ok(done + " clip(s) set and read back.");
-    r.details.set = done; r.details.added = added; r.details.failed = failed;
+    r.details.set = done; r.details.added = added; r.details.failed = failed; r.details.volumeReset = volReset;
     return r;
   }
 
@@ -273,6 +287,33 @@
     }
     return failed ? T.fail(failed + " clip(s) did not take their keyframes.", { clips: out }) : T.ok(list.length + " clip(s) keyframed and read back.", { clips: out });
   }
+  // params.spots: [{t, end (or null), text}] - on a TOOLKIT COPY: removes the sequence markers
+  // an earlier Sound Pass check left (name starts "Sound Pass:"; no other marker is touched),
+  // then adds one red marker per spot (name MARKER_NAME, comment = text) and reads them back.
+  var MARKER_NAME = "Sound Pass: check level", RED = 1;
+  function ours(m) { return String(m.name).indexOf("Sound Pass:") === 0; }
+  function markers(seq, params) {
+    if (!T.isToolkitCopy(seq)) return T.fail("Sound Pass only changes a TOOLKIT COPY; \"" + seq.name + "\" is not one.");
+    var mc = seq.markers, old = [], m = mc.getFirstMarker(), others = 0, i;
+    while (m) { if (ours(m)) old.push(m); else others++; m = mc.getNextMarker(m); }
+    for (i = 0; i < old.length; i++) mc.deleteMarker(old[i]);
+    var list = params.spots || [], bad = [];
+    for (i = 0; i < list.length; i++) {
+      var sp = list[i], k = mc.createMarker(sp.t);
+      k.name = MARKER_NAME;
+      k.comments = String(sp.text);
+      if (sp.end !== null && sp.end !== undefined && sp.end > sp.t) { try { k.end = sp.end; } catch (e) {} }
+      try { k.setColorByIndex(RED); } catch (e2) {}
+      if (String(k.name) !== MARKER_NAME || Math.abs(k.start.seconds - sp.t) >= 0.05) bad.push(T.fmt(sp.t));
+    }
+    var now = 0, kept = 0;
+    m = mc.getFirstMarker();
+    while (m) { if (ours(m)) now++; else kept++; m = mc.getNextMarker(m); }
+    var d = { removed: old.length, added: list.length, now: now, othersKept: kept, othersBefore: others, bad: bad };
+    if (now !== list.length || kept !== others || bad.length) return T.fail("Sound Pass markers did not read back: " + now + " of " + list.length + " (other markers " + kept + " of " + others + ").", d);
+    return T.ok(list.length + " Sound Pass marker(s) on the copy (" + old.length + " earlier one(s) replaced).", d);
+  }
+
   function probe(seq, params) {
     var it = seq.audioTracks[params.track || 0].clips[params.clip || 0], out = [];
     for (var c = 0; c < it.components.numItems; c++) {

@@ -1,34 +1,35 @@
 {
   "id": "sound-pass",
   "name": "Sound Pass",
-  "description": "Levels the interview voice in the active sequence the way Lee did in Assembly V1 (a Hard Limiter on every voice clip, top at -6 dB on the meters), but clip by clip so speech sits around -6 dB with the body between -12 and -6, even from clip to clip. Works on a safe copy; measured from Premiere's own render.",
+  "description": "Evens out the interview voice in the active sequence: every phrase of every speaker brought to the same loudness, the top held at -6 dB on the meters by a Hard Limiter on each voice clip (Lee's V1 settings). The lift goes in as the limiter's Input Boost (sounds the same as clip gain, which scripts cannot set) plus Volume keyframes for phrase-to-phrase changes. Works on a safe copy; measured from Premiere's own render.",
   "order": 7,
   "icon": "icon.svg",
   "tint": [
     "#1c1c1e",
     "#000000"
   ],
+  "progress": true,
   "entry": "premiere.jsx",
   "panel": "panel.js",
   "inputs": [
     {
       "id": "tracks",
       "label": "Voice tracks (optional)",
-      "placeholder": "e.g. A1; empty = every clip playing a .wav (wireless) on an unmuted track"
+      "placeholder": "e.g. A5, A6; empty = every clip playing a .wav (wireless) on an unmuted track"
     },
     {
-      "id": "ride",
+      "id": "even",
       "type": "checkbox",
-      "label": "Ride quiet moments (Volume keyframes, up to +6 dB)",
+      "label": "Even out every phrase (Volume keyframes); off = one level per clip",
       "default": true
     }
   ],
   "actions": [
     {
       "id": "run",
-      "label": "Level interview audio",
+      "label": "Even out interview audio",
       "style": "primary",
-      "confirm": "Level the interview voice on a safe copy of this sequence? Each voice clip gets one Hard Limiter (Lee's V1 settings, ceiling -6 dB on the meters) with its own input boost, measured from Premiere renders of the voice tracks. With Ride quiet moments on, quiet phrases in the answers are lifted up to +6 dB with Volume keyframes. Only the TOOLKIT COPY changes; clip gain, Volume and faders are left as they are, and nothing is saved."
+      "confirm": "Even out the interview voice on a safe copy of this sequence? Every voice clip gets one Hard Limiter (ceiling -6 dB on the meters) with its own input boost, and with Even out every phrase on, Volume keyframes so quiet and loud phrases and different speakers sound equally loud. Volume keyframes from an earlier Sound Pass run are replaced. Only the TOOLKIT COPY changes; clip gain and faders are left as they are, and nothing is saved."
     }
   ]
 }

@@ -244,6 +244,9 @@
     }
     return e;
   }
+  // Project items by nodeId, read fresh for each call: node ids are not stable once Premiere has
+  // switched between projects (23 Oct 2026: a cached id placed a different clip), so every hit is
+  // also checked against the clip's name and media path from the scan.
   function itemById(p, id, cache) {
     if (cache[id]) return cache[id];
     var st = [p.rootItem];
@@ -265,14 +268,16 @@
   function place(p, params) {
     var s = seqById(p, params.sequenceId);
     if (!s) return T.fail("Sequence not found (it may have been deleted): " + params.sequenceId);
-    var tb = parseFloat(s.timebase), half = tb / 2, out = [], cache = T.selectsItems || {};
-    T.selectsItems = cache;
+    var tb = parseFloat(s.timebase), half = tb / 2, out = [], cache = {};
     var items = params.items || [], frame = Number(params.startFrame) || 0;
     for (var i = 0; i < items.length; i++) {
       var it = items[i], startTicks = frame * tb, r = { nodeId: it.nodeId, frame: frame };
       out.push(r);
       var pi = itemById(p, String(it.nodeId), cache);
       if (!pi) { r.error = "clip not found in the project"; break; }
+      if ((it.name && String(pi.name) !== String(it.name)) || (it.path && mediaPath(pi) !== String(it.path))) {
+        r.error = "the project item for " + it.name + " is now \"" + pi.name + "\" (the project changed since the scan); nothing placed"; break;
+      }
       var busyEnd = Math.max(lastEnd(s.videoTracks), lastEnd(s.audioTracks));
       if (busyEnd > startTicks + half) { r.error = "the timeline is not empty at " + T.fmt(startTicks / T.TICKS_PER_SECOND) + " (something ends at " + T.fmt(busyEnd / T.TICKS_PER_SECOND) + "); nothing placed over it"; break; }
       var sec = startTicks / T.TICKS_PER_SECOND;
