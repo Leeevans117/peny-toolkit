@@ -97,17 +97,18 @@
     body { -webkit-user-select: none; user-select: none; }
     input, textarea, #log, #history, .status, .info-body { -webkit-user-select: text; user-select: text; }
 
-    /* Opening an app (FLIP, like an iPhone): a squircle the colour of the icon grows from the
-       tapped icon to fill the panel, the home screen sinks behind it, the app fades in; Back
-       or the home bar runs it in reverse. Only transform and opacity move (GPU, no layout),
-       with Apple's curve. main.js drives it (flipOpen / flipClose). */
-    :root { --ios: cubic-bezier(0.32, 0.72, 0, 1); }
-    /* The ghost is the colour of the app's screen; the black icon face on top of it fades
-       out as it grows, so the panel never goes dark mid-way (Studio's charcoal flashed black). */
-    .flip-ghost { position: fixed; z-index: 6; transform-origin: 0 0; will-change: transform, opacity; pointer-events: none;
-                  background: var(--ghost, #1e1f22); border: 1px solid var(--tile-line); display: flex; align-items: center; justify-content: center; overflow: hidden; }
-    .flip-ghost .face { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: var(--tile-bg); display: flex; align-items: center; justify-content: center; }
-    body[data-style=glass] { --ghost: #0a0a0a; } body[data-style=studio] { --ghost: #222327; } body[data-style=bold] { --ghost: #000; } body[data-style=compact] { --ghost: #1c1d20; }
+    /* Opening an app: the app's own screen grows out of the tapped icon inside a rounded
+       window (clip-path), the icon's black face fading off it; the home screen eases back and
+       dims. Closing runs it in reverse onto the icon. Only clip-path, transform and opacity
+       move. main.js drives it (flipOpen / flipClose); speed is set in the Style sheet. */
+    :root { --ios: cubic-bezier(0.2, 0, 0, 1); }
+    /* The window is opaque, painted with the panel's own background (fixed, so it lines up
+       with what is behind it and nothing shifts when it ends). */
+    .flip-win { z-index: 2; background: var(--page); background-color: #000; background-attachment: fixed; will-change: clip-path; }
+    .flip-snap { z-index: 1; pointer-events: none; }
+    .flip-snap.flip-win { z-index: 2; }
+    .flip-face { position: fixed; z-index: 6; pointer-events: none; background: var(--tile-bg); will-change: clip-path, opacity; }
+    .flip-face .glyph { position: absolute; transform-origin: 50% 50%; will-change: transform; }
     #home.flip-keep { display: block !important; pointer-events: none; }
     #detail.flip-keep { display: flex !important; pointer-events: none; }
     #detail { display: flex; flex-direction: column; }
@@ -287,6 +288,8 @@
     .segmented button:hover { color: var(--text); }
     .segmented button.on { background: var(--primary); color: var(--primary-text); font-weight: 600; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25); }
     .segmented + input { margin-top: 6px; }
+    .speed-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
+    .speed-row .segmented { flex: none; flex-wrap: nowrap; }
 
     /* Buttons: white primary (Peny), grey secondary, red for destructive */
     .buttons { display: flex; gap: 8px; flex-wrap: wrap; }

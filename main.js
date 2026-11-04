@@ -751,15 +751,23 @@ function goHome() {
   flipClose(function () { showView(null); }, function () { return document.querySelector('#tiles .tile[data-skill="' + id + '"]'); });
 }
 
-// ---- Opening and closing an app like an iPhone (FLIP: First, Last, Invert, Play) ----
-// First: the tapped icon's box. Last: the whole work pane. A "ghost" squircle the colour of the
-// icon is laid out once at the Last box, then Inverted with a transform so it sits exactly on
-// the icon, and Played back to no transform, so it grows out of the icon. Under it the old
-// screen sinks (scale 0.92, fades) and the new one fades in. Closing runs the same in reverse
-// onto the app's icon. Only transform and opacity animate (no width/height/top/left), with
-// Apple's curve cubic-bezier(0.32, 0.72, 0, 1). Motion off (M, Compact style, macOS reduced
-// motion): the switch is instant. A tap during an animation finishes it first.
-var FLIP_MS = 420;
+// ---- Opening and closing an app (window grows out of the icon, like a phone) ----
+// Open: the app's real screen is shown inside a rounded "window" (clip-path) that starts as
+// the tapped icon and grows to fill the pane; the app's content settles from 86% to full size
+// around the icon, and the icon's black face fades off it in the first third. The home screen
+// behind eases back (scale 0.94) and dims. Close runs the same in reverse onto the app's icon,
+// which the window lands on exactly, so it hands over with no jump.
+// Smoothness (4 Nov 2026, Lee): everything moves on one curve that starts gently and settles
+// long (no first-frame jump, no early stop), fades run on their own clock, the window is drawn
+// from the real screen (no blank stand-in, no stretched corners), only clip-path, transform
+// and opacity change. Speed: Slow / Normal / Fast in the Style sheet (like a phone's animation
+// scale). Motion off (M, Compact style, macOS reduced motion): instant. A tap during an
+// animation finishes it first.
+var FLIP_MS = { open: 480, close: 420 };
+var FLIP_EASE = "cubic-bezier(0.2, 0, 0, 1)";
+var SPEEDS = [{ id: "slow", name: "Slow", f: 1.5 }, { id: "normal", name: "Normal", f: 1 }, { id: "fast", name: "Fast", f: 0.6 }];
+function speedId() { var v = pref("speed"); return SPEEDS.some(function (x) { return x.id === v; }) ? v : "normal"; }
+function flipMs(kind) { var f = SPEEDS.filter(function (x) { return x.id === speedId(); })[0].f; return Math.round(FLIP_MS[kind] * f); }
 var flipRun = null;
 function motionOn() {
   if (document.body.getAttribute("data-motion") !== "on") return false;
@@ -768,93 +776,131 @@ function motionOn() {
 }
 function flipEnd() { if (flipRun) flipRun(); }
 function visibleView() { return currentView ? document.getElementById("detail") : document.getElementById("home"); }
-function makeGhost(iconEl, to) {
-  var g = document.createElement("div");
-  g.className = "flip-ghost";
-  g.style.left = to.left + "px"; g.style.top = to.top + "px"; g.style.width = to.width + "px"; g.style.height = to.height + "px";
-  var ir = iconEl.getBoundingClientRect();
-  // The radius is fixed in the Last box's pixels: 22.5% of the icon there, so at icon size it
-  // reads as the icon's squircle and grows with it.
-  g.style.borderRadius = (ir.width * 0.225 * Math.max(to.width / ir.width, 1)) + "px / " + (ir.height * 0.225 * Math.max(to.height / ir.height, 1)) + "px";
-  // The icon's black face with its glyph sits on top and fades out as the ghost grows.
-  var face = document.createElement("div"); face.className = "face";
-  var svg = iconEl.querySelector("svg");
-  if (svg) {
-    var c = svg.cloneNode(true), sw = svg.getBoundingClientRect();
-    c.style.width = sw.width * to.width / ir.width + "px"; c.style.height = sw.height * to.height / ir.height + "px";
-    face.appendChild(c);
-  }
-  g.appendChild(face);
-  document.body.appendChild(g);
-  return g;
+// A still copy of a view as it looks now (opening or closing inside one view, e.g. an
+// Interviews job): it stands in for the old screen while the real one changes. It goes after
+// the real view, so getElementById still finds the real elements.
+function snapshotView(v) {
+  var c = v.cloneNode(true);
+  c.classList.add("flip-snap"); c.removeAttribute("id");
+  // Inert: the panel finds its views by these attributes (showView hides every .app[data-skill]).
+  [].forEach.call(c.querySelectorAll("[data-skill],[data-app],[data-owner]"), function (e) { e.removeAttribute("data-skill"); e.removeAttribute("data-app"); e.removeAttribute("data-owner"); });
+  v.parentNode.insertBefore(c, v.nextSibling);
+  c.scrollTop = v.scrollTop;
+  return c;
 }
-function invertOf(from, to) {
-  return "translate(" + (from.left - to.left) + "px," + (from.top - to.top) + "px) scale(" + (from.width / to.width) + "," + (from.height / to.height) + ")";
+// clip-path for the window: the icon's box (round 22.5%) or the whole pane (square).
+function clipOf(r, M) {
+  if (!r) return "inset(0px 0px 0px 0px round 0px)";
+  return "inset(" + (r.top - M.top) + "px " + (M.right - r.right) + "px " + (M.bottom - r.bottom) + "px " + (r.left - M.left) + "px round " + (r.width * 0.225) + "px)";
+}
+// The icon's glyph and colour, read while the icon is on screen (before the view changes:
+// opening a job hides the job icons).
+function iconLook(iconEl) {
+  var svg = iconEl.querySelector("svg");
+  return { color: getComputedStyle(iconEl).color, svg: svg ? svg.cloneNode(true) : null, svgRect: svg ? svg.getBoundingClientRect() : null };
+}
+// The icon's black face with its glyph, clipped like the window, glyph kept centred in it.
+function makeFace(look, I, M) {
+  var f = document.createElement("div");
+  f.className = "flip-face";
+  f.style.color = look.color; // glyphs draw in currentColor
+  f.style.left = M.left + "px"; f.style.top = M.top + "px"; f.style.width = M.width + "px"; f.style.height = M.height + "px";
+  var g = null;
+  if (look.svg) {
+    var sr = look.svgRect;
+    g = look.svg; g.classList.add("glyph");
+    g.style.left = (sr.left - M.left) + "px"; g.style.top = (sr.top - M.top) + "px"; g.style.width = sr.width + "px"; g.style.height = sr.height + "px";
+    f.appendChild(g);
+  }
+  document.body.appendChild(f);
+  var k = Math.min(M.width, M.height) / I.width;
+  var glyphEnd = "translate(" + (M.left + M.width / 2 - (I.left + I.width / 2)) + "px," + (M.top + M.height / 2 - (I.top + I.height / 2)) + "px) scale(" + k + ")";
+  return { el: f, glyph: g, glyphEnd: glyphEnd };
+}
+// Scales a view's children around one screen point (the icon's centre), so they move as one.
+function settle(view, I, from, to, opt) {
+  var cx = I.left + I.width / 2, cy = I.top + I.height / 2, out = [];
+  [].forEach.call(view.children, function (ch) {
+    var r = ch.getBoundingClientRect(); if (!r.width && !r.height) return;
+    ch.style.transformOrigin = (cx - r.left) + "px " + (cy - r.top) + "px";
+    out.push(ch.animate([{ transform: "scale(" + from + ")" }, { transform: "scale(" + to + ")" }], opt));
+    out.push({ cancel: function () { ch.style.transformOrigin = ""; }, finished: Promise.resolve() });
+  });
+  return out;
 }
 function flipOpen(tileEl, change) {
   flipEnd();
   var iconEl = tileEl && tileEl.querySelector(".icon");
   if (!motionOn() || !iconEl) { change(); return; }
-  var first = iconEl.getBoundingClientRect();
-  var oldV = visibleView();
+  var I = iconEl.getBoundingClientRect(), look = iconLook(iconEl);
+  var oldV = visibleView(), snap = null;
   document.body.classList.add("flipping");
+  if (oldV.id === "detail") snap = snapshotView(oldV);
   change();
-  var newV = visibleView();
-  if (oldV !== newV) oldV.classList.add("flip-keep");
-  // Last: the pane as the app shows it (the Log pane may have joined and made it shorter).
-  var last = document.getElementById("main").getBoundingClientRect();
-  var ghost = makeGhost(iconEl, last);
-  var opt = { duration: FLIP_MS, easing: "cubic-bezier(0.32, 0.72, 0, 1)", fill: "both" };
+  var win = visibleView(), behind = snap || oldV;
+  if (behind === oldV) oldV.classList.add("flip-keep");
+  win.classList.add("flip-win");
+  var M = document.getElementById("main").getBoundingClientRect();
+  var face = makeFace(look, I, M), ms = flipMs("open");
+  var geo = { duration: ms, easing: FLIP_EASE, fill: "both" }, lin = { duration: ms, easing: "linear", fill: "both" };
   var anims = [
-    // Scaling also stretches the corners, so the ghost is gone (fades 45%-80%) before it is
-    // full size; the app fading in underneath takes over.
-    ghost.animate([{ transform: invertOf(first, last), opacity: 1, offset: 0 }, { opacity: 1, offset: 0.45 }, { opacity: 0, offset: 0.8 }, { transform: "none", opacity: 0, offset: 1 }], opt),
-    ghost.firstChild.animate([{ opacity: 1 }, { opacity: 0, offset: 0.4 }, { opacity: 0 }], opt),
-    // The home screen stays mostly lit until the squircle covers it, then goes.
-    oldV !== newV ? oldV.animate([{ transform: "scale(1)", opacity: 1 }, { opacity: 0.85, offset: 0.4 }, { transform: "scale(0.92)", opacity: 0 }], opt) : null,
-    // Opacity only on the app: a transform ending re-draws its text sharper in one frame,
-    // which reads as a blink right when it finishes.
-    newV.animate([{ opacity: 0 }, { opacity: 0, offset: 0.35 }, { opacity: 1 }], opt)
-  ].filter(Boolean);
-  runFlip(anims, [ghost], [oldV, newV], oldV);
+    win.animate([{ clipPath: clipOf(I, M) }, { clipPath: clipOf(null, M) }], geo),
+    face.el.animate([{ clipPath: clipOf(I, M) }, { clipPath: clipOf(null, M) }], geo),
+    face.el.animate([{ opacity: 1 }, { opacity: 0, offset: 0.32, easing: "ease-out" }, { opacity: 0 }], lin),
+    behind.animate([{ transform: "scale(1)", opacity: 1 }, { transform: "scale(0.94)", opacity: 0.45 }], geo),
+    win.animate([{ opacity: 0.6 }, { opacity: 1, offset: 0.25 }, { opacity: 1 }], lin)
+  ].concat(settle(win, I, 0.86, 1, geo));
+  if (face.glyph) anims.push(face.glyph.animate([{ transform: "none" }, { transform: face.glyphEnd }], geo));
+  runFlip(anims, ms, function () {
+    if (face.el.parentNode) face.el.parentNode.removeChild(face.el);
+    if (snap && snap.parentNode) snap.parentNode.removeChild(snap);
+    oldV.classList.remove("flip-keep"); win.classList.remove("flip-win");
+  });
 }
 function flipClose(change, findIcon) {
   flipEnd();
   if (!motionOn()) { change(); return; }
+  // The app's screen as it is now is copied first: going home hides the app's own section,
+  // so the real view would be blank while it shrinks.
   var oldV = visibleView();
-  var last = document.getElementById("main").getBoundingClientRect();
   document.body.classList.add("flipping");
+  var snap = snapshotView(oldV);
   change();
   var newV = visibleView();
   var tileEl = findIcon(), iconEl = tileEl && tileEl.querySelector(".icon");
-  if (!iconEl || !iconEl.getBoundingClientRect().width) { document.body.classList.remove("flipping"); return; }
+  if (!iconEl || !iconEl.getBoundingClientRect().width) { if (snap.parentNode) snap.parentNode.removeChild(snap); document.body.classList.remove("flipping"); return; }
   if (tileEl.scrollIntoView) tileEl.scrollIntoView({ block: "nearest" });
-  var first = iconEl.getBoundingClientRect();
-  var ghost = makeGhost(iconEl, last);
-  if (oldV !== newV) oldV.classList.add("flip-keep");
-  var opt = { duration: FLIP_MS, easing: "cubic-bezier(0.32, 0.72, 0, 1)", fill: "both" };
+  // Measured after the change: going home hides the Log pane, so the pane grows.
+  var M = document.getElementById("main").getBoundingClientRect();
+  var I = iconEl.getBoundingClientRect();
+  var win = snap;
+  win.classList.add("flip-win");
+  var face = makeFace(iconLook(iconEl), I, M), ms = flipMs("close");
+  var geo = { duration: ms, easing: FLIP_EASE, fill: "both" }, lin = { duration: ms, easing: "linear", fill: "both" };
   var anims = [
-    ghost.animate([{ transform: "none", opacity: 0, offset: 0 }, { opacity: 0, offset: 0.1 }, { opacity: 1, offset: 0.35 }, { transform: invertOf(first, last), opacity: 1, offset: 0.9 }, { transform: invertOf(first, last), opacity: 0, offset: 1 }], opt),
-    ghost.firstChild.animate([{ opacity: 0 }, { opacity: 0, offset: 0.55 }, { opacity: 1 }], opt),
-    oldV !== newV ? oldV.animate([{ opacity: 1 }, { opacity: 0, offset: 0.25 }, { opacity: 0 }], opt) : null,
-    newV.animate([{ opacity: 0 }, { opacity: 1 }], opt)
-  ].filter(Boolean);
-  runFlip(anims, [ghost], [oldV, newV], oldV);
+    win.animate([{ clipPath: clipOf(null, M) }, { clipPath: clipOf(I, M) }], geo),
+    face.el.animate([{ clipPath: clipOf(null, M) }, { clipPath: clipOf(I, M) }], geo),
+    face.el.animate([{ opacity: 0 }, { opacity: 0, offset: 0.2 }, { opacity: 1, offset: 0.6, easing: "ease-in" }, { opacity: 1 }], lin),
+    newV.animate([{ transform: "scale(0.94)", opacity: 0.45 }, { transform: "scale(1)", opacity: 1 }], geo)
+  ].concat(settle(win, I, 1, 0.86, geo));
+  if (face.glyph) anims.push(face.glyph.animate([{ transform: face.glyphEnd }, { transform: "none" }], geo));
+  runFlip(anims, ms, function () {
+    if (face.el.parentNode) face.el.parentNode.removeChild(face.el);
+    if (snap.parentNode) snap.parentNode.removeChild(snap);
+  });
 }
-// Plays the animations; when they end (or flipEnd() is called) cleans up: ghost removed,
-// kept-visible view released, transforms dropped.
-function runFlip(anims, ghosts, layers, kept) {
+// Plays the animations; when they end (or flipEnd() is called) cleans up.
+function runFlip(anims, ms, cleanup) {
   var done = false;
   function finish() {
     if (done) return; done = true; flipRun = null;
     anims.forEach(function (a) { try { a.cancel(); } catch (e) {} });
-    ghosts.forEach(function (g) { if (g.parentNode) g.parentNode.removeChild(g); });
-    kept.classList.remove("flip-keep");
+    try { cleanup(); } catch (e) {}
     document.body.classList.remove("flipping");
   }
   flipRun = finish;
   Promise.all(anims.map(function (a) { return a.finished; })).then(finish, finish);
-  setTimeout(finish, FLIP_MS + 300); // never leave a ghost behind
+  setTimeout(finish, ms + 300); // never leave a stand-in behind
 }
 function firstSentence(t) { var m = /^[^.]*[.]/.exec(String(t || "")); return m ? m[0] : String(t || ""); }
 
@@ -1109,6 +1155,17 @@ function showStyles() {
   var cb = m.querySelector("input"); cb.checked = pref("motion") !== "off";
   cb.addEventListener("change", function () { pref("motion", cb.checked ? "on" : "off"); applyStyle(); });
   box.appendChild(m);
+  // Animation speed, like a phone's animation scale: how long opening/closing an app takes.
+  var sp = document.createElement("div"); sp.className = "speed-row";
+  sp.innerHTML = '<span class="tlabel">Animation speed</span>';
+  var seg = document.createElement("div"); seg.className = "segmented";
+  SPEEDS.forEach(function (x) {
+    var b = document.createElement("button"); b.textContent = x.name; b.setAttribute("data-speed", x.id); b.className = x.id === speedId() ? "on" : "";
+    b.addEventListener("click", function () { pref("speed", x.id); [].forEach.call(seg.children, function (c) { c.className = c === b ? "on" : ""; }); });
+    seg.appendChild(b);
+  });
+  sp.appendChild(seg);
+  box.appendChild(sp);
 }
 function showTab(tab) {
   if (pref("layout") === "hidden") pref("layout", "bottom");

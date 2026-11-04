@@ -47,8 +47,11 @@ one app tile per skill; tapping a tile opens that skill's view (< returns home).
    while running, all under 0.35 s) can be turned off with M and is off in Compact and
    when macOS asks for reduced motion. Blue = active/selected, green running, amber paused,
    red failed/destructive; numbers, times and paths in monospace.
-   Opening an app works like an iPhone (FLIP in main.js: a squircle grows from the tapped
-   icon, Apple's curve cubic-bezier(0.32, 0.72, 0, 1), transform/opacity only, 0.42 s);
+   Opening an app (4 Nov 2026, smoother): the app's real screen grows out of the tapped
+   icon inside a rounded window (clip-path), content settles from 86% around the icon, the
+   icon's face fades off, home eases back and dims; curve cubic-bezier(0.2, 0, 0, 1),
+   0.48 s open / 0.42 s close at Normal speed (Style sheet: Slow 1.5x, Normal, Fast 0.6x).
+   Closing shrinks a still copy of the app back onto its icon. flipOpen/flipClose in main.js;
    Back, Esc, the logo or the home bar under every app reverse it. Icons are squircles
    (radius 22.5%). Panel text is not selectable except inputs, log, history and statuses.
 
