@@ -109,7 +109,7 @@ def _objects(xml):
 
 def _binary_hash(data):
     """Premiere's BinaryHash attribute: 12 bytes of hash + uint32 (length + 12), shown as a GUID.
-    Premiere's own 12 bytes are not a plain MD5/SHA; MD5 is used here (see README)."""
+    Premiere's own 12 bytes are not a plain MD5/SHA; MD5 is used here (see docs/skills.md, Colour)."""
     h = hashlib.md5(data).hexdigest()[:24] + "%08x" % (len(data) + 12)
     return "%s-%s-%s-%s-%s" % (h[0:8], h[8:12], h[12:16], h[16:20], h[20:32])
 

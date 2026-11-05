@@ -4,6 +4,9 @@ Lee's Premiere Pro automation panel. Before any Premiere work:
 
 1. Read `docs/working-rules.md` (how to work on Lee's projects).
 2. Read `README.md` for how the panel and its skills are built, installed and tested.
+3. Only when changing or debugging a skill: read that skill's section in `docs/skills.md`
+   (not the whole file). In big files (`main.js`, `premiere.jsx`, `panel.js`) read the
+   functions you need, not the whole file.
 
 ## Setting up or updating a Mac (Claude does this, not Lee)
 
