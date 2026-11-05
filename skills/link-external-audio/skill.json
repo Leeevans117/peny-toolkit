@@ -1,7 +1,7 @@
 {
   "id": "link-external-audio",
   "name": "Link External Audio",
-  "description": "Step 1 makes a safe copy of the active sequence (\"<name> TOOLKIT COPY\") and opens it. Step 2 syncs: put the external wav files anywhere on an audio track of the copy (e.g. after the clips) and it lines a wav piece up under each camera clip by matching waveforms; clips it is not sure about are listed for you to sync by hand. Step 3 links each camera clip to its camera audio and the wav piece under it. Every link is checked afterwards.",
+  "description": "Do the three steps in order: 1, then 2, then 3. Step 1 makes a safe copy of the active sequence (\"<name> TOOLKIT COPY\") and opens it. Step 2 syncs: put the external wav files anywhere on an audio track of the copy (e.g. after the clips) and it lines a wav piece up under each camera clip by matching waveforms; clips it is not sure about are listed for you to sync by hand. Step 3 links each camera clip to its camera audio and the wav piece under it. Every link is checked afterwards.",
   "order": 5,
   "icon": "icon.svg",
   "tint": [
@@ -24,13 +24,13 @@
   "actions": [
     {
       "id": "safecopy",
-      "label": "1  Make safe copy",
+      "label": "Step 1 · Make safe copy",
       "skill": "make-safe-copy",
       "style": "secondary"
     },
     {
       "id": "sync",
-      "label": "2  Sync external audio",
+      "label": "Step 2 · Sync external audio",
       "skill": "sync-external-audio",
       "action": "sync",
       "style": "secondary",
@@ -38,8 +38,8 @@
     },
     {
       "id": "run",
-      "label": "3  Link external audio",
-      "style": "primary"
+      "label": "Step 3 · Link external audio",
+      "style": "secondary"
     }
   ]
 }
