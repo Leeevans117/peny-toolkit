@@ -170,9 +170,15 @@ function runAction(skillId, actionId, params, source) {
     log((result.ok ? "OK  " : "FAIL ") + label + ": " + (result.ok ? result.summary : result.error), result.ok ? "ok" : "err");
     var d = result.details || {};
     ["failed", "skipped"].forEach(function (k) {
-      (d[k] || []).slice(0, 30).forEach(function (r) {
-        log("  " + k + ": " + (r.time ? r.time + " " : "") + (r.bin ? r.bin + "/" : "") + (r.name || r.nodeId || "") + " - " + r.reason, "warn");
+      // First 30 in the panel; every one in the log file (Lee, 5 Nov 2026: a clip at 0:55:23
+      // was the 99th skipped, so its reason was nowhere).
+      var list = d[k] || [];
+      list.forEach(function (r, i) {
+        var line = "  " + k + ": " + (r.time ? r.time + " " : "") + (r.bin ? r.bin + "/" : "") + (r.name || r.nodeId || "") + " - " + r.reason;
+        if (i < 30) log(line, "warn");
+        else try { fs.appendFileSync(LOG_FILE, stamp() + " [panel] " + line + "\n"); } catch (e) {}
       });
+      if (list.length > 30) log("  … and " + (list.length - 30) + " more " + k + " in " + LOG_FILE, "warn");
     });
     setStatus(skill, result.ok ? result.summary : result.error);
     addHistory({ t: startedAt, ms: Date.now() - startedAt, skill: skill.id, app: skill.name, action: skill.actions ? action.label : "",
