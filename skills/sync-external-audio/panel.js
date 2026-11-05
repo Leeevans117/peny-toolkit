@@ -24,6 +24,53 @@ function firstExisting(list) { for (var i = 0; i < list.length; i++) if (fs.exis
 function q64(x) { return Math.round(x * 64) / 64; }
 function floor64(x) { return Math.floor(x * 64) / 64; }
 function clock(name) { var m = /(\d{6})_(\d{2})(\d{2})(\d{2})/.exec(name); return m ? (+m[2]) * 3600 + (+m[3]) * 60 + (+m[4]) : null; }
+// Same as measure.py clip_clocks: RED Abs TC ("tc") and Timestamp ("ts"), the file name's HHMMSS.
+function clipClocks(c) {
+  var d = {}, k;
+  for (k in (c.clocks || {})) if (c.clocks[k] !== undefined && c.clocks[k] !== null) d[k] = c.clocks[k];
+  var n = clock(c.name); if (n !== null && d.name === undefined) d.name = n;
+  return d;
+}
+function clipClock(c) { var d = clipClocks(c); return d.tc !== undefined ? d.tc : d.ts !== undefined ? d.ts : d.name !== undefined ? d.name : null; }
+function hms(s, sec) {
+  s = ((Math.round(s) % 86400) + 86400) % 86400;
+  var h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60;
+  return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m + (sec ? ":" + (x < 10 ? "0" : "") + x : "");
+}
+// Order for measuring: every 8th clip by camera clock, then every 4th between, 2nd, the rest.
+function spread(list) {
+  var out = [], seen = {};
+  [8, 4, 2, 1].forEach(function (step) {
+    for (var i = 0; i < list.length; i += step) if (!seen[i]) { seen[i] = true; out.push(list[i]); }
+  });
+  return out;
+}
+// Skipping goes by a time-of-day clock only: RED Timestamp ("ts") or the file name's. RED
+// timecode resets (Lake Placid A134-A136: 70 min jump) so it could skip a clip that is in
+// the recording. The Timestamp was up to 306 s out on 4 of 26 clips there, so a clip is
+// skipped only when it is more than 15 min outside every recording (Lake Placid: 99 of 154
+// skipped, none of the 26 that sync).
+var SKIP_KINDS = ["ts", "name"], SKIP_MARGIN = 900;
+function skipKind(rec) { for (var i = 0; i < SKIP_KINDS.length; i++) if (rec.offsets && rec.offsets[SKIP_KINDS[i]] !== undefined) return SKIP_KINDS[i]; return null; }
+// Recordings usable for skipping: each must have agreeing time-of-day clocks.
+function usable(recs) {
+  if (!recs || !recs.length) return null;
+  for (var i = 0; i < recs.length; i++) if (!skipKind(recs[i])) return null;
+  return recs;
+}
+// Why a clip is outside every recording by its time-of-day clock, or null.
+function outside(c, recs) {
+  var cl = clipClocks(c), t = null, k = null;
+  for (var i = 0; i < recs.length; i++) {
+    k = skipKind(recs[i]);
+    if (cl[k] === undefined) return null;
+    t = cl[k];
+    var rt = recs[i].offsets[k] + t + c.inPoint;
+    if (rt + c.duration >= -SKIP_MARGIN && rt <= recs[i].length + SKIP_MARGIN) return null;
+  }
+  return "shot outside the external recording by the camera clock (" + hms(t + c.inPoint, true) + " vs recording " +
+    recs.map(function (r) { var o = r.offsets[skipKind(r)]; return hms(-o) + "-" + hms(-o + r.length); }).join(", ") + ")";
+}
 
 // Sound of RED clips with no proxy attached. ffmpeg can't decode the audio inside an .R3D
 // and REDline has no audio-only export, so REDline renders the measured stretch (the clip's
@@ -60,9 +107,11 @@ function redlineAudio(ffmpeg, api) {
       var t = r.out + "\n" + r.err;
       var fps = /^FPS:\s*([\d.]+)/m.exec(t), frames = /^Total Frames:\s*(\d+)/m.exec(t), ch = /^Camera Audio Channels:\s*(\d+)/m.exec(t);
       var ts = /^Timestamp:\s*(\d{1,6})\s*$/m.exec(t), hms = ts ? ("000000" + ts[1]).slice(-6) : null;
+      var tc = /^Abs TC:\s*(\d+):(\d+):(\d+)[:;](\d+)/m.exec(t);
       if (!fps || !frames) return { error: "REDline could not read the clip's metadata" + (r.error ? " (" + r.error.message.split("\n")[0] + ")" : "") };
       return { fps: exactFps(parseFloat(fps[1])), frames: +frames[1], channels: ch ? +ch[1] : null,
-        clock: hms ? (+hms.slice(0, 2)) * 3600 + (+hms.slice(2, 4)) * 60 + (+hms.slice(4)) : undefined };
+        clock: hms ? (+hms.slice(0, 2)) * 3600 + (+hms.slice(2, 4)) * 60 + (+hms.slice(4)) : undefined,
+        tc: tc ? (+tc[1]) * 3600 + (+tc[2]) * 60 + (+tc[3]) + (+tc[4]) / Math.round(exactFps(parseFloat(fps[1]))) : undefined };
     });
     return meta[r3d];
   }
@@ -105,21 +154,29 @@ function redlineAudio(ffmpeg, api) {
     available: function () { return !!redline; },
     // Renders the sound of every clip with source "redline"; clips that fail are taken out
     // of `clips` (in place) and added to `unread` with the reason.
+    // Camera clock of every RED clip (proxy or not) for measure.py's clock check and the
+    // clock skip: REDline "Abs TC" and "Timestamp" (HHMMSS), each checked on its own.
+    clocks: function (clips) {
+      var reds = redline ? clips.filter(function (c) { return c.red && fs.existsSync(c.media || ""); }) : [];
+      var next = 0, done = 0, workers = [];
+      function worker() { // 4 REDline reads at once: ~0.66 s each, 154 clips took 100 s one by one
+        if (next >= reds.length) return Promise.resolve();
+        var c = reds[next++];
+        return info(c.media).then(function (m) {
+          c.clocks = { ts: m.clock, tc: m.tc };
+          api.status("Reading RED clip clocks " + (++done) + "/" + reds.length);
+          return worker();
+        });
+      }
+      for (var i = 0; i < 4; i++) workers.push(worker());
+      return Promise.all(workers);
+    },
     prepare: function (clips, unread) {
       var todo = clips.filter(function (c) { return c.source === "redline"; });
-      // Camera clock of every RED clip (proxy or not) for measure.py's clock check:
-      // REDline "Timestamp" (HHMMSS, time of day the clip started).
-      var reds = redline ? clips.filter(function (c) { return c.red && fs.existsSync(c.media || ""); }) : [];
-      var clocks = reds.reduce(function (p, c, i) {
-        return p.then(function () {
-          api.status("Reading RED clip clocks " + (i + 1) + "/" + reds.length);
-          return info(c.media).then(function (m) { if (m.clock !== undefined) c.clock = m.clock; });
-        });
-      }, Promise.resolve());
-      if (!todo.length) return clocks;
+      if (!todo.length) return Promise.resolve();
       try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
       var next = 0, done = 0, failed = {};
-      return clocks.then(function () {
+      return Promise.resolve().then(function () {
         function worker() {
           if (next >= todo.length) return Promise.resolve();
           var c = todo[next++];
@@ -160,6 +217,51 @@ module.exports = function (api) {
       childProcess.execFile(ffprobe, ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", p], function (e, out) {
         ok(e ? null : parseFloat(out));
       });
+    });
+  }
+
+  // Camera-clock skip. Clips are measured in batches spread across the camera clock (every
+  // 8th clip first, then the ones between...), so clips that sync come early wherever the
+  // recording sits. Once a recording's camera clocks agree (measure.py clock_models, same
+  // 2 s tolerance as its clock check), a clip the clock puts entirely outside every
+  // recording (15 min margin, by the time-of-day clock) is not read at all: no REDline, no measuring. Any recording
+  // whose clocks don't agree (or a wav with no synced clip yet) means nothing is skipped.
+  // Lake Placid A005 + DJI Mic: 48 of 154 clips are inside the ~93 min recording.
+  // A last measure.py run (every clip known or skipped) does the clock check and step 3.
+  function batched(python, ffmpeg, wavInfo, clips, unread, redAudio) {
+    var timed = clips.filter(function (c) { return clipClock(c) !== null; })
+      .sort(function (a, b) { return (clipClock(a) + a.inPoint) - (clipClock(b) + b.inPoint); });
+    var queue = spread(timed).concat(clips.filter(function (c) { return clipClock(c) === null; }));
+    var size = Math.max(8, Math.ceil(clips.length / 8)), known = {}, models = null, skipped = 0, measured = 0;
+    function job(list, first) {
+      return { ffmpeg: ffmpeg, wavs: wavInfo, firstPassOnly: first, clips: list.map(function (c) {
+        if (!known[c.id]) return c;
+        var k = {}; for (var f in c) k[f] = c[f];
+        k.known = known[c.id]; return k;
+      }) };
+    }
+    function next() {
+      var batch = [];
+      while (queue.length && batch.length < size) {
+        var c = queue.shift(), why = models && outside(c, models);
+        if (why) { c.skip = why; skipped++; } else batch.push(c);
+      }
+      if (!batch.length) return Promise.resolve();
+      return redAudio.prepare(batch, unread).then(function () {
+        var have = clips.filter(function (c) { return known[c.id]; });
+        measured += batch.length;
+        api.log("  Measuring batch: " + batch.length + " clip(s) (" + measured + " measured, " + skipped + " skipped so far)");
+        return measure(python, job(have.concat(batch), true));
+      }).then(function (m) {
+        m.results.forEach(function (r) { known[r.id] = r; });
+        models = usable(m.recordings);
+        return next();
+      });
+    }
+    return next().then(function () {
+      var all = clips.filter(function (c) { return known[c.id] || c.skip; });
+      if (skipped) api.log("  Camera clock: " + skipped + " clip(s) shot outside the external recording, not read");
+      return measure(python, job(all, false));
     });
   }
 
@@ -223,8 +325,8 @@ module.exports = function (api) {
       api.log("Sync: " + clips.length + " camera clip(s) against " + wavInfo.length + " wav(s) on A" + (scan.track + 1) +
         " (sound read from: " + Object.keys(bySource).map(function (k) { return bySource[k] + " " + (k === "media" ? "camera file" : k === "proxy" ? "attached proxy" : "R3D via REDline"); }).join(", ") +
         (unread.length ? "; " + unread.length + " can't be read" : "") + ")");
-      return redAudio.prepare(clips, unread).then(function () {
-        return measure(python, { ffmpeg: ffmpeg, wavs: wavInfo, clips: clips });
+      return redAudio.clocks(clips).then(function () {
+        return batched(python, ffmpeg, wavInfo, clips, unread, redAudio);
       }).then(function (m) { redAudio.cleanup(); return m; }, function (e) { redAudio.cleanup(); throw e; });
     }).then(function (m) {
       var byId = {}, pieces = [], synced = [], unsynced = unread.slice();
@@ -263,11 +365,15 @@ module.exports = function (api) {
     }).then(function (o) {
       var d = o.placed.details || {};
       var clocks = o.synced.filter(function (s) { return s.wavStartClock !== undefined; }).map(function (s) { return s.wavStartClock; });
-      var spread = clocks.length > 1 ? (Math.max.apply(null, clocks) - Math.min.apply(null, clocks)) : null;
+      // Spread of the clips within 2 s of the median: a camera clock that jumped (Lake Placid
+      // A134-A136's TC) would otherwise make it read thousands of seconds.
+      var med = clocks.slice().sort(function (a, b) { return a - b; })[Math.floor(clocks.length / 2)];
+      var close = clocks.filter(function (x) { return Math.abs(x - med) <= 2; });
+      var spread = close.length > 1 ? (Math.max.apply(null, close) - Math.min.apply(null, close)) : null;
       var summary = o.synced.length + " of " + (o.synced.length + o.unsynced.length) + " camera clips synced by waveform; " +
         (d.placed || []).length + " wav piece(s) placed and checked, " + (d.failed || []).length + " failed; " +
         o.unsynced.length + " left for you to sync by hand." +
-        (spread !== null ? " Camera clocks agree to " + spread.toFixed(1) + " s." : "") +
+        (spread !== null ? " Camera clocks agree to " + spread.toFixed(1) + " s" + (close.length < clocks.length ? " (" + (clocks.length - close.length) + " clip(s) on a different clock)" : "") + "." : "") +
         ((d.cuts || []).length ? " " + d.cuts.length + " camera clip(s) cut where the wav file changes, so each half links to its own piece." : "") +
         (o.unsynced.length || (d.failed || []).length ? "" : " Now run step 3, Link.");
       api.status(summary);
