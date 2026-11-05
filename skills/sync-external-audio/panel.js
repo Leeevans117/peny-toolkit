@@ -359,7 +359,7 @@ module.exports = function (api) {
       });
       if (!pieces.length) return { placed: { ok: true, details: { placed: [], failed: [] } }, synced: synced, unsynced: unsynced };
       api.status("Placing " + pieces.length + " wav piece(s) on A" + (scan.track + 1) + "…");
-      return api.evalSkill({ action: "place", pieces: pieces, track: scan.track }).then(function (pl) {
+      return api.evalSkill({ action: "place", pieces: pieces, track: scan.track, sequenceId: scan.sequenceId, sequenceName: scan.sequence }).then(function (pl) {
         return { placed: pl, synced: synced, unsynced: unsynced };
       });
     }).then(function (o) {
@@ -376,6 +376,9 @@ module.exports = function (api) {
         (spread !== null ? " Camera clocks agree to " + spread.toFixed(1) + " s" + (close.length < clocks.length ? " (" + (clocks.length - close.length) + " clip(s) on a different clock)" : "") + "." : "") +
         ((d.cuts || []).length ? " " + d.cuts.length + " camera clip(s) cut where the wav file changes, so each half links to its own piece." : "") +
         (o.unsynced.length || (d.failed || []).length ? "" : " Now run step 3, Link.");
+      // A refused or failed "place" call has no details: say why nothing was placed.
+      if (o.placed.ok === false && !(d.placed || []).length && !(d.failed || []).length) summary = "Nothing placed: " + (o.placed.error || "placing failed") + " " + summary;
+      if (d.activeNotRestored) summary += " Could not switch back to \"" + d.activeNotRestored + "\".";
       api.status(summary);
       return { ok: o.placed.ok !== false, summary: summary, error: summary, details: {
         synced: o.synced, skipped: o.unsynced.map(function (u) { return { name: u.name, time: u.time !== null ? fmt(u.time) : "", reason: u.reason }; }),

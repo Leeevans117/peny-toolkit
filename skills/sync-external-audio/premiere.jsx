@@ -184,9 +184,22 @@
     return r;
   }
 
+  // "place" works on the sequence "scan" read (sequenceId), not whichever is active then:
+  // Lee, 5 Nov 2026, the 12 min of measuring ended with "Maribor Day 04_Selects UNCUT"
+  // active, so placing was refused and 27 synced clips got nothing. razorCam needs QE, which
+  // only sees the active sequence, so the copy is opened for the call and Lee is put back.
+  function activate(seq) {
+    var a = T.activeSequence();
+    if (a && String(a.sequenceID) === String(seq.sequenceID)) return true;
+    try { app.project.openSequence(String(seq.sequenceID)); } catch (e) {}
+    a = T.activeSequence();
+    return !!(a && String(a.sequenceID) === String(seq.sequenceID));
+  }
+
   PenyToolkit.skills["sync-external-audio"] = function (params) {
-    var seq = T.activeSequence();
-    if (!seq) return T.fail("No active sequence.");
+    var was = T.activeSequence();
+    var seq = params.sequenceId ? T.findSequenceById(params.sequenceId) : was;
+    if (!seq) return T.fail(params.sequenceId ? "The sequence Sync measured (\"" + params.sequenceName + "\") is not in the open project any more (another project open?). Open its project and run Sync again; nothing was placed." : "No active sequence.");
     if (!T.isToolkitCopy(seq)) {
       return T.fail("Refused: the active sequence \"" + seq.name + "\" does not end in \"" + T.COPY_SUFFIX +
         "\". Run Make safe copy first and run this on the copy.");
@@ -194,10 +207,18 @@
     if (params.action === "scan") {
       var s = scan(seq);
       return T.ok(s.cams.length + " camera clips, " + s.wavs.length + " external audio file(s)" +
-        (s.track >= 0 ? " on A" + (s.track + 1) : "") + ".", { sequence: String(seq.name), cams: s.cams, wavs: s.wavs, track: s.track,
+        (s.track >= 0 ? " on A" + (s.track + 1) : "") + ".", { sequence: String(seq.name), sequenceId: String(seq.sequenceID), cams: s.cams, wavs: s.wavs, track: s.track,
         fps: T.sequenceFps(seq) || 25 });
     }
-    if (params.action === "place") return place(seq, params);
+    if (params.action === "place") {
+      if (!activate(seq)) return T.fail("Could not open \"" + seq.name + "\" to place the wav pieces; nothing was placed.");
+      var r = place(seq, params);
+      if (was && String(was.sequenceID) !== String(seq.sequenceID) && !activate(was)) {
+        r.details = r.details || {};
+        r.details.activeNotRestored = String(was.name);
+      }
+      return r;
+    }
     return T.fail("Unknown action: " + params.action);
   };
 }(PenyToolkit));
