@@ -22,6 +22,12 @@
       "type": "checkbox",
       "label": "Even out every phrase (Volume keyframes); off = one level per clip",
       "default": true
+    },
+    {
+      "id": "keepBed",
+      "type": "checkbox",
+      "label": "Keep my music/camera balance (they move with the voice)",
+      "default": true
     }
   ],
   "actions": [

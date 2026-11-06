@@ -310,6 +310,129 @@ def emean(v):
     return float(10 * np.log10(np.mean(10 ** (np.asarray(v) / 10))))
 
 
+def speech_mask(dm, clips, n):
+    """Clear-speech frames of the voice clips: within WORD_GATE dB of their group's (speaker's)
+    95th-percentile loudness in the dry render dm."""
+    sp = np.zeros(n, dtype=bool)
+    groups = {}
+    for c in clips:
+        groups.setdefault(c.get("group", ""), []).append(c)
+    for g, cl in groups.items():
+        fr = [frames(c["start"], c["end"], n) for c in cl]
+        allm = np.concatenate([dm[a:b] for a, b in fr if b > a] or [np.zeros(0)])
+        ok = allm > -70
+        if not ok.any():
+            continue
+        ref = float(np.percentile(allm[ok], 95))
+        for a, b in fr:
+            if b > a:
+                sp[a:b] = dm[a:b] > ref - WORD_GATE
+    return sp
+
+
+def lin(v):
+    return 10 ** (np.nan_to_num(np.asarray(v, dtype=float), nan=-150.0) / 10)
+
+
+def bed(job):
+    """Gain curve for the music / camera sound (the bed) so Lee's voice-to-bed balance stays
+    as he set it: the bed moves by Sound Pass's net voice change (final minus before voice
+    render, energy average of the clear speech within +-1.5 s), held through pauses; where no
+    voice plays it moves by the median change; 0.5 s ramps, within +-`cap` dB, thinned to
+    `tol` dB. `prev` (bed clip id -> [[t, dB]]) is the gain an earlier run on this copy left,
+    already in the before render, so it is added back. Returns {bed clip id: [[t, dB], ...]}."""
+    b, f, dm = np.load(job["before"])["m"], np.load(job["file"])["m"], np.load(job["mask"])["m"]
+    n = min(len(b), len(f), len(dm))
+    clips = sorted(job["clips"], key=lambda c: c["start"])
+    sp = speech_mask(dm, clips, n)
+    k = np.ones(31)
+    roll = lambda m: np.convolve(np.where(sp, lin(m[:n]), 0.0), k, "full")[15:15 + n]
+    den = np.convolve(sp.astype(float), k, "full")[15:15 + n]
+    ok = den >= 5
+    chg = np.full(n, np.nan)
+    chg[ok] = 10 * np.log10(np.maximum(roll(f)[ok], 1e-30) / np.maximum(roll(b)[ok], 1e-30))
+    cap = float(job.get("cap", 12))
+    mid = float(np.median(chg[sp & ok])) if (sp & ok).any() else 0.0
+    inside = np.zeros(n, dtype=bool)
+    for c in clips:
+        a, e = int(c["start"] / 0.1), min(n, int(np.ceil(c["end"] / 0.1)))
+        inside[a:e] = True
+    g, cur = np.empty(n), mid
+    for i in range(n):  # held through pauses; the median change where no voice plays
+        if not np.isnan(chg[i]):
+            cur = chg[i]
+        elif not inside[i]:
+            cur = mid
+        g[i] = cur
+    # 0.5 s ramps, like Lee's own ducking keyframes (0.35 s); a slower fader kept the balance worse
+    # (5 Nov 2026: 2 dB/s gave Chris +1.5 dB, Laura -1.2 dB off his balance).
+    g = np.convolve(np.pad(np.clip(g, -cap, cap), 2, mode="edge"), np.ones(5) / 5, "valid")
+    t = np.arange(n) * 0.1 - 0.1  # centre of each frame's 400 ms window
+    out = {}
+    for c in job["bed"]:
+        a, e = max(0, int(np.floor((c["start"] + 0.1) / 0.1))), min(n, int(np.ceil((c["end"] + 0.1) / 0.1)) + 1)
+        if e - a < 2:
+            out[c["id"]] = [[round(c["start"], 3), round(mid, 2)], [round(c["end"], 3), round(mid, 2)]]
+            continue
+        tt = np.concatenate([[c["start"]], np.clip(t[a:e], c["start"], c["end"]), [c["end"]]])
+        gg = g[a:e].copy()
+        prev = c.get("prev") or []
+        if prev:
+            px = np.array(prev, dtype=float)
+            gg = gg + np.interp(np.clip(t[a:e], c["start"], c["end"]), px[:, 0], px[:, 1])
+        gg = np.clip(gg, -cap, cap)
+        gg = np.concatenate([[gg[0]], gg, [gg[-1]]])
+        kt, kg = thin(tt, gg, float(job.get("tol", 1.0)))
+        out[c["id"]] = [[round(float(x), 3), round(float(y), 2)] for x, y in zip(kt, kg)]
+    return {"keys": out, "medianChange": round(mid, 2)}
+
+
+def balance(job):
+    """Voice over bed (dB) on clear-speech moments that have a bed under them, before and after
+    Sound Pass, overall and per voice group, from the before / final voice renders, the mix
+    render (bed = mix minus voice) and the bed gain Sound Pass applied (`bedKeys`, so the
+    bed as Lee had it = bed now minus that gain). Spots where a 3 s stretch is more than
+    `tol` dB off Lee's balance."""
+    b, f, dm, mx = (np.load(job[k])["m"] for k in ("before", "file", "mask", "mix"))
+    n = min(len(b), len(f), len(dm), len(mx))
+    clips = sorted(job["clips"], key=lambda c: c["start"])
+    sp = speech_mask(dm, clips, n)
+    bed_now = 10 * np.log10(np.maximum(lin(mx[:n]) - lin(f[:n]), 1e-15))
+    gain = np.zeros(n)
+    t = np.arange(n) * 0.1 - 0.1
+    for keys in (job.get("bedKeys") or {}).values():
+        if len(keys) >= 2:
+            px = np.array(keys, dtype=float)
+            a, e = max(0, int(np.floor((px[0, 0] + 0.1) / 0.1))), min(n, int(np.ceil((px[-1, 0] + 0.1) / 0.1)))
+            gain[a:e] = np.interp(t[a:e], px[:, 0], px[:, 1])  # shortcut: overlapping bed clips take the last one's gain
+    bed_lee = bed_now - gain
+    use = sp & (bed_now > -70) & (bed_now < f[:n] - 3)  # a bed is there and the subtraction is reliable
+    em = lambda v: float(10 * np.log10(np.mean(lin(v)))) if len(v) else None
+    out, groups, spots = {}, {}, []
+    for c in clips:
+        a, e = frames(c["start"], c["end"], n)
+        sel = np.where(use[a:e])[0] + a if e > a else np.zeros(0, int)
+        if len(sel) >= 5:
+            groups.setdefault(c.get("group", ""), []).append((em(b[sel]) - em(bed_lee[sel]), em(f[sel]) - em(bed_now[sel])))
+    rnd = lambda x: None if x is None else round(float(x), 2)
+    allv = [v for g in groups.values() for v in g]
+    out["all"] = {"clips": len(allv), "before": rnd(np.median([v[0] for v in allv])) if allv else None,
+                  "after": rnd(np.median([v[1] for v in allv])) if allv else None}
+    out["groups"] = {g: {"clips": len(v), "before": rnd(np.median([x[0] for x in v])), "after": rnd(np.median([x[1] for x in v]))} for g, v in groups.items()}
+    tol = float(job.get("tol", 2.0))
+    i = 0
+    while i + 30 <= n:  # 3 s stretches
+        sel = np.where(use[i:i + 30])[0] + i
+        if len(sel) >= 10:
+            d = (em(f[sel]) - em(bed_now[sel])) - (em(b[sel]) - em(bed_lee[sel]))
+            if abs(d) > tol:
+                spots.append({"t": round(i * 0.1, 2), "end": round((i + 30) * 0.1, 2), "kind": "balance", "clipId": None,
+                              "text": "voice %.1f dB %s over the music/camera sound than you had it" % (abs(d), "further" if d > 0 else "less far")})
+        i += 30
+    out["spots"] = spots
+    return out
+
+
 def check(job):
     """Spots in the finished render that are worth a listen, so nobody has to sit through the
     whole sequence (Lee 23 Oct 2026). Clear speech = frames within WORD_GATE dB of the group's
@@ -340,20 +463,7 @@ def check(job):
     n = min(len(fm), len(dm))
     ceiling = float(job["ceiling"])
     clips = sorted(job["clips"], key=lambda c: c["start"])
-    sp = np.zeros(n, dtype=bool)
-    groups = {}
-    for c in clips:
-        groups.setdefault(c.get("group", ""), []).append(c)
-    for g, cl in groups.items():
-        fr = [frames(c["start"], c["end"], n) for c in cl]
-        allm = np.concatenate([dm[a:b] for a, b in fr if b > a] or [np.zeros(0)])
-        ok = allm > -70
-        if not ok.any():
-            continue
-        ref = float(np.percentile(allm[ok], 95))
-        for a, b in fr:
-            if b > a:
-                sp[a:b] = dm[a:b] > ref - WORD_GATE
+    sp = speech_mask(dm, clips, n)
     who = lambda c: c.get("name") or c.get("group") or "clip"
     usual = lambda c: str(c.get("note", "")).startswith("quiet") or c.get("note") == "little speech: usual gain"
     spots, lu50 = [], {}
@@ -421,6 +531,9 @@ def check(job):
             spots.append({"t": round((a + over[0]) * 0.4, 2), "end": round((a + over[-1] + 1) * 0.4, 2), "kind": "over ceiling", "clipId": c["id"],
                           "text": "peaks reach %.1f dB, over the %.0f dB ceiling (%s)" % (float(pk[a:b].max()), ceiling, who(c))})
     spots += tone_spots(d, sp, clips, n, who, TONE_DB)
+    if job.get("mix") and job.get("before"):
+        bal = balance(dict(job, tol=2.0))
+        spots += bal["spots"]
     if job.get("mix"):
         spots += mix_spots(np.load(job["mix"])["m"], fm, sp, clips, n, MIX_DB, BED_DB)
     spots.sort(key=lambda x: x["t"])
@@ -444,7 +557,8 @@ def check(job):
         for kd in x["kinds"]:
             kinds[kd] = kinds.get(kd, 0) + 1
     return {"spots": merged[:MAX_SPOTS], "total": len(merged), "capped": len(merged) > MAX_SPOTS, "kinds": kinds,
-            "middle": None if mid is None else round(mid, 2)}
+            "middle": None if mid is None else round(mid, 2),
+            "balance": {k: v for k, v in bal.items() if k != "spots"} if job.get("mix") and job.get("before") else None}
 
 
 def tone_bands(bd, sel):
@@ -543,7 +657,7 @@ def thin(t, g, tol):
 def main():
     job = json.load(sys.stdin)
     mode = job.get("mode")
-    res = blocks(job) if mode == "blocks" else phrases(job) if mode == "phrases" else level(job) if mode == "level" else check(job) if mode == "check" else stats(job)
+    res = blocks(job) if mode == "blocks" else phrases(job) if mode == "phrases" else level(job) if mode == "level" else check(job) if mode == "check" else bed(job) if mode == "bed" else stats(job)
     json.dump(res, sys.stdout)
 
 

@@ -72,11 +72,12 @@ var STEPS = [
   { id: "keys", label: "Writing Volume keyframes" },
   { id: "final", label: "Setting the limiters and checking" },
   { id: "trim", label: "Trimming clips to the same loudness" },
+  { id: "bed", label: "Moving music and camera sound with the voice" },
   { id: "mix", label: "Rendering the full mix as you hear it" },
   { id: "check", label: "Checking the result and marking spots" },
   { id: "report", label: "Writing the report" }];
 var STEP_DEFAULTS = { copy: { a: 2, b: 0.01 }, before: { a: 1.5, b: 0.01 }, dry: { a: 2, b: 0.1 }, ceiling: { a: 2, b: 0.11 },
-  level: { a: 1, b: 0.01 }, keys: { a: 1, b: 0.1 }, final: { a: 4, b: 0.15 }, trim: { a: 3, b: 0.07 }, mix: { a: 2, b: 0.05 }, check: { a: 1.5, b: 0.01 }, report: { a: 1, b: 0.01 } };
+  level: { a: 1, b: 0.01 }, keys: { a: 1, b: 0.1 }, final: { a: 4, b: 0.15 }, trim: { a: 3, b: 0.07 }, bed: { a: 2, b: 0.05 }, mix: { a: 2, b: 0.05 }, check: { a: 1.5, b: 0.01 }, report: { a: 1, b: 0.01 } };
 
 module.exports = function (api) {
   var busy = null;
@@ -119,8 +120,8 @@ module.exports = function (api) {
     if (!ffmpeg) return Promise.resolve({ ok: false, error: "ffmpeg not found (" + FFMPEG.join(", ") + ")." });
     if (!python) return Promise.resolve({ ok: false, error: "No python3 with numpy found (" + PYTHON.join(", ") + ")." });
     var preset = path.join(api.skillDir, "wav-float.epr");
-    var even = params.even !== false;
-    var t0 = Date.now(), dir, scan, clips, voiceTracks, copyInfo, report = { passes: {}, settings: { target: TARGET, ceiling: CEILING, even: even } }, npz = {};
+    var even = params.even !== false, keepBed = params.keepBed !== false;
+    var t0 = Date.now(), dir, scan, clips, voiceTracks, copyInfo, report = { passes: {}, settings: { target: TARGET, ceiling: CEILING, even: even, keepBed: keepBed } }, npz = {};
     busy = "Sound Pass";
     // The bar starts once the clips are counted; the copy step is dated back to the press.
     var task = null;
@@ -254,6 +255,21 @@ module.exports = function (api) {
       if (!plan.length) return;
       return pass("trim", plan).then(function () { npz.final = npz.trim; });
     }).then(function () {
+      // Keep my balance: the music / camera sound under the voice moves by Sound Pass's voice
+      // change (its own gain effect per clip; Lee's Volume is left alone).
+      var bedList = scan.bed || [];
+      if (!keepBed || !bedList.length) return null;
+      step("bed");
+      api.status("Sound Pass: moving " + bedList.length + " music/camera clip(s) with the voice…");
+      return measure(python, { mode: "bed", before: npz.before, file: npz.final, mask: npz.dry, cap: LIFT_MAX + CUT_MAX,
+        clips: clips.map(function (c) { return { id: c.nodeId, start: c.start, end: c.end, group: c.group }; }),
+        // an effect found before any Sound Pass marker is Lee's own: ours goes after it
+        bed: bedList.map(function (b) { return { id: b.nodeId, start: b.start, end: b.end, prev: scan.hasMarkers ? b.keys : [] }; }) }).then(function (bd) {
+        report.bed = { clips: bedList.length, medianChange: bd.medianChange, keys: bd.keys };
+        return jsx({ action: "bed", clips: bedList.map(function (b) {
+          return { track: b.track, nodeId: b.nodeId, add: !!b.fx && !scan.hasMarkers, keys: bd.keys[b.nodeId].map(function (k) { return { t: k[0], db: k[1] }; }) }; }) });
+      }).then(function (r) { report.bed.added = r.details.added; });
+    }).then(function () {
       // Every track that was playing when Sound Pass started (music, camera sound...), so the
       // check hears the background under the voice too. Nothing is set; mutes are put back.
       var heard = (scan.tracks || []).filter(function (t) { return !t.muted; }).map(function (t) { return t.index; });
@@ -262,9 +278,11 @@ module.exports = function (api) {
       // Check: spots worth a listen in the finished render, marked red on the copy.
       step("check");
       api.status("Sound Pass: checking the result…");
-      return measure(python, { mode: "check", file: npz.final, mask: npz.dry, mix: npz.mix || null, ceiling: CEILING,
+      return measure(python, { mode: "check", file: npz.final, mask: npz.dry, mix: npz.mix || null, before: npz.before,
+        bedKeys: report.bed ? report.bed.keys : null, ceiling: CEILING,
         clips: clips.map(function (c) { return { id: c.nodeId, start: c.start, end: c.end, group: c.group, name: c.name, note: c.note || "" }; }) }).then(function (ck) {
         report.check = { total: ck.total, capped: ck.capped, kinds: ck.kinds, middle: ck.middle };
+        report.balance = ck.balance;
         report.spots = ck.spots;
         return jsx({ action: "markers", spots: ck.spots.map(function (s) { return { t: s.t, end: s.end, text: s.text }; }) });
       }).then(function (mk) { report.markers = mk.details; return m; });
@@ -313,6 +331,7 @@ module.exports = function (api) {
         (report.keys.keys ? "; " + report.keys.keys + " Volume keyframes on " + report.keys.clips + " clip(s)" : "") +
         (flagged ? ". " + flagged + " off-mic/short clip(s) given the usual level only (see notes)" : "") +
         (report.notes.length ? ". " + report.notes.join(" ") : "") +
+        (report.balance && report.balance.all && report.balance.all.after !== null ? ". Voice over music/camera: " + report.balance.all.after + " dB (you had " + report.balance.all.before + ")" : "") +
         (bad.length ? ". " + bad.length + " clip(s) over the ceiling or 3 dB away from the others" : "") +
         (report.spots.length ? ". " + report.spots.length + " spot(s) to check (red markers named Sound Pass" + (report.check.capped ? "; first 100 of " + report.check.total : "") + "): " + path.join(dir, "spots.csv")
           : ". No spots to check") +

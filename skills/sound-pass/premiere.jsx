@@ -34,6 +34,8 @@
     if (action === "probe") return probe(seq, params);
     if (action === "keys") return keys(seq, params);
     if (action === "markers") return markers(seq, params);
+    if (action === "addfx") return addfx(seq, params);
+    if (action === "bed") return bed(seq, params);
     return T.fail("Unknown action: " + action);
   };
 
@@ -121,26 +123,28 @@
   }
 
   function scan(seq, params) {
-    var only = trackFilter(params.tracks), clips = [], tracks = [], skipped = {}, gains = qeGains(seq);
+    var only = trackFilter(params.tracks), clips = [], tracks = [], skipped = {}, gains = qeGains(seq), bedClips = [];
     for (var t = 0; t < seq.audioTracks.numTracks; t++) {
       var tr = seq.audioTracks[t], muted = false;
       try { muted = tr.isMuted(); } catch (e) {}
       tracks.push({ index: t, label: "A" + (t + 1), muted: !!muted });
-      if (only ? !only[t] : muted) continue;
+      if (muted && !(only && only[t])) continue;
       for (var c = 0; c < tr.clips.numItems; c++) {
         var it = tr.clips[c], nest = sequenceForItem(it.projectItem), p = mediaPath(it), source = p, wavs = null;
         var disabled = false;
         try { disabled = !!it.disabled; } catch (eD) {}
         if (disabled) continue;
+        if (only && !only[t]) { bedClips.push(bedInfo(t, it)); continue; }
         if (nest) {
           var w = nestedWavs(nest, 0, {}), list = [];
           for (var k in w) if (w.hasOwnProperty(k)) list.push(k);
-          if (!list.length && !only) { skipped["nested " + nest.name + " (no .wav inside)"] = true; continue; }
+          if (!list.length && !only) { skipped["nested " + nest.name + " (no .wav inside)"] = true; bedClips.push(bedInfo(t, it)); continue; }
           source = "nest:" + String(nest.name);
           wavs = list;
         } else if (!VOICE_EXT.test(p) && !only) {
           var ext = (/\.[^.\/]+$/.exec(p) || ["no file"])[0].toLowerCase();
           skipped[ext + " on A" + (t + 1)] = (skipped[ext + " on A" + (t + 1)] || 0) + 1;
+          bedClips.push(bedInfo(t, it));
           continue;
         }
         var g = gains[t + ":" + it.start.ticks];
@@ -152,7 +156,7 @@
     for (var s in skipped) if (skipped.hasOwnProperty(s)) sk.push(s + (skipped[s] === true ? "" : " x" + skipped[s]));
     if (!clips.length) return T.fail("No interview voice clips found (looked for .wav audio, directly or in nested sequences, on unmuted tracks). Skipped: " + (sk.join(", ") || "nothing"), { tracks: tracks });
     return T.ok("Found " + clips.length + " voice clip(s).", { sequence: String(seq.name), sequenceId: String(seq.sequenceID), isCopy: T.isToolkitCopy(seq),
-      end: T.sec(seq.end), fps: T.sequenceFps(seq), tracks: tracks, clips: clips, skipped: sk });
+      end: T.sec(seq.end), fps: T.sequenceFps(seq), tracks: tracks, clips: clips, skipped: sk, bed: bedClips, hasMarkers: hasOurMarkers(seq) });
   }
 
   function copy() {
@@ -175,12 +179,13 @@
     return null;
   }
   // Adds a Hard Limiter to the clip through QE (matched by track and start ticks).
-  function addLimiter(seq, track, item) {
+  function addLimiter(seq, track, item) { return addEffect(seq, track, item, HL); }
+  function addEffect(seq, track, item, name) {
     app.enableQE();
     var qs = qe.project.getActiveSequence();
     if (!qs || String(qs.name) !== String(seq.name)) return "QE active sequence is not " + seq.name;
-    var fx = qe.project.getAudioEffectByName(HL);
-    if (!fx) return "QE has no audio effect named " + HL;
+    var fx = qe.project.getAudioEffectByName(name);
+    if (!fx) return "QE has no audio effect named " + name;
     var qt = qs.getAudioTrackAt(track), want = String(item.start.ticks);
     for (var i = 0; i < qt.numItems; i++) {
       var qi = qt.getItemAt(i);
@@ -312,6 +317,89 @@
     var d = { removed: old.length, added: list.length, now: now, othersKept: kept, othersBefore: others, bad: bad };
     if (now !== list.length || kept !== others || bad.length) return T.fail("Sound Pass markers did not read back: " + now + " of " + list.length + " (other markers " + kept + " of " + others + ").", d);
     return T.ok(list.length + " Sound Pass marker(s) on the copy (" + old.length + " earlier one(s) replaced).", d);
+  }
+
+  // ---- Bed: music / camera sound under the voice, moved with the voice (Keep my balance) ----
+  // Each bed clip gets its own BED_FX (added after Lee's effects) whose gain follows Sound
+  // Pass's voice change; Lee's Volume is never touched. Ours = the last BED_FX on the clip.
+  var BED_FX = "Amplify";
+  // Amplify's gain: Left / Right sliders on a stereo clip (Link Sliders on; both are set), Gain on mono.
+  function bedProps(comp) {
+    var out = [], names = ["Left", "Right", "Gain"];
+    for (var i = 0; i < names.length; i++) { var p = prop(comp, names[i]); if (p) out.push(p); }
+    return out;
+  }
+  function bedProp(comp) { return bedProps(comp)[0]; }
+  function lastComponent(it, name) {
+    var found = null;
+    for (var c = 0; c < it.components.numItems; c++) if (String(it.components[c].displayName) === name) found = it.components[c];
+    return found;
+  }
+  // Amplify Left/Right value <-> dB: 0.6667 = 0 dB, 144 dB per unit (renders 4 Nov 2026: 0.5 / 0.8 / 0.9
+  // gave -24.0 / +19.2 / +33.6 dB on a music clip, after Lee's own Amplify and Mastering).
+  function bedValue(db) { return 2 / 3 + db / 144; }
+  function bedDb(v) { return Math.round((Number(v) - 2 / 3) * 144 * 100) / 100; }
+  function bedInfo(t, it) {
+    var comp = lastComponent(it, BED_FX), keys = [];
+    if (comp && bedProp(comp)) {
+      var g = bedProp(comp), off = it.inPoint.seconds - it.start.seconds;
+      if (g.isTimeVarying()) {
+        var ks = g.getKeys() || [];
+        for (var k = 0; k < ks.length; k++) keys.push([ks[k].seconds - off, bedDb(g.getValueAtKey(ks[k]))]);
+      } else keys.push([it.start.seconds, bedDb(g.getValue())], [it.end.seconds, bedDb(g.getValue())]);
+    }
+    return { track: t, label: "A" + (t + 1), nodeId: String(it.nodeId), name: String(it.name), start: it.start.seconds, end: it.end.seconds, fx: comp ? 1 : 0, keys: keys };
+  }
+  function hasOurMarkers(seq) {
+    var m = seq.markers.getFirstMarker();
+    while (m) { if (ours(m)) return true; m = seq.markers.getNextMarker(m); }
+    return false;
+  }
+  // params.clips: [{track, nodeId, keys: [{t: sequence s, db}], add}] - on a TOOLKIT COPY: keys
+  // on our BED_FX gain (added when `add` or missing), read back.
+  function bed(seq, params) {
+    if (!T.isToolkitCopy(seq)) return T.fail("Sound Pass only changes a TOOLKIT COPY; \"" + seq.name + "\" is not one.");
+    var list = params.clips || [], out = [], failed = 0, added = 0;
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i], it = itemByNode(seq, c.track, c.nodeId);
+      if (!it) { out.push({ nodeId: c.nodeId, error: "clip not found" }); failed++; continue; }
+      var comp = c.add ? null : lastComponent(it, BED_FX);
+      if (!comp) {
+        var err = addEffect(seq, c.track, it, BED_FX);
+        it = itemByNode(seq, c.track, c.nodeId);
+        comp = it ? lastComponent(it, BED_FX) : null;
+        if (!comp) { out.push({ nodeId: c.nodeId, error: err || BED_FX + " did not appear" }); failed++; continue; }
+        added++;
+      }
+      var gs = bedProps(comp), off = it.inPoint.seconds - it.start.seconds, rec = { nodeId: c.nodeId, set: 0, bad: [] };
+      if (!gs.length) { out.push({ nodeId: c.nodeId, error: BED_FX + " has no Left/Right/Gain slider" }); failed++; continue; }
+      for (var p = 0; p < gs.length; p++) {
+        var g = gs[p];
+        if (g.isTimeVarying()) g.setTimeVarying(false);
+        g.setTimeVarying(true);
+        for (var k = 0; k < c.keys.length; k++) {
+          var tm = new Time(); tm.seconds = c.keys[k].t + off;
+          var v = bedValue(c.keys[k].db);
+          g.addKey(tm);
+          g.setValueAtKey(tm, v, true);
+          if (Math.abs(g.getValueAtKey(tm) - v) > 1e-3) rec.bad.push({ t: c.keys[k].t, want: v, got: g.getValueAtKey(tm) }); else if (p === 0) rec.set++;
+        }
+      }
+      if (rec.bad.length) failed++;
+      out.push(rec);
+    }
+    var r = failed ? T.fail(failed + " bed clip(s) did not take their gain.", { clips: out }) : T.ok(list.length + " bed clip(s) moved with the voice and read back.", { clips: out });
+    r.details.added = added;
+    return r;
+  }
+
+  // Test: params {track, nodeId, name} adds that audio effect to one clip of a TOOLKIT COPY.
+  function addfx(seq, params) {
+    if (!T.isToolkitCopy(seq)) return T.fail("Only on a TOOLKIT COPY.");
+    var it = itemByNode(seq, params.track, params.nodeId);
+    if (!it) return T.fail("clip not found");
+    var err = addEffect(seq, params.track, it, params.name);
+    return err ? T.fail(err) : T.ok("Added " + params.name + ".");
   }
 
   function probe(seq, params) {
