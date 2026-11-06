@@ -143,4 +143,4 @@ section there before changing it.
 | Sound Pass | Levels interview voice per clip on a safe copy; rides quiet moments | 3 Oct 2026, TEST project, by hook |
 | Master for YouTube (loudness-master) | Masters the whole mix to -14 LUFS / -1 dBTP on a master copy | 24 Oct 2026, Episode_1_Korea |
 | Colour (colour-baseline) | Detects cameras, applies a LUT baseline grade on a GRADED copy; makes LUT presets | 3 Oct 2026, TEST project; picker not in real panel yet |
-| Selects Setup (selects-sequences) | Builds UNCUT and empty Selects sequences per group from a footage bin | 23 Oct 2026, SELECTS TEST; not clicked by hand |
+| Selects Setup (selects-sequences) | Builds UNCUT and empty Selects sequences per group from a footage bin | 6 Nov 2026: by shoot date, Lee ran it on World Champs |

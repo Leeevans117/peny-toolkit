@@ -18,6 +18,11 @@ var path = require("path");
 var os = require("os");
 
 var camera = require(path.join(__dirname, "..", "..", "core", "camera.js"));
+var shootdate = require(path.join(__dirname, "..", "..", "core", "shootdate.js"));
+var DATE_CACHE = path.join(os.homedir(), ".peny-toolkit", "selects-dates.json");
+var FFPROBE = [path.join(os.homedir(), "Library", "Application Support", "PenyToolkit", "bin", "ffprobe"), "/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe"];
+var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+var CLOCK_DAYS = 365; // a camera date this far before the newest clip's is a camera clock that was never set
 var SETTINGS = path.join(os.homedir(), ".peny-toolkit", "selects-sequences.json");
 var CAMERA_CACHE = path.join(os.homedir(), ".peny-toolkit", "selects-cameras.json");
 var BATCH = 25; // clips per Premiere call, so the panel stays responsive and Cancel works between calls
@@ -80,7 +85,7 @@ function fmtFrames(f, fps) {
 // harness can check it without Premiere.
 function makePlan(scan, choice) {
   scan = view(scan, choice);
-  var prefixes = blockKeys(scan, choice), problems = [], notes = [];
+  var prefixes = blockKeys(scan, choice), problems = [], notes = (scan.dateNotes || []).slice();
   var included = prefixes.filter(function (k) { return choice.include[k] !== false; });
   // Clips with the same name in two days (Whistler R5 C344-C351): the day each belongs to.
   var dupDays = duplicates(scan, included), unresolved = [];
@@ -128,6 +133,7 @@ function makePlan(scan, choice) {
 // so bins named B ROLE / PITS or a card number still give one block per camera. Clips whose file
 // names no camera (audio, phones, screen grabs) stay in a block named after their bin.
 function view(scan, choice) {
+  if (choice.groupBy === "date") scan = byDate(scan);
   if (choice.blockBy !== "camera") return scan;
   var out = {}; for (var k in scan) if (scan.hasOwnProperty(k)) out[k] = scan[k];
   out.days = scan.days.map(function (d) {
@@ -151,6 +157,59 @@ function view(scan, choice) {
   });
   return out;
 }
+// Groups by shoot date (Lee, 6 Nov 2026): every clip whose camera date is the same day goes in one
+// group, whatever bin it sits in; different days are different groups ("Day 01 (26 Aug)", in date
+// order). Each clip keeps its source bin, so blocks are made as before. Clips with no date, or a
+// camera clock that was never set (World Champs KX: 9 Mar 2018), go in one "No date" group.
+// The same file in two bins (same name, size and time) is placed once.
+function dayKey(c, newest) {
+  if (!c.shootDay) return null;
+  var t = function (d) { return Date.UTC(+d.slice(0, 4), +d.slice(4, 6) - 1, +d.slice(6, 8)); };
+  return newest && (t(newest) - t(c.shootDay)) / 86400000 > CLOCK_DAYS ? null : c.shootDay;
+}
+function byDate(scan) {
+  if (scan.byDate) return scan;
+  var newest = null, all = [];
+  scan.days.forEach(function (d) {
+    d.sources.forEach(function (s) { s.clips.forEach(function (c) { all.push({ c: c, s: s, d: d }); }); });
+    (d.loose || []).forEach(function (c) { all.push({ c: c, s: null, d: d }); });
+  });
+  all.forEach(function (x) { if (x.c.shootDay && (!newest || x.c.shootDay > newest)) newest = x.c.shootDay; });
+  var groups = {}, keys = [], seen = {}, twice = [], clock = {}, none = 0;
+  all.forEach(function (x) {
+    var c = x.c, key = dayKey(c, newest) || "none";
+    if (c.size !== null && c.size !== undefined && c.shootTime) {
+      var id = c.name + "|" + c.size + "|" + c.shootDay + c.shootTime;
+      if (seen[id]) { twice.push(c.name + " (" + seen[id] + " and " + (x.s ? x.s.bin : x.d.bin) + ")"); return; }
+      seen[id] = x.s ? x.s.bin : x.d.bin;
+    }
+    if (key === "none") { if (c.shootDay) { var ck = (c.camera || (x.s ? x.s.bin : x.d.bin)) + " (camera date " + fmtDay(c.shootDay, true) + ")"; clock[ck] = (clock[ck] || 0) + 1; } else none++; }
+    if (!groups[key]) { groups[key] = { key: key, sources: [], bySrc: {}, loose: [], bins: [] }; keys.push(key); }
+    var g = groups[key], bin = x.d.bin;
+    if (g.bins.indexOf(bin) === -1) g.bins.push(bin);
+    if (!x.s) { g.loose.push(c); return; }
+    var sk = x.d.nodeId + "/" + x.s.nodeId;
+    if (!g.bySrc[sk]) { g.bySrc[sk] = { bin: x.s.bin, nodeId: x.s.nodeId, prefix: x.s.prefix, kind: x.s.kind, clips: [] }; g.sources.push(g.bySrc[sk]); }
+    g.bySrc[sk].clips.push(c);
+  });
+  keys.sort(function (a, b) { return a === "none" ? 1 : b === "none" ? -1 : a < b ? -1 : 1; });
+  var out = {}; for (var k in scan) if (scan.hasOwnProperty(k)) out[k] = scan[k];
+  var n = 0;
+  out.days = keys.map(function (key) {
+    var g = groups[key], dated = key !== "none";
+    if (dated) n++;
+    g.sources.forEach(function (s) { var a = s.clips.filter(function (c) { return c.audioOnly; }).length; s.kind = a === s.clips.length ? "audio" : a ? "mixed" : "video"; });
+    return { bin: g.bins.join(" + "), nodeId: null, day: dated ? n : null, label: dated ? "d" + key : "nodate", date: dated ? key : null,
+      title: dated ? "Day " + (n < 10 ? "0" : "") + n + " (" + fmtDay(key) + ")" : "No date", sources: g.sources, loose: g.loose, skipped: [] };
+  });
+  out.byDate = true;
+  out.dateNotes = [];
+  Object.keys(clock).forEach(function (k) { out.dateNotes.push(k + ": " + plural(clock[k], "clip") + (clock[k] === 1 ? " carries" : " carry") + " a camera date long before the rest (the camera clock was not set), so they go in No date."); });
+  if (none) out.dateNotes.push(plural(none, "clip") + (none === 1 ? " has" : " have") + " no recording date in the file, so they go in No date.");
+  if (twice.length) out.dateNotes.push(plural(twice.length, "clip") + (twice.length === 1 ? " is" : " are") + " the same file in two bins and are placed once: " + twice.slice(0, 6).join("; ") + (twice.length > 6 ? "…" : "") + ".");
+  return out;
+}
+function fmtDay(d, year) { return +d.slice(6, 8) + " " + MONTHS[+d.slice(4, 6) - 1] + (year ? " " + d.slice(0, 4) : ""); }
 // Cameras in a list of clips, most clips first: "Sony FX30 x42, not found x2".
 function cameraText(clips) {
   var n = {}, keys = [];
@@ -267,7 +326,7 @@ module.exports = function (api) {
   function choiceFrom(params, scan) {
     var s = readSettings();
     var pp = (s.projects || {})[scan.project.path] || {};
-    var c = { project: params.project || "", blockBy: params.blockBy || pp.blockBy || "bin", names: pp.names || {}, labels: s.labels, include: pp.include || {}, colours: s.colours, dups: s.dups, order: pp.order || s.order, shown: {}, path: scan.project.path };
+    var c = { project: params.project || "", groupBy: params.groupBy || pp.groupBy || "date", blockBy: params.blockBy || pp.blockBy || "bin", names: pp.names || {}, labels: s.labels, include: pp.include || {}, colours: s.colours, dups: s.dups, order: pp.order || s.order, shown: {}, path: scan.project.path };
     scan.days.forEach(function (d) { d.sources.forEach(function (x) {
       c.shown[x.prefix.toUpperCase()] = x.prefix;
       x.clips.forEach(function (cl) { if (cl.camera) c.shown[cl.camera.toUpperCase()] = cl.camera; });
@@ -285,7 +344,7 @@ module.exports = function (api) {
     // (the order has been different on every project so far). The last order is the default for a new one.
     s.labels = choice.labels; s.colours = choice.colours; s.dups = choice.dups; s.order = choice.order;
     s.projects = s.projects || {};
-    s.projects[choice.path] = { order: choice.order, include: choice.include, names: choice.names, blockBy: choice.blockBy };
+    s.projects[choice.path] = { order: choice.order, include: choice.include, names: choice.names, blockBy: choice.blockBy, groupBy: choice.groupBy };
     writeSettings(s);
   }
 
@@ -295,7 +354,11 @@ module.exports = function (api) {
       scan = need(r);
       var all = [];
       scan.days.forEach(function (d) { d.sources.forEach(function (s) { all = all.concat(s.clips); }); });
-      return camera.detect(all, { cacheFile: CAMERA_CACHE, status: function (t) { api.status("Selects: " + t); } });
+      return camera.detect(all, { cacheFile: CAMERA_CACHE, status: function (t) { api.status("Selects: " + t); } }).then(function () {
+        scan.days.forEach(function (d) { all = all.concat(d.loose || []); });
+        var ffprobe = null; FFPROBE.forEach(function (f) { if (!ffprobe && fs.existsSync(f)) ffprobe = f; });
+        return shootdate.detect(all, { cacheFile: DATE_CACHE, ffprobe: ffprobe, status: function (t) { api.status("Selects: " + t); } });
+      });
     }).then(function () {
       nameGroupsByCamera(scan);
       target = scan.project.path;
@@ -338,9 +401,9 @@ module.exports = function (api) {
       var s = summary(st);
       return { ok: true, summary: s.text + (st.plan.problems.length ? " To sort first: " + st.plan.problems.join(" ") : ""),
         details: { project: st.scan.project, root: st.scan.root, preset: findPreset(), problems: st.plan.problems, notes: st.plan.notes,
-          blockBy: st.choice.blockBy,
+          blockBy: st.choice.blockBy, groupBy: st.choice.groupBy,
           blocks: st.plan.prefixes.map(function (k) { return { key: k, label: label(k, st.choice), on: st.choice.include[k] !== false, colour: colourOf(k, st.choice) }; }),
-          cameras: st.scan.days.map(function (d) { return { group: d.title, bin: d.bin, sources: d.sources.map(function (s) { return { bin: s.bin, cameras: cameraText(s.clips) }; }) }; }),
+          cameras: view(st.scan, st.choice).days.map(function (d) { return { group: d.title, bin: d.bin, sources: d.sources.map(function (s) { return { bin: s.bin, cameras: cameraText(s.clips) }; }) }; }),
           duplicates: st.plan.duplicates,
           days: st.plan.days.map(function (d) { return { day: d.label, title: d.title, bin: d.bin, uncut: d.uncut, selects: d.selects, uncutExists: d.uncutExists, selectsExists: d.selectsExists, clips: d.clips,
             audioOnly: d.audioOnly, not25fps: d.offGrid, blocks: d.blocks.map(function (b) { return { label: b.label, bins: b.bins, clips: b.clips.length }; }) }; }) } };
@@ -512,6 +575,15 @@ module.exports = function (api) {
     var st = state;
     if (!st.scan) return;
     var c = st.choice, pl = st.plan;
+    var gf0 = el("div", "field");
+    gf0.appendChild(el("span", "flabel", "One sequence per"));
+    var gseg = el("div", "segmented");
+    [["date", "Shoot date (from the files)"], ["bin", "Bin"]].forEach(function (o) {
+      var b = el("button", c.groupBy === o[0] ? "on" : "", o[1]);
+      b.onclick = function () { c.groupBy = o[0]; persist(); };
+      gseg.appendChild(b);
+    });
+    gf0.appendChild(gseg); root.appendChild(gf0);
     var bf = el("div", "field");
     bf.appendChild(el("span", "flabel", "One block per"));
     var bseg = el("div", "segmented");
@@ -562,7 +634,7 @@ module.exports = function (api) {
       df.appendChild(el("span", "flabel", "Clips in two groups: which one does each belong to?"));
       // One click for all of them. When every clip sits in the same groups, the buttons name those groups.
       var same = dups.every(function (n) { return pl.duplicates[n].join("|") === pl.duplicates[dups[0]].join("|"); });
-      var allOpts = (same ? pl.duplicates[dups[0]].map(function (g) { return [g, groupTitle(st.scan, g, c)]; }) : [["first", "First group"], ["last", "Last group"]]).concat([["both", "Both"]]);
+      var allOpts = (same ? pl.duplicates[dups[0]].map(function (g) { return [g, groupTitle(vs, g, c)]; }) : [["first", "First group"], ["last", "Last group"]]).concat([["both", "Both"]]);
       var allRow = el("div", "sel-row"); allRow.appendChild(el("span", "tlabel", "All " + dups.length + " clips"));
       var allSeg = el("div", "segmented");
       allOpts.forEach(function (o) {
@@ -576,7 +648,7 @@ module.exports = function (api) {
         var row = el("div", "sel-row"); row.appendChild(el("span", "tlabel", name));
         var seg = el("div", "segmented");
         pl.duplicates[name].concat(["both"]).forEach(function (opt) {
-          var b = el("button", c.dups[name] === opt ? "on" : "", opt === "both" ? "Both" : groupTitle(st.scan, opt, c));
+          var b = el("button", c.dups[name] === opt ? "on" : "", opt === "both" ? "Both" : groupTitle(vs, opt, c));
           b.onclick = function () { c.dups[name] = opt; persist(); };
           seg.appendChild(b);
         });
@@ -586,14 +658,14 @@ module.exports = function (api) {
     }
     // Group names used in the sequence names; typed names are kept for this project.
     var gf = el("div", "field");
-    gf.appendChild(el("span", "flabel", "Name in the sequence names, per group (bin name to start with)"));
+    gf.appendChild(el("span", "flabel", "Name in the sequence names, per group (" + (c.groupBy === "date" ? "day and date" : "bin name") + " to start with)"));
     pl.days.forEach(function (d) {
       var row = el("div", "sel-row"), gi = el("input"); gi.type = "text"; gi.value = d.title; gi.title = "Bin: " + d.bin;
       gi.onchange = function () { var v = gi.value.replace(/^\s+|\s+$/g, ""); if (v && v !== d.defaultTitle) c.names[d.label] = v; else delete c.names[d.label]; persist(); };
       row.appendChild(gi); gf.appendChild(row);
-      var g0 = null; st.scan.days.forEach(function (x) { if (x.label === d.label) g0 = x; });
+      var g0 = null; vs.days.forEach(function (x) { if (x.label === d.label) g0 = x; });
       var gc = g0 ? cameraText([].concat.apply([], g0.sources.map(function (s) { return s.clips; }))) : "";
-      gf.appendChild(el("div", "sel-info", "Bin " + d.bin + " · " + plural(d.clips, "clip") + (gc ? " · " + gc : "")));
+      gf.appendChild(el("div", "sel-info", (c.groupBy === "date" ? "From " : "Bin ") + d.bin + " · " + plural(d.clips, "clip") + (gc ? " · " + gc : "")));
     });
     root.appendChild(gf);
     var out = el("div", "field");
