@@ -9,14 +9,14 @@
 	<DoEmulation>true</DoEmulation>
 	<DoVideo>false</DoVideo>
 	<DoAudio>true</DoAudio>
-	<PresetID>f9d77413-d97c-457b-9640-72e9844e2cde</PresetID>
+	<PresetID>e5cd05d4-6b8a-405b-9361-4c095909446a</PresetID>
 	<PostProcParamContainer ObjectRef="21"/>
 	<FilterParamContainer ObjectRef="14"/>
 	<ExportParamContainer ObjectRef="1"/>
 	<ExporterFileType>1463899717</ExporterFileType>
 	<ExporterClassID>1061109567</ExporterClassID>
 	<ExporterName></ExporterName>
-	<PresetName>($$$/AME/EncoderHost/Presets/f9d77413-d97c-457b-9640-72e9844e2cde/PresetName=WAV 48 kHz 16-bit)</PresetName>
+	<PresetName>Peny wav float</PresetName>
 	<FolderDisplayPath>System Presets/Audio Only</FolderDisplayPath>
 	<ExporterParamContainer ObjectID="1" ClassID="5c20a4a5-5e7c-4032-85b8-26ad4531fe7b" Version="1">
 		<ContainedParamsVersion>1</ContainedParamsVersion>

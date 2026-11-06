@@ -26,6 +26,7 @@ function BUNDLED(name) { return path.join(process.env.HOME || "", "Library", "Ap
 
 var PROXY_INFIX = "_Proxy";
 var LOOKUP_LEVELS_UP = 4;
+var ATTACH_PIECE = 10; // proxies per Premiere call (842 in one call froze Premiere for over a minute)
 var SCALE_W = 1280, SCALE_H = 720;
 var FFMPEG = [BUNDLED("ffmpeg"), "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"];
 var REDLINE = ["/Applications/REDCINE-X Professional/REDCINE-X PRO.app/Contents/MacOS/REDline"];
@@ -259,6 +260,14 @@ module.exports = function (api) {
 
       pool = new jobs.JobPool({
         maxConcurrent: params.maxConcurrent || 4,
+        // Full / Half speed switch (Lee, 6 Nov 2026), read whenever a render could start.
+        // Half measured on the M4 Pro: 1 REDline uses ~7.5 of 14 cores (4 at once ~12.9), and
+        // runs at 70% of Full's R3D speed; ffmpeg is light (2 at once ~2.9 cores).
+        limits: function () {
+          var sp = "full";
+          try { sp = JSON.parse(fs.readFileSync(path.join(require("os").homedir(), ".peny-toolkit", "settings.json"), "utf-8")).speed || "full"; } catch (e) {}
+          return sp === "half" ? { total: 2, perKind: { r3d: 1 } } : { total: params.maxConcurrent || 4 };
+        },
         // Render speed per kind kept between runs, so the time left is right from the start.
         etaHistoryFile: params.etaHistoryFile || path.join(require("os").homedir(), ".peny-toolkit", "proxy-eta.json"),
         log: api.log,
@@ -343,10 +352,22 @@ module.exports = function (api) {
         if (it.hasProxy && it.proxyPath && path.resolve(it.proxyPath) === path.resolve(found)) { already.push({ name: it.name, file: found }); return; }
         pairs.push({ nodeId: it.nodeId, path: found });
       });
-      return api.evalSkill({ action: "attach", pairs: pairs }).then(function (r) {
-        var d = r.details || {};
+      // Small pieces with a pause between, so Premiere answers while it attaches (6 Nov 2026).
+      var d = { attached: [], failed: [] }, okAll = true;
+      function piece(i) {
+        if (i >= pairs.length) return Promise.resolve({ ok: okAll, details: d });
+        return api.evalSkill({ action: "attach", pairs: pairs.slice(i, i + ATTACH_PIECE) }).then(function (r) {
+          var rd = r.details || {};
+          if (!rd.attached && !rd.failed) return { ok: false, details: d, error: r.error };
+          d.attached = d.attached.concat(rd.attached || []); d.failed = d.failed.concat(rd.failed || []);
+          if (!r.ok) okAll = false;
+          api.status("Attaching proxies: " + Math.min(i + ATTACH_PIECE, pairs.length) + " of " + pairs.length + "…");
+          return new Promise(function (res) { setTimeout(res, 300); }).then(function () { return piece(i + ATTACH_PIECE); });
+        });
+      }
+      return piece(0).then(function (r) {
         var summary = (d.attached || []).length + " attached and verified, " + already.length + " already attached, " +
-          (d.failed || []).length + " failed, " + missing.length + " have no proxy file, " + incomplete.length + " proxy files incomplete.";
+          (d.failed || []).length + " failed, " + missing.length + " have no proxy file, " + incomplete.length + " proxy files incomplete." + (r.error ? " Stopped: " + r.error : "");
         return { ok: r.ok && !incomplete.length, summary: summary, error: summary, details: {
           attached: d.attached || [], failed: d.failed || [], alreadyAttached: already, noProxyFile: missing, incomplete: incomplete } };
       });

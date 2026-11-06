@@ -9,6 +9,7 @@
     "#000000"
   ],
   "entry": "premiere.jsx",
+  "pieceMs": 300,
   "inputs": [
     {
       "id": "start",

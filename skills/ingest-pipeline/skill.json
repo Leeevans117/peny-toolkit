@@ -16,6 +16,22 @@
       "label": "Save each project when its proxies are attached",
       "type": "checkbox",
       "default": true
+    },
+    {
+      "id": "speed",
+      "label": "Speed",
+      "type": "segment",
+      "shared": true,
+      "options": [
+        {
+          "label": "Full speed",
+          "value": "full"
+        },
+        {
+          "label": "Half speed (keep working)",
+          "value": "half"
+        }
+      ]
     }
   ],
   "actions": [

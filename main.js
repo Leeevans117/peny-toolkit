@@ -31,6 +31,9 @@ function nodeRequire(name) {
 var fs = nodeRequire("fs");
 var path = nodeRequire("path");
 var os = nodeRequire("os");
+// ffmpeg, REDline, python, whisper and an ollama we start are children of this process and
+// inherit its priority: nice 10, so Premiere gets the CPU first while they run (6 Nov 2026).
+try { os.setPriority(10); } catch (e) {}
 
 var HOOK_DIR = "/tmp/peny-toolkit";
 var HOOK_INBOX = path.join(HOOK_DIR, "inbox");
@@ -109,6 +112,37 @@ function evalSkill(skill, params) {
   });
 }
 
+// A skill with "pieceMs" in skill.json works in pieces of about that long, so Premiere
+// answers between them: its jsx returns details.next until done. Each piece's lists are
+// joined into the last result; params.prior gives the jsx the counts so far.
+function evalPieces(skill, params) {
+  if (!skill.pieceMs) return evalSkill(skill, params);
+  var lists = {}, prior = {}, base = {};
+  for (var k in (params || {})) if (params.hasOwnProperty(k)) base[k] = params[k];
+  base.budgetMs = base.budgetMs || skill.pieceMs; // the test hook can pass a bigger one (one call)
+  function piece(extra) {
+    var p = {};
+    for (var k in base) p[k] = base[k];
+    for (k in extra) p[k] = extra[k];
+    return evalSkill(skill, p).then(function (r) {
+      var d = (r && r.details) || {};
+      Object.keys(d).forEach(function (k) {
+        if (Array.isArray(d[k])) { lists[k] = (lists[k] || []).concat(d[k]); prior[k] = lists[k].length; }
+        else if (typeof d[k] === "number" && /Count$/.test(k)) prior[k] = (prior[k] || 0) + d[k];
+      });
+      if (!r.ok || !d.next) {
+        Object.keys(lists).forEach(function (k) { d[k] = lists[k]; });
+        return r;
+      }
+      if (r.summary) setStatus(skill, r.summary);
+      return new Promise(function (res) { setTimeout(res, 300); }).then(function () {
+        return piece({ resume: d.next, sequenceId: d.sequenceId, prior: prior });
+      });
+    });
+  }
+  return piece({});
+}
+
 // ---- Running actions ----
 function findSkill(id) { for (var i = 0; i < skills.length; i++) if (skills[i].id === id) return skills[i]; return null; }
 function findAction(skill, id) {
@@ -151,7 +185,7 @@ function runAction(skillId, actionId, params, source) {
       var fn = skill.module.actions[action.id];
       p = fn ? fn(params || {}) : Promise.resolve({ ok: false, error: "Action not implemented: " + action.id });
     } else {
-      p = evalSkill(skill, params);
+      p = evalPieces(skill, params);
     }
   } catch (e) {
     p = Promise.resolve({ ok: false, error: "Action threw: " + e.message });
@@ -495,6 +529,14 @@ function sheet(opts) {
   });
 }
 
+// A "shared" input (e.g. Proxies' speed) is one value for every skill that shows it, kept in
+// ~/.peny-toolkit/settings.json so Node modules (core/jobs.js) read it too, mid-run.
+var SETTINGS_FILE = path.join(os.homedir(), ".peny-toolkit", "settings.json");
+function readShared() { try { return JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf-8")); } catch (e) { return {}; } }
+function writeShared(id, value) {
+  var all = readShared(); all[id] = value;
+  try { fs.mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true }); fs.writeFileSync(SETTINGS_FILE, JSON.stringify(all, null, 1)); } catch (e) { log("Could not save " + id + ": " + e.message, "err"); }
+}
 function storeKey(skill, input) { return "penytoolkit." + skill.id + "." + input; }
 function remember(skill, input, value) { try { localStorage.setItem(storeKey(skill, input), value); } catch (e) {} }
 function recall(skill, input) { try { return localStorage.getItem(storeKey(skill, input)) || ""; } catch (e) { return ""; } }
@@ -621,12 +663,17 @@ function drawSkills() {
         var seg = document.createElement("div"); seg.className = "segmented";
         var txt = document.createElement("input"); txt.type = "text";
         var chosen = parseInt(recall(s, inp.id + ".option"), 10) || 0;
+        if (inp.shared) { var sv = readShared()[inp.id]; chosen = 0; inp.options.forEach(function (o, i) { if (o.value === sv) chosen = i; }); }
         txt.value = recall(s, inp.id + ".text");
         txt.addEventListener("change", function () { remember(s, inp.id + ".text", txt.value); });
         var segButtons = inp.options.map(function (o, i) {
           var b = document.createElement("button");
           b.textContent = o.label;
-          b.addEventListener("click", function () { chosen = i; remember(s, inp.id + ".option", String(i)); paint(); });
+          b.addEventListener("click", function () {
+            chosen = i; remember(s, inp.id + ".option", String(i));
+            if (inp.shared) { writeShared(inp.id, o.value); log(inp.label + ": " + o.label + " (from the next render that starts)"); }
+            paint();
+          });
           seg.appendChild(b);
           return b;
         });

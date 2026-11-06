@@ -44,7 +44,8 @@ var DEFAULTS = {
   stallGraceMs: 5 * 60 * 1000,
   stallCheckMs: 10 * 60 * 1000,
   watchMs: 5000,
-  etaHistoryFile: null // JSON file keeping each kind's render rate between runs (ETA)
+  etaHistoryFile: null, // JSON file keeping each kind's render rate between runs (ETA)
+  limits: null // function () -> { total, perKind }: how many may run now (see _fill)
 };
 
 // A missing file counts as 0 bytes, as in the original panel, so a job that never
@@ -367,9 +368,17 @@ JobPool.prototype.wait = function () {
   });
 };
 
+// opts.limits(): { total, perKind: { r3d: n } }, read each time a job could start (the
+// Full / Half speed switch can change mid-run); without it, maxConcurrent of any kind.
 JobPool.prototype._fill = function () {
-  while (!this.paused && !this.cancelled && this.queue.length && this.runningCount() < this.opts.maxConcurrent) {
-    this._launch(this.queue.shift());
+  var lim = this.opts.limits ? this.opts.limits() : { total: this.opts.maxConcurrent }, self = this;
+  this.opts.maxConcurrent = lim.total; // ETA plays the rest forward with this many at once
+  var per = lim.perKind || {};
+  function runningOf(kind) { return Object.keys(self.running).filter(function (k) { return (self.running[k].kind || "job") === kind; }).length; }
+  for (var i = 0; !this.paused && !this.cancelled && i < this.queue.length && this.runningCount() < lim.total; ) {
+    var kind = this.queue[i].kind || "job";
+    if (per[kind] !== undefined && runningOf(kind) >= per[kind]) { i++; continue; }
+    this._launch(this.queue.splice(i, 1)[0]);
   }
   this._maybeFinish();
 };

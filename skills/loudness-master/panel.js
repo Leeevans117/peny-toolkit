@@ -20,6 +20,7 @@ var path = require("path");
 var childProcess = require("child_process");
 var os = require("os");
 var StepTask = require(path.join(__dirname, "..", "..", "core", "steps.js")).StepTask;
+var ame = require(path.join(__dirname, "..", "..", "core", "ame.js"));
 
 // Tools put in place by the one-click installer first (see Sound Pass); measure.py needs
 // only the standard library, so any python3 does.
@@ -93,7 +94,7 @@ module.exports = function (api) {
     function pass(label, set) {
       step(label);
       api.status(name + ": " + label + " — setting the limiter…");
-      return jsx({ action: "limit", clips: clips, bypass: set.bypass, boost: boostValue(set.boost), max: maxValue(set.max) }).then(function (l) {
+      return jsx({ action: "limit", sequenceId: prep.masterId, clips: clips, bypass: set.bypass, boost: boostValue(set.boost), max: maxValue(set.max) }).then(function (l) {
         var got = l.details.clips[0], row = { pass: label, bypass: set.bypass, boostWanted: r2(set.boost), maxWanted: r2(set.max),
           boostRead: r2(boostDb(got.boost)), maxRead: r2(maxDb(got.max)), limitersAdded: l.details.added, readBack: l.details.clips.every(function (c) { return c.matches; }) };
         report.passes.push(row);
@@ -104,8 +105,12 @@ module.exports = function (api) {
     function render(label, row) {
       api.status(name + ": " + label + " — rendering the master…");
       var wav = path.join(dir, label + ".wav");
-      return jsx({ action: "render", path: wav, preset: preset }).then(function (r) {
-        row.renderMs = r.details.ms;
+      // Media Encoder renders it, so Premiere stays usable (6 Nov 2026).
+      return jsx({ action: "queue", path: wav, preset: preset, sequenceId: prep.masterId }).then(function (q) {
+        return ame.wait(q.details.jobId, wav);
+      }).then(function (r) {
+        if (!r.ok) throw { stop: "Render failed: " + r.error };
+        row.renderMs = r.ms;
         api.status(name + ": " + label + " — measuring…");
         return measure(python, ffmpeg, wav);
       }).then(function (m) {
@@ -183,7 +188,7 @@ module.exports = function (api) {
         "As found: " + r1(report.before.integrated).toFixed(1) + " LUFS, " + r1(report.before.truePeak).toFixed(1) + " dBTP. " +
         (ok ? "On target." : "NOT on target.") + " " + localStamp(new Date());
       report.ok = ok; report.tooLoud = tooLoud; report.tooQuiet = !ok && f.integrated < target.integrated - target.tolerance;
-      return jsx({ action: "marker", name: title, comment: comment }).then(function (mk) { report.marker = mk.details; report.markerName = title; return f; });
+      return jsx({ action: "marker", sequenceId: prep.masterId, name: title, comment: comment }).then(function (mk) { report.marker = mk.details; report.markerName = title; return f; });
     }).then(function (f) {
       var b = report.before, ok = report.ok;
       fs.writeFileSync(path.join(dir, "report.json"), JSON.stringify(report, null, 1));

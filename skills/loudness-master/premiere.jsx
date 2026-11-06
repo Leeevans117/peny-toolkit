@@ -23,13 +23,16 @@
 
   T.skills["loudness-master"] = function (params) {
     var action = params.action || "prepare";
-    var seq = T.activeSequence();
-    if (!seq) return T.fail("No active sequence. Open the sequence to master first.");
+    // After prepare the panel names the master (sequenceId), so Lee can open other sequences
+    // while it renders in Media Encoder.
+    var seq = params.sequenceId ? T.findSequenceById(params.sequenceId) : T.activeSequence();
+    if (!seq) return T.fail(params.sequenceId ? "The MASTER sequence is no longer in the open project; nothing was changed." : "No active sequence. Open the sequence to master first.");
     if (action === "prepare") return prepare(seq, params);
     if (action === "probe") return probe(seq, params);
     if (!MASTER_RE.test(String(seq.name)) || !T.isToolkitCopy(seq)) return T.fail("\"" + seq.name + "\" is not a MASTER sequence; only the master is changed.");
     if (action === "limit") return limit(seq, params);
     if (action === "render") return render(seq, params);
+    if (action === "queue") return T.queueRender(seq, params.path, params.preset, 0);
     if (action === "marker") return marker(seq, params);
     return T.fail("Unknown action: " + action);
   };

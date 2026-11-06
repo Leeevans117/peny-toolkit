@@ -28,6 +28,7 @@
     if (action === "unum") return backToLee(was, seq, unum(seq, params));
     if (action === "mark") return mark(seq, params);
     if (action === "renderaudio") return renderAudio(seq, params);
+    if (action === "queueaudio") return T.queueRender(seq, params.path, params.preset, 0);
     if (action === "probe") return probe(seq, params);
     if (action === "dump") return T.ok("Pieces " + params.a + "-" + params.b, { pieces: around(seq, params.a, params.b) });
     if (action === "cutraise") return backToLee(was, seq, cutraise(seq, params));

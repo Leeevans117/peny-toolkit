@@ -28,6 +28,7 @@ var http = require("http");
 var childProcess = require("child_process");
 var pipeline = require("./pipeline.js");
 var fillers = require("./fillers.js");
+var ame = require(path.join(__dirname, "..", "..", "core", "ame.js"));
 
 var FFMPEG = [BUNDLED("ffmpeg"), "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"];
 var WHISPER = [BUNDLED("whisper-cli"), "/opt/homebrew/bin/whisper-cli", "/usr/local/bin/whisper-cli"];
@@ -86,8 +87,12 @@ module.exports = function (api) {
     if ((params.track || "").trim()) return fromFiles(ffmpeg, scan, dir);
     var raw = path.join(dir, "sequence-render.wav"), final = path.join(dir, "interview.wav");
     api.status("Reading the sound of \"" + scan.sequence + "\"…");
-    return api.evalSkill({ action: "renderaudio", sequenceId: scan.sequenceId, sequenceName: scan.sequence, path: raw, preset: path.join(api.skillDir, "wav-float.epr") }).then(function (r) {
-      if (!r.ok) throw { stop: r.error };
+    // Media Encoder renders it, so Premiere stays usable (6 Nov 2026).
+    return api.evalSkill({ action: "queueaudio", sequenceId: scan.sequenceId, sequenceName: scan.sequence, path: raw, preset: path.join(api.skillDir, "wav-float.epr") }).then(function (q) {
+      if (!q.ok) throw { stop: q.error };
+      return ame.wait(q.details.jobId, raw);
+    }).then(function (r) {
+      if (!r.ok) throw { stop: "Could not render the sequence's sound: " + r.error };
       if (!fs.existsSync(raw) || !fs.statSync(raw).size) throw { stop: "Premiere didn't write the sequence's sound (" + raw + ")." };
       return run(ffmpeg, ["-hide_banner", "-loglevel", "error", "-y", "-i", raw, "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", final]);
     }).then(function () {

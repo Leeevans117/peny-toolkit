@@ -11,6 +11,7 @@
  * "preview" walks and plans without importing anything.
  */
 var fs = require("fs");
+var IMPORT_PIECE = 10; // files per Premiere import call (about 1 s; 587 in one call froze Premiere 35 s)
 var path = require("path");
 
 module.exports = function (api) {
@@ -80,6 +81,30 @@ module.exports = function (api) {
       var e = pending[key] || (pending[key] = { segs: segs, plain: [], numbered: [] });
       (numbered ? e.numbered : e.plain).push(file);
     }
+    // A bin's files go in pieces of IMPORT_PIECE with a pause between, so Premiere answers
+    // while it imports (6 Nov 2026). A numbered still sequence stays one call.
+    function importPieces(segs, files, numbered) {
+      var n = numbered ? files.length : IMPORT_PIECE, all = { imported: [], failed: [], createdBins: [] }, last = null, bad = null;
+      function next(i) {
+        if (i >= files.length) {
+          last.details = all;
+          if (bad) { bad.details = all; return bad; }
+          last.summary = all.imported.length + " imported into \"" + segs.join(" / ") + "\"" + (all.failed.length ? ", " + all.failed.length + " failed" : "") + ".";
+          return last;
+        }
+        var part = files.slice(i, i + n);
+        return api.evalSkill({ action: "import", chain: segs, paths: part, numbered: numbered, bootPrefixes: bootPrefixes }).then(function (r) {
+          var d = r.details || {};
+          all.imported = all.imported.concat(d.imported || []);
+          all.failed = all.failed.concat(d.failed || (r.ok ? [] : part));
+          all.createdBins = all.createdBins.concat(d.createdBins || []);
+          last = r; all.importFilesReturned = d.importFilesReturned;
+          if (!r.ok && !bad) bad = r;
+          return new Promise(function (res) { setTimeout(res, 300); }).then(function () { return next(i + n); });
+        });
+      }
+      return next(0);
+    }
     function importGroup(segs, files, numbered) {
       if (!files.length) return Promise.resolve();
       var plan = { bin: segs.join(" / "), files: files.map(function (f) { return path.relative(root, f); }), numberedStills: numbered };
@@ -88,7 +113,7 @@ module.exports = function (api) {
         files.forEach(function (f) { if (walkLogic.isAudioFile(f)) stats.audioImported++; else stats.videoImported++; });
         return Promise.resolve();
       }
-      return api.evalSkill({ action: "import", chain: segs, paths: files, numbered: numbered, bootPrefixes: bootPrefixes }).then(function (r) {
+      return importPieces(segs, files, numbered).then(function (r) {
         var d = r.details || {};
         (d.imported || []).forEach(function (f) { if (walkLogic.isAudioFile(f)) stats.audioImported++; else stats.videoImported++; });
         (d.createdBins || []).forEach(function (b) { createdBins.push(b); });

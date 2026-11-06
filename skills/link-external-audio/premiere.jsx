@@ -3,11 +3,19 @@
 // within its start/end pulled in by 0.02 s, check the selection, linkSelection(),
 // then read the real link state back with TrackItem.getLinkedItems(). A success
 // return from linkSelection() is never trusted.
+//
+// Small pieces (6 Nov 2026, so Lee can keep editing): each call links clips for about
+// params.budgetMs, then returns details.next; main.js calls again after a short pause with
+// params.resume (where to carry on) and params.prior (counts so far) until next is gone.
+// A piece runs only on the sequence the first piece ran on (params.sequenceId).
 PenyToolkit.skills["link-external-audio"] = function (params) {
   var T = PenyToolkit;
   var EDGE = 0.02;
   var seq = T.activeSequence();
   if (!seq) return T.fail("No active sequence.");
+  if (params.sequenceId && String(seq.sequenceID) !== String(params.sequenceId)) {
+    return T.fail("Stopped: another sequence was opened while Link ran. Open the TOOLKIT COPY again and press Step 3 to finish (clips already linked are skipped).");
+  }
   if (!T.isToolkitCopy(seq)) {
     return T.fail("Refused: the active sequence \"" + seq.name + "\" does not end in \"" + T.COPY_SUFFIX +
       "\". Run Make safe copy first and run this on the copy.");
@@ -36,12 +44,25 @@ PenyToolkit.skills["link-external-audio"] = function (params) {
       if (s0 >= from - 1e-6 && s0 < to) cams.push({ item: vc[c], track: t });
     }
   }
-  cams.sort(function (a, b) { return parseFloat(a.item.start.ticks) - parseFloat(b.item.start.ticks); });
+  cams.sort(function (a, b) { return parseFloat(a.item.start.ticks) - parseFloat(b.item.start.ticks) || a.track - b.track; });
+  var camList = cams, allCams = cams.length, prior = params.prior || {}, t0 = new Date().getTime(), next = null;
+  if (params.resume) {
+    var rs = parseFloat(params.resume.ticks), rt = params.resume.track, rest = [];
+    for (c = 0; c < cams.length; c++) {
+      var cs = parseFloat(cams[c].item.start.ticks);
+      if (cs > rs || (cs === rs && cams[c].track > rt)) rest.push(cams[c]);
+    }
+    cams = rest;
+  }
 
   var linked = [], already = [], failed = [], skipped = [];
   T.deselectAll(seq);
 
   for (var i = 0; i < cams.length; i++) {
+    if (params.budgetMs && i > 0 && new Date().getTime() - t0 > params.budgetMs) {
+      next = { ticks: String(cams[i - 1].item.start.ticks), track: cams[i - 1].track };
+      break;
+    }
     var cam = cams[i].item;
     var camId = String(cam.nodeId);
     var s = parseFloat(cam.start.ticks), e = parseFloat(cam.end.ticks);
@@ -123,11 +144,21 @@ PenyToolkit.skills["link-external-audio"] = function (params) {
   var details = {
     sequence: String(seq.name),
     range: { from: T.fmt(from), to: to === Infinity ? "end" : T.fmt(to) },
-    cameraClips: cams.length,
     linked: linked, alreadyLinked: already, failed: failed, skipped: skipped
   };
-  var summary = cams.length + " camera clips: " + linked.length + " linked and verified, " + already.length +
-    " already linked, " + failed.length + " failed, " + skipped.length + " skipped.";
+  var noExt = 0;
+  for (k = 0; k < skipped.length; k++) if (skipped[k].reason === "no external audio under this clip") noExt++;
+  details.noExtCount = noExt;
+  if (next) {
+    details.next = next;
+    details.sequenceId = String(seq.sequenceID);
+    return T.ok("Linked up to " + T.fmt(T.sec(next.ticks)) + "…", details);
+  }
+  details.cameraClips = allCams;
+  var nLinked = linked.length + (prior.linked || 0), nAlready = already.length + (prior.alreadyLinked || 0);
+  var nFailed = failed.length + (prior.failed || 0), nSkipped = skipped.length + (prior.skipped || 0);
+  var summary = allCams + " camera clips: " + nLinked + " linked and verified, " + nAlready +
+    " already linked, " + nFailed + " failed, " + nSkipped + " skipped.";
 
   // Lee, 2 Oct 2026: once the synced wav pieces are linked, remove the whole wavs parked on
   // the timeline (e.g. dropped after the clips for Sync). Only when every clip in range
@@ -135,9 +166,9 @@ PenyToolkit.skills["link-external-audio"] = function (params) {
   // that: is not a camera clip, overlaps no video clip, is linked to nothing, and whose file
   // is already linked under a camera clip. Project items and files are never touched.
   var removed = [];
-  if (!failed.length && (linked.length || already.length)) {
+  if (!nFailed && (nLinked || nAlready)) {
     var camSet = {}, usedPaths = {}, parked = [];
-    for (k = 0; k < cams.length; k++) camSet[String(cams[k].item.name)] = true;
+    for (k = 0; k < camList.length; k++) camSet[String(camList[k].item.name)] = true;
     for (t = 0; t < seq.audioTracks.numTracks; t++) {
       var tcl = seq.audioTracks[t].clips;
       for (c = 0; c < tcl.numItems; c++) {
@@ -174,11 +205,10 @@ PenyToolkit.skills["link-external-audio"] = function (params) {
 
   // Seen 2 Oct 2026: the wavs sat on A5 after the camera clips (not synced), so every clip
   // was skipped with "no external audio". Say where the external audio is instead.
-  var noExt = 0;
-  for (k = 0; k < skipped.length; k++) if (skipped[k].reason === "no external audio under this clip") noExt++;
+  noExt += prior.noExtCount || 0;
   if (noExt) {
     var camNames = {};
-    for (k = 0; k < cams.length; k++) camNames[String(cams[k].item.name)] = true;
+    for (k = 0; k < camList.length; k++) camNames[String(camList[k].item.name)] = true;
     var ext = null;
     for (t = 0; t < seq.audioTracks.numTracks; t++) {
       var ac = seq.audioTracks[t].clips;
@@ -190,11 +220,11 @@ PenyToolkit.skills["link-external-audio"] = function (params) {
     }
     var hint = ext
       ? " External audio is on the timeline (first: \"" + ext.name + "\" on " + ext.track + " at " + T.fmt(ext.start) +
-        ") but none of it sits under " + (noExt === cams.length ? "any camera clip" : noExt + " of the camera clips") + ". Sync it under the clips first, then run Link again."
+        ") but none of it sits under " + (noExt === allCams ? "any camera clip" : noExt + " of the camera clips") + ". Sync it under the clips first, then run Link again."
       : " No external audio found on any audio track of this sequence.";
     summary += hint;
     details.hint = hint;
   }
-  if (failed.length) return { ok: false, error: summary, summary: summary, details: details };
+  if (nFailed) return { ok: false, error: summary, summary: summary, details: details };
   return T.ok(summary, details);
 };

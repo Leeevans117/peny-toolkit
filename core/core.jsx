@@ -235,6 +235,36 @@ var PenyToolkit = $.global.PenyToolkit;
   };
   T.trackLabel = function (kind, t) { return (kind === "video" ? "V" : "A") + (t + 1); };
 
+  // ---- Media Encoder renders (6 Nov 2026: Premiere stays usable while they render) ----
+  // Queues seq to Media Encoder and returns at once. When the job ends, Media Encoder calls
+  // back into this engine and T.AME_DIR/<jobId>.json is written ({ok, path} or {ok:false,
+  // error}); core/ame.js waits for it. workArea: 0 whole sequence, 1 in to out.
+  T.AME_DIR = "/tmp/peny-toolkit/ame";
+  function ameNote(jobID, ok, text) {
+    try {
+      Folder(T.AME_DIR).create();
+      var f = new File(T.AME_DIR + "/" + jobID + ".json");
+      f.encoding = "UTF-8";
+      if (f.open("w")) { f.write(T.json({ ok: ok, path: ok ? String(text) : "", error: ok ? "" : String(text) })); f.close(); }
+    } catch (e) {}
+  }
+  $.global.PenyAmeDone = function (jobID, outputFilePath) { ameNote(jobID, true, outputFilePath); };
+  $.global.PenyAmeError = function (jobID, errorMessage) { ameNote(jobID, false, errorMessage || "Media Encoder reported an error"); };
+  $.global.PenyAmeCancel = function (jobID) { ameNote(jobID, false, "cancelled in Media Encoder"); };
+  T.queueRender = function (seq, outPath, preset, workArea) {
+    var enc = app.encoder;
+    if (!enc) return T.fail("Media Encoder is not available to scripting.");
+    enc.bind("onEncoderJobComplete", $.global.PenyAmeDone);
+    enc.bind("onEncoderJobError", $.global.PenyAmeError);
+    enc.bind("onEncoderJobCanceled", $.global.PenyAmeCancel);
+    try { enc.launchEncoder(); } catch (e0) {}
+    var id = null, err = null;
+    try { id = enc.encodeSequence(seq, outPath, preset, workArea, 1); } catch (e1) { err = String(e1); }
+    if (err || !id || String(id) === "0") return T.fail("Media Encoder would not take the render: " + (err || String(id)));
+    try { enc.startBatch(); } catch (e2) {}
+    return T.ok("Queued in Media Encoder.", { jobId: String(id), path: outPath, ame: true });
+  };
+
   // ---- Entry point used by the panel for every skill run ----
   T.run = function (skillId, params) {
     var started = new Date().getTime();

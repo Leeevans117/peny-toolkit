@@ -2,6 +2,37 @@
 
 How each skill works and how it was tested. The short list is in the README's "Skills" table.
 
+## Keeping Premiere usable while a skill runs (6 Nov 2026)
+
+Premiere freezes only while an ExtendScript call runs, so long calls were removed:
+- Renders go to Media Encoder (`T.queueRender` in core/core.jsx, waited for by core/ame.js):
+  Master for YouTube and Find answers. Premiere freezes ~0.3 s to queue; Media Encoder's
+  callback writes /tmp/peny-toolkit/ame/<jobId>.json when done. The job is a snapshot taken
+  when it is queued (edits made after queuing are not in the file). A preset must have its
+  own PresetID: with the PresetID of Media Encoder's "Waveform Audio 48kHz 16-bit" (the old
+  wav-float.epr) Media Encoder writes 16-bit whatever the preset says. Tested in TEST.prproj:
+  TONY INTRO 14.5 min, Media Encoder render sample-identical to exportAsMediaDirect, 21 s
+  vs 24 s frozen. Sound Pass still uses exportAsMediaDirect (its wav-float.epr has the old ID).
+- Small pieces: Link Step 3 ("pieceMs" in skill.json, main.js evalPieces: ~0.3 s of work per
+  call, 0.3 s pause, stops if another sequence is opened), Proxies Attach (10 per call),
+  Ingest import (10 files per call). Day 4 R5 Sync copy (172 clips): Link 21 s in one call ->
+  pieces of 1.3-1.6 s, 90 s in all (each piece re-reads the timeline, ~1.2 s on this one).
+- Not split: Cut, raise & trim (its relink and raise use the link groups read before the
+  first cut, and it needs the Cut version active), Colour Apply (importSequences).
+- The panel process runs at nice 10 (main.js), so ffmpeg, REDline, python, whisper and an
+  ollama it starts inherit it.
+- Speed switch on Proxies and Ingest + Proxies ("shared" segment input, one value in
+  ~/.peny-toolkit/settings.json, read each time a render could start): Full = 4 renders at
+  once; Half (keep working) = 1 REDline and at most 2 renders at once. Measured on the Mac
+  mini M4 Pro (14 cores), A160 R3D clip: 1 REDline ~7.5 cores, 4 at once ~12.9; 2 at once
+  ~12.0 (so not used); taskpolicy -b 12x slower; --decodeThreads does not limit CPU; ffmpeg
+  4 at once ~4.8 cores. In TEST.prproj Half rendered 1 at a time (12-15 s per clip), switching
+  to Full mid-run went to 4 at once. tools/pool-limits-test.js checks the limits.
+  Not yet checked: playback smoothness in Half (REDline also uses the GPU).
+- Undo while a job runs (6 Nov 2026, TEST): Edit > Undo takes back the newest step on
+  Premiere's history, which can be the Toolkit's (it took back the last "Attach Proxies" of a
+  run). A running job does not see it; its read-back covers only its own call.
+
 ## Link External Audio (app)
 
 Three steps: 1 Make safe copy, 2 Sync external audio, 3 Link external audio. Make safe copy and Sync are hidden skills run from this app's buttons ("skill" on an action)
