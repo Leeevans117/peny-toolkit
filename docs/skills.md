@@ -61,7 +61,7 @@ Links each camera clip to its camera audio and the external wav under it; verifi
 
 Renders ProRes Proxy files (ffmpeg / REDline) into a folder tree mirroring the bins, attaches/detaches them; Pause/Resume/Cancel. Never deletes or overwrites a proxy; R3D wins a name clash; same media in two bins renders once
 
-**Tested:** Port of Proxy Automation. Tested 2 Oct 2026 on a 2-clip scratch bin (Canon + R3D) in the TEST project: render, attach, detach, pause/resume, cancel. Not yet tested at scale
+**Tested:** Port of Proxy Automation. Tested 2 Oct 2026 on a 2-clip scratch bin (Canon + R3D) in the TEST project: render, attach, detach, pause/resume, cancel. Not yet tested at scale. 9 Nov 2026 (issue 1, Orbea Canonball): the render no longer uses the videotoolbox h264 decoder - it dropped the first 9 frames of Sony FX30 clips (every Orbea proxy, re-rendered "V2" included, stuttered with a dropped frame and mis-matched the source on full-res relink). Software decode + prores_videotoolbox verified frame-exact (C4470.MP4 204 frames = 204 in proxy, was 195). A render whose proxy frame count differs from the source now fails the job, and plan/attach flag such existing proxies as "broken proxy on disk" instead of attaching them (verified against the broken C4470 proxy: 195 vs 204, and a JobPool run of the old command, which was caught). Not yet verified by Lee re-linking full-res media in Premiere
 
 ## Ingest (import-footage)
 

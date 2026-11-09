@@ -82,6 +82,31 @@ function isCompleteMov(p) {
   }
 }
 
+// A finished .mov can still be wrong: the Orbea Canonball proxies (issue 1) had a whole
+// moov atom and every channel, but 9 fewer frames than their sources, and played with a
+// dropped frame in Premiere. A proxy whose video frame count differs from the source must
+// not be attached (these files go to remote editors). Compares the nb_frames each
+// container recorded (header read only, no decoding, ~instant).
+// null = cannot be checked (no ffprobe, or nb_frames missing, e.g. R3D/MXF);
+// string = a reason the output must not be used.
+function frameCountMismatch(job) {
+  if (!job.ffprobe || !job.mediaPath) return null;
+  function frames(p) {
+    try {
+      var out = childProcess.execFileSync(job.ffprobe,
+        ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=nb_frames", "-of", "csv=p=0", p],
+        { encoding: "utf-8", timeout: 30000 });
+      var n = parseInt(String(out).split("\n")[0], 10);
+      return isFinite(n) && n > 0 ? n : null;
+    } catch (e) { return null; }
+  }
+  var a = frames(job.outputPath), b = frames(job.mediaPath);
+  if (a === null || b === null) return null;
+  if (a === b) return null;
+  return "frame check failed: the proxy has " + a + " video frames, the source " + b +
+    " - the render lost or duplicated frames and this proxy is broken; delete the file and re-render";
+}
+
 /* new JobPool({ maxConcurrent, log, onChange })
  * pool.add({ key, cmd, outputPath, label })   key must be unique (outputPath is fine)
  * pool.start() / pause() / resume() / cancel()
@@ -408,6 +433,10 @@ JobPool.prototype._launch = function (job) {
     } else if (job.outputPath && !isCompleteMov(job.outputPath)) {
       job.state = "failed";
       job.reason = "process exited cleanly but the output has no moov atom (incomplete)";
+    } else if (job.outputPath) {
+      var mismatch = frameCountMismatch(job);
+      if (mismatch) { job.state = "failed"; job.reason = mismatch; }
+      else job.state = "ok";
     } else {
       job.state = "ok";
     }
