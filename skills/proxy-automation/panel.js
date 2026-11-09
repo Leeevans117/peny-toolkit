@@ -95,7 +95,13 @@ module.exports = function (api) {
     }
     if (!ffmpeg) return null;
     // -n: never overwrite (the original used -y).
-    return q(ffmpeg) + " -n -hwaccel videotoolbox -i " + q(entry.mediaPath) +
+    // No -hwaccel videotoolbox: the videotoolbox h264 decoder drops the first ~9 frames of
+    // Sony FX30 clips (issue 1, Orbea Canonball: C4472.MP4 = 588 frames, proxy = 579,
+    // "hardware accelerator failed to decode picture", every such proxy stuttered with a
+    // dropped frame in Premiere and mis-matched the source when full-res was re-linked).
+    // Tested 9 Nov 2026: software decode + prores_videotoolbox is frame-exact (588 = 588),
+    // so the ProRes encoder stays hardware.
+    return q(ffmpeg) + " -n -i " + q(entry.mediaPath) +
       ' -map 0:v:0 -map "0:a?" -vf scale=' + SCALE_W + ":" + SCALE_H +
       " -c:v prores_videotoolbox -profile:v 0 -pix_fmt yuv422p10le -c:a pcm_s24le " + q(entry.outputPath);
   }
@@ -133,6 +139,32 @@ module.exports = function (api) {
     }
     return (durationCache[file] = d);
   }
+  // Video frame count of a file by ffprobe, or null when it cannot be read (offline, R3D).
+  var frameCache = {};
+  function frameCount(file) {
+    if (file in frameCache) return frameCache[file];
+    var n = null, ffmpeg = firstExisting(FFMPEG);
+    if (ffmpeg && extOf(file) !== "r3d") {
+      try {
+        var out = require("child_process").execFileSync(path.join(path.dirname(ffmpeg), "ffprobe"),
+          ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=nb_frames", "-of", "csv=p=0", file],
+          { encoding: "utf-8", timeout: 30000 });
+        var v = parseInt(String(out).split("\n")[0], 10);
+        if (isFinite(v) && v > 0) n = v;
+      } catch (e) { n = null; }
+    }
+    return (frameCache[file] = n);
+  }
+  // A proxy with a different frame count than its source is broken, even though it looks
+  // finished (issue 1: the Orbea Canonball proxies lost 9 frames in render and stuttered
+  // in Premiere; the re-rendered "V2" set lost them again). { proxy, source } or null.
+  function brokenFrames(proxyFile, mediaPath) {
+    if (!mediaPath) return null;
+    var a = frameCount(proxyFile), b = frameCount(mediaPath);
+    if (a === null || b === null) return null;
+    return a === b ? null : { proxy: a, source: b };
+  }
+
   // A proxy found away from the clip's own folder only counts if it is as long as the clip:
   // two different files can share a name (Les Gets: A_0044C902...CANON.mp4 in the shoot
   // root, 68.6 s, and another in YouthCamp/Day2/R5, 12.7 s), and the old lookup gave the
@@ -194,13 +226,22 @@ module.exports = function (api) {
       var rec = { nodeId: it.nodeId, name: it.name, mediaPath: it.mediaPath, binPath: it.binPath };
       if (it.offline) { rec.reason = "media offline"; p.skipped.push(rec); return; }
       if (it.hasProxy && it.proxyPath && fs.existsSync(it.proxyPath) && jobs.isCompleteMov(it.proxyPath)) {
-        rec.reason = "proxy attached: " + it.proxyPath; p.done.push(rec); return;
+        var badAtt = brokenFrames(it.proxyPath, it.mediaPath);
+        if (badAtt) { rec.reason = "attached proxy is broken: " + it.proxyPath + " has " + badAtt.proxy +
+          " video frames, the source " + badAtt.source + " (frames lost in an earlier render)"; p.skipped.push(rec); }
+        else { rec.reason = "proxy attached: " + it.proxyPath; p.done.push(rec); }
+        return;
       }
       var nameNoExt = stripExt(it.name);
       var found = resolveProxy(root, it.binPath, nameNoExt, index, it.mediaPath);
       if (found) {
-        if (jobs.isCompleteMov(found)) { rec.reason = "proxy on disk: " + found; p.done.push(rec); }
-        else { rec.reason = "incomplete proxy on disk, left alone (delete it by hand to re-render): " + found; p.skipped.push(rec); }
+        if (!jobs.isCompleteMov(found)) { rec.reason = "incomplete proxy on disk, left alone (delete it by hand to re-render): " + found; p.skipped.push(rec); }
+        else {
+          var bad = brokenFrames(found, it.mediaPath);
+          if (bad) { rec.reason = "broken proxy on disk: " + found + " has " + bad.proxy +
+            " video frames, the source " + bad.source + " (frames lost in an earlier render) - delete it by hand to re-render"; p.skipped.push(rec); }
+          else { rec.reason = "proxy on disk: " + found; p.done.push(rec); }
+        }
         return;
       }
       var mediaKey = it.mediaPath;
@@ -295,10 +336,14 @@ module.exports = function (api) {
         var cmd = encodeCommand(r);
         if (!cmd) { r.reason = "no " + (extOf(r.mediaPath) === "r3d" ? "REDline or ffmpeg" : "ffmpeg") + " found"; noCmd.push(r); return; }
         var isR3d = extOf(r.mediaPath) === "r3d";
+        var ff = firstExisting(FFMPEG);
         pool.add({ key: r.outputPath, cmd: cmd, outputPath: r.outputPath, label: r.binPath + "/" + r.name,
           partPath: isR3d ? path.join(path.dirname(r.outputPath), r.nameNoExt + ".redline-part.mov") : null,
-          weight: sourceBytes(r.mediaPath), kind: extOf(r.mediaPath) === "r3d" ? "r3d" : "ffmpeg",
-          group: r.camera });
+          weight: sourceBytes(r.mediaPath), kind: isR3d ? "r3d" : "ffmpeg",
+          group: r.camera,
+          // core/jobs.js refuses the proxy when its frame count differs from the source
+          // (issue 1: the Orbea Canonball renders lost 9 frames and looked finished).
+          mediaPath: r.mediaPath, ffprobe: ff ? path.join(path.dirname(ff), "ffprobe") : null });
       });
       var startedAt = Date.now();
       pool.start();
@@ -344,16 +389,18 @@ module.exports = function (api) {
     if (c.error) return Promise.resolve({ ok: false, error: c.error });
     return listScope(params).then(function (res) {
       if (!res.ok) return res;
-      var index = indexProxies(c.root), pairs = [], missing = [], incomplete = [], already = [];
+      var index = indexProxies(c.root), pairs = [], missing = [], incomplete = [], already = [], broken = [];
       res.details.items.forEach(function (it) {
         var found = resolveProxy(c.root, it.binPath, stripExt(it.name), index, it.mediaPath);
         if (!found) { missing.push({ name: it.name, bin: it.binPath }); return; }
         if (!jobs.isCompleteMov(found)) { incomplete.push({ name: it.name, bin: it.binPath, file: found }); return; }
+        var bad = brokenFrames(found, it.mediaPath);
+        if (bad) { broken.push({ name: it.name, bin: it.binPath, file: found, frames: bad.proxy, source: bad.source }); return; }
         if (it.hasProxy && it.proxyPath && path.resolve(it.proxyPath) === path.resolve(found)) { already.push({ name: it.name, file: found }); return; }
         pairs.push({ nodeId: it.nodeId, path: found });
       });
       // Small pieces with a pause between, so Premiere answers while it attaches (6 Nov 2026).
-      var d = { attached: [], failed: [] }, okAll = true;
+      var d = { attached: [], failed: [], broken: broken }, okAll = true;
       function piece(i) {
         if (i >= pairs.length) return Promise.resolve({ ok: okAll, details: d });
         return api.evalSkill({ action: "attach", pairs: pairs.slice(i, i + ATTACH_PIECE) }).then(function (r) {
@@ -367,9 +414,11 @@ module.exports = function (api) {
       }
       return piece(0).then(function (r) {
         var summary = (d.attached || []).length + " attached and verified, " + already.length + " already attached, " +
-          (d.failed || []).length + " failed, " + missing.length + " have no proxy file, " + incomplete.length + " proxy files incomplete." + (r.error ? " Stopped: " + r.error : "");
-        return { ok: r.ok && !incomplete.length, summary: summary, error: summary, details: {
-          attached: d.attached || [], failed: d.failed || [], alreadyAttached: already, noProxyFile: missing, incomplete: incomplete } };
+          (d.failed || []).length + " failed, " + missing.length + " have no proxy file, " + incomplete.length +
+          " proxy files incomplete, " + broken.length + " broken (frames lost in render, left detached)." + (r.error ? " Stopped: " + r.error : "");
+        return { ok: r.ok && !incomplete.length && !broken.length, summary: summary, error: summary, details: {
+          attached: d.attached || [], failed: d.failed || [], alreadyAttached: already, noProxyFile: missing,
+          incomplete: incomplete, broken: broken } };
       });
     });
   };

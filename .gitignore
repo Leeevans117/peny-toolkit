@@ -10,3 +10,6 @@ anthropic_key
 *.key
 *.pem
 .env
+
+# local pre-change backup (not part of the toolkit)
+.backup/
