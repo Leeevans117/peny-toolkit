@@ -11,8 +11,10 @@
  * 5. The answers are grouped under the interviewer's questions (the interviewer's lines with a
  *    "?", no model pass), and Ollama groups the questions into broad themes (pipeline.js group,
  *    themes).
- * 6. premiere.jsx "copy": "<sequence> Cut version" (unless already on one), then "mark":
- *    question (Chapter) and theme (Segmentation) markers, topics as clip markers, read back.
+ * 6. premiere.jsx "copy": "<sequence> Cut" (unless already on one), then "mark":
+ *    question (Chapter) and theme (Segmentation) markers, topics as clip markers, read back,
+ *    then "cutraise" with trim off on that copy (Lee, 6 Nov 2026: one button).
+ * Trim: premiere.jsx "trim" makes "<Cut> Trimmed" with the dead bits between answers removed.
  * Remove ums & uhs (unum): steps 1-2 on the active sequence, then fillers.js finds the
  * fillers (whisper on short clips, each checked twice, snapped to the sound) and
  * premiere.jsx "unum" cuts them on a copy "<sequence> No ums"; fillers.csv lists them all.
@@ -342,21 +344,26 @@ module.exports = function (api) {
       });
     }).then(function () {
       // By now Lee may be on another sequence: everything goes to the one the run started on.
-      api.status("Making the Cut version of \"" + scan.sequence + "\"…");
+      api.status("Making the Cut copy of \"" + scan.sequence + "\"…");
       return api.evalSkill({ action: "copy", sequenceId: scan.sequenceId, sequenceName: scan.sequence });
     }).then(function (c) {
       if (!c.ok) throw { stop: c.error };
       api.status("Adding " + questions.length + " question, " + themes.length + " theme and " + answers.length + " topic markers to \"" + c.details.copyName + "\"…");
       return api.evalSkill({ action: "mark", sequenceId: c.details.copyId, sequenceName: c.details.copyName, answers: answers, questions: questions, themes: themes }).then(function (m) { return { copy: c, mark: m }; });
     }).then(function (o) {
+      if (!o.mark.ok) return o; // markers not all on: nothing is cut
+      api.status("Cutting and raising the answers on \"" + o.copy.details.copyName + "\"…");
+      return api.evalSkill({ action: "cutraise", sequenceId: o.copy.details.copyId, sequenceName: o.copy.details.copyName, trim: false }).then(function (cr) { o.cut = cr; return o; });
+    }).then(function (o) {
       lap("total");
-      var d = o.mark.details || {};
-      var summary = (o.mark.ok ? "" : "Not all markers went on. ") + o.mark.summary.replace(/\.$/, "") + "" +
-        (o.copy.details.made ? " (a new Cut version; the original is untouched)" : "") + ". Took " + fmt(times.total) +
+      var d = o.mark.details || {}, cd = o.cut ? o.cut.details || {} : {};
+      var summary = (o.mark.ok ? "" : "Not all markers went on, so nothing was cut. ") + o.mark.summary.replace(/\.$/, "") + "" +
+        (o.copy.details.made ? " (a new copy; the original is untouched)" : "") +
+        (o.cut ? ". Cut & raise: " + (o.cut.summary || o.cut.error).replace(/\.$/, "") : "") + ". Took " + fmt(times.total) +
         " (audio " + times.audio + " s, transcript " + (times.transcribe - times.audio) + " s, answers " + (times.answers - times.transcribe) + " s). List: " + path.join(dir, "answers.csv");
       api.status(summary);
-      return { ok: !!o.mark.ok, summary: summary, error: summary, details: {
-        sequence: d.sequence, markers: d.checked, questions: questions.length, themes: themes.length, topics: d.topics, wrong: d.wrong, failed: d.failed, workFolder: dir, stats: stats, times: times } };
+      return { ok: !!(o.mark.ok && o.cut && o.cut.ok), summary: summary, error: summary, details: {
+        sequence: d.sequence, markers: d.checked, cut: cd, skipped: cd.skipped, unmatched: cd.unmatched, questions: questions.length, themes: themes.length, topics: d.topics, wrong: d.wrong, failed: d.failed, workFolder: dir, stats: stats, times: times } };
     }).catch(function (e) {
       var msg = e && e.stop ? e.stop : "Interview Selects stopped: " + (e && e.message ? e.message : String(e));
       api.status(msg);
@@ -404,7 +411,7 @@ module.exports = function (api) {
     }
     return grouped.then(function () {
       if (server) { try { server.kill(); } catch (eK) {} server = null; }
-      api.status("Making the Cut version of the sequence…");
+      api.status("Making the Cut copy of the sequence…");
       return api.evalSkill({ action: "copy" });
     }).then(function (c) {
       if (!c.ok) return c;
@@ -491,5 +498,11 @@ module.exports = function (api) {
     return api.evalSkill(p).then(function (r) { api.status(r.ok ? r.summary : r.error); return r; });
   }
 
-  return { actions: { find: find, cutraise: cutraise, unum: unum, cancel: cancel }, busy: function () { return children.length ? children.length + " child process(es)" : null; } };
+  // Trim (Lee, 6 Nov 2026): a "<Cut> Trimmed" copy with the dead bits between answers removed.
+  function trim() {
+    api.status("Making a Trimmed copy and taking out everything between the answers…");
+    return api.evalSkill({ action: "trim" }).then(function (r) { api.status(r.ok ? r.summary : r.error); return r; });
+  }
+
+  return { actions: { find: find, cutraise: cutraise, trim: trim, unum: unum, cancel: cancel }, busy: function () { return children.length ? children.length + " child process(es)" : null; } };
 };

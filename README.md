@@ -137,7 +137,7 @@ section there before changing it.
 | Proxies | Renders ProRes Proxy files and attaches/detaches them | 2 Oct 2026, small bin only; not at scale |
 | Ingest (import-footage) | Imports a footage folder as bins mirroring its tree | 2 Oct 2026, TEST project, real RED clips |
 | Ingest + proxies | Import, then render and attach proxies, in one button | 2 Oct 2026, TEST project, Canon/Sony/RED |
-| Interviews (interview-selects) | Transcribes, finds answers, makes "<sequence> Cut version" with markers; Cut, raise & trim | 30 Oct 2026, Whistler; partly unverified |
+| Interviews (interview-selects) | Transcribes, finds answers, makes "<sequence> Cut" with markers, cuts & raises the answers; Trim makes "<Cut> Trimmed" | 30 Oct 2026, Whistler; partly unverified |
 | Interviews > Remove ums & uhs (unum) | Finds and cuts fillers on a "<sequence> No ums" copy | 23 Oct 2026, Episode_1_Korea; not checked by ear |
 | Interviews > Sync Interviews (interview-sync) | Syncs a whole interview timeline by sound, then links | 29 Oct 2026, Whistler copies; some modes untested |
 | Sound Pass | Levels interview voice per clip on a safe copy; rides quiet moments | 3 Oct 2026, TEST project, by hook |

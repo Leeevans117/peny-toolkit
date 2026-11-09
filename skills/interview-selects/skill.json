@@ -57,15 +57,15 @@
     },
     {
       "id": "find",
-      "label": "Find answers and add markers",
+      "label": "Find answers, cut & raise",
       "style": "primary",
-      "confirm": "Transcribe this sequence and find the answers on this Mac? It takes about 20 minutes for an hour of interview. A copy called \"<sequence> Cut version\" is made and the markers and question layers go on it; the original is not changed."
+      "confirm": "Transcribe this sequence, find the answers on this Mac, then cut and raise them? It takes about 20 minutes for an hour of interview. A copy called \"<sequence> Cut\" is made; the markers go on it, then each answer is cut and moved up one track, with an adjustment layer per question and a row per theme above. Nothing between the answers is removed (that is the Trim button). The original is not changed, no footage is deleted and nothing is saved."
     },
     {
-      "id": "cutraise",
-      "label": "Cut, raise & trim answers",
-      "style": "primary",
-      "confirm": "On this Cut version: cut at every question's answer, move each answer up one track, remove everything between the answers (questions, crew chat, pauses) so the answers run back to back, and add a row of theme layers above the question layers? Links are kept. Only the Cut version changes; no footage is deleted and nothing is saved."
+      "id": "trim",
+      "label": "Trim",
+      "style": "secondary",
+      "confirm": "Make a copy of this Cut called \"<sequence> Trimmed\" and remove everything between the answers (questions, crew chat, pauses) so the answers run back to back? Markers move with their answers and links are kept. The Cut itself is not changed, no footage is deleted and nothing is saved."
     },
     {
       "id": "unum",
@@ -101,13 +101,13 @@
     {
       "id": "find",
       "name": "Find Answers",
-      "subtitle": "Transcribe and mark every answer",
+      "subtitle": "Transcribe, mark, cut & raise every answer",
       "icon": "icon-find.svg",
       "tint": [
         "#8a6416",
         "#2a1e06"
       ],
-      "description": "Transcribes the sound of the active interview sequence on this Mac (whisper): exactly what the timeline plays, so have the speaker's lav mic on the timeline. Premiere pauses for a few seconds at the start while that sound is read. works out line by line who is speaking with the local AI model (Ollama, no internet), and keeps everything the interviewee says, whether or not it answers a question: intros, statements, stories. It all goes on a copy called \"<sequence> Cut version\": a Chapter marker per question, a Segmentation marker per broad theme, and the small topics as clip markers on the clip on the top video track (they belong to that footage, so they also show in other sequences that use it). The original is not changed. It stays on the sequence you started it on: you can switch to another sequence and keep working while it runs; the result goes on that sequence's copy, and if you have moved on the copy isn't opened over your work, its name is reported at the end.",
+      "description": "Transcribes the sound of the active interview sequence on this Mac (whisper): exactly what the timeline plays, so have the speaker's lav mic on the timeline. Premiere pauses for a few seconds at the start while that sound is read. works out line by line who is speaking with the local AI model (Ollama, no internet), and keeps everything the interviewee says, whether or not it answers a question: intros, statements, stories. It all goes on a copy called \"<sequence> Cut\": a Chapter marker per question, a Segmentation marker per broad theme, and the small topics as clip markers on the clip on the top video track (they belong to that footage, so they also show in other sequences that use it). Then, on that copy, each answer is cut and raised one track, with an adjustment layer named after each question and a row above with one per theme; nothing between the answers is removed (use Trim for that). Run it again on a Cut and it works on that Cut, no copy of a copy. The original is not changed. It stays on the sequence you started it on: you can switch to another sequence and keep working while it runs; the result goes on that sequence's copy, and if you have moved on the copy isn't opened over your work, its name is reported at the end.",
       "inputs": [
         "name",
         "track"
@@ -118,18 +118,18 @@
     },
     {
       "id": "cut",
-      "name": "Cut, Raise & Trim",
-      "subtitle": "Cut to the answers",
+      "name": "Trim",
+      "subtitle": "Answers back to back",
       "icon": "icon-cut.svg",
       "tint": [
         "#1f6a50",
         "#08221a"
       ],
-      "description": "On a Cut version: raises each answer one track, removes the questions and dead bits in between so the answers run back to back, puts one adjustment layer per question over the answers and a row above with one layer per theme. Links are kept. Only the Cut version changes; no footage is deleted and nothing is saved. Premiere is held still while this runs (under a minute for a short interview).",
-      "needs": "Uses the answers from Find Answers. Run that first: this runs on the Cut version it makes.",
+      "description": "On a Cut made by Find answers: makes a copy called \"<sequence> Trimmed\" and removes the questions and dead bits between the answers so the answers run back to back. Markers move with their answers and links are kept. The Cut is not changed; no footage is deleted and nothing is saved. Premiere is held still while this runs (under a minute for a short interview), and if you have moved to another sequence you are put back on it.",
+      "needs": "Run Find answers, cut & raise first: this runs on the \"<sequence> Cut\" it makes.",
       "inputs": [],
       "actions": [
-        "cutraise"
+        "trim"
       ]
     },
     {

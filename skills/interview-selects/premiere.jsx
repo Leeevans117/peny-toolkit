@@ -1,13 +1,15 @@
 // Interview Selects, Premiere side. The panel (panel.js) calls this with params.action:
 //   "scan"  - the active sequence's audio as plain segments (file, in, start, end), following
 //             nested sequences, so ffmpeg can rebuild the sound in sequence time. Read only.
-//   "copy"  - duplicates the active sequence as "<name> Cut version" and opens it, unless the
-//             active sequence already has "Cut version" in its name (Lee, 20 Oct 2026).
+//   "copy"  - duplicates the active sequence as "<name> Cut" and opens it, unless the active
+//             sequence already is one (see isCut; older "Cut version" copies still count).
 //   "mark"  - on a Cut version: one Chapter marker per question, one Segmentation marker per
 //             broad theme, and the small topics as clip markers (see TOPICS below), read back.
 //   "cutraise" - on a Cut version only: cuts at each question's answer, raises it one track,
 //             removes everything between the answers, then a row of adjustment layers named
 //             after the questions and a row above it named after the themes.
+//   "trim"  - on a Cut: a copy "<name> Trimmed" with everything between the answers removed
+//             (cutraise's step 5 on its own, Lee 6 Nov 2026).
 //   "unum"  - "Remove ums & uhs": duplicates the active sequence (or Cut version) as
 //             "<name> No ums", opens it and extracts each filler span (panel.js finds them)
 //             from every track, back to front, like the trim; markers move, links are
@@ -32,6 +34,7 @@
     if (action === "probe") return probe(seq, params);
     if (action === "dump") return T.ok("Pieces " + params.a + "-" + params.b, { pieces: around(seq, params.a, params.b) });
     if (action === "cutraise") return backToLee(was, seq, cutraise(seq, params));
+    if (action === "trim") return backToLee(was, seq, trimOnly(seq));
     if (action === "untest") return untest(params);
     if (action === "renote") return renote(seq, params);
     if (action === "unbase") return unbase(params);
@@ -79,9 +82,14 @@
     return T.ok("Rendered the sound of \"" + seq.name + "\".", { path: params.path, result: String(ok) });
   }
 
-  // ---- Cut version (Lee, 20 Oct 2026: the copy is "<sequence> Cut version") ----
-  var CUT = "Cut version";
-  function isCut(seq) { return String(seq.name).indexOf(CUT) >= 0; }
+  // ---- Cut copy (Lee, 6 Nov 2026: "<sequence> Cut"; 20 Oct 2026 to 6 Nov: "<sequence> Cut version") ----
+  var CUT = "Cut", TRIMMED = "Trimmed";
+  // "<name> Cut", "<name> Cut 2", their "Trimmed" copies, and any older "Cut version". A name
+  // like "Rough Cut" counts only if "Rough" is a sequence too, so Lee's own cuts get copied, not changed.
+  function isCut(seq) {
+    var n = String(seq.name), m = /^(.*) Cut(?: \d+)?(?: Trimmed(?: \d+)?)?$/.exec(n);
+    return n.indexOf("Cut version") >= 0 || !!(m && T.sequenceNameExists(m[1]));
+  }
 
   // Where the small topic markers live:
   //   "clip"  - clip markers on the clip on the top video track (they belong to the source
@@ -165,12 +173,12 @@
   }
 
   // Duplicates seq (Sequence.clone, the way Make safe copy does), names the new sequence
-  // "<name> Cut version" ("... Cut version 2" if taken), checks the original did not change
+  // "<name> Cut" ("... Cut 2" if taken), checks the original did not change
   // and opens the copy, unless Lee has moved to another sequence (then it stays closed and its
   // name is reported). Only the new sequence is named; no clip is renamed.
   function copy(seq, suffix) {
     suffix = suffix || CUT;
-    if (suffix === CUT && isCut(seq)) return T.ok("\"" + seq.name + "\" is already a Cut version; markers go on it.", { copyName: String(seq.name), copyId: String(seq.sequenceID), made: false });
+    if (suffix === CUT && isCut(seq)) return T.ok("\"" + seq.name + "\" is already a Cut copy; markers go on it.", { copyName: String(seq.name), copyId: String(seq.sequenceID), made: false });
     var originalName = String(seq.name), originalId = String(seq.sequenceID), before = {}, list = T.sequenceList(), i;
     for (i = 0; i < list.length; i++) before[String(list[i].sequenceID)] = true;
     var printBefore = T.fingerprint(seq);
@@ -426,11 +434,13 @@
   // 26.5.2: moves only that piece, keeps its time and links). Everything is read back.
   function answerSpans(seq, frame) {
     // Question (Chapter) markers when there are any; otherwise every answer (Comment) marker.
-    var list = markerList(seq), spans = [], chapters = true, i;
+    // Ends are held to the sequence end: a marker running past the footage (Darragh 2, 6 Nov
+    // 2026) otherwise matches no piece and its answer is skipped.
+    var list = markerList(seq), spans = [], chapters = true, i, seqEnd = T.sec(seq.end);
     for (i = 0; i < list.length; i++) {
-      var m = list[i];
+      var m = list[i], ma = Math.min(m.start, seqEnd), mb = Math.min(m.end, seqEnd);
       if (chapters && m.type !== "Chapter") continue;
-      if (m.comments && m.end - m.start > frame) spans.push({ a: m.start, b: m.end, name: m.name });
+      if (m.comments && mb - ma > frame) spans.push({ a: ma, b: mb, name: m.name });
     }
     spans.sort(function (x, y) { return x.a - y.a; });
     var out = [];
@@ -466,7 +476,7 @@
   }
 
   function cutraise(seq, params) {
-    if (!isCut(seq)) return T.fail("Cut, raise & trim only runs on a sequence with \"Cut version\" in its name (made by Find answers). \"" + seq.name + "\" is not one.");
+    if (!isCut(seq)) return T.fail("Cut & raise only runs on a Cut copy made by Find answers (\"<sequence> Cut\"). \"" + seq.name + "\" is not one.");
     var fps = T.sequenceFps(seq) || 25, frame = 1 / fps, half = frame / 2;
     var spans = answerSpans(seq, frame);
     if (!spans.length) return T.fail("No question markers (Chapter markers with a length) on this sequence. Run Find answers first.");
@@ -652,9 +662,10 @@
       (linkBad.length || linkProblems.length ? "NOT all intact" : "intact") + "; " + (shifted.length ? shifted.length + " pieces shifted in time" : "nothing shifted in time") +
       (trim ? "; " + trim.gaps + " dead bits removed (" + T.fmt(trim.removed) + "), " + trim.markersMoved + " markers moved with them" + (trim.problems.length ? ", " + trim.problems.length + " problems" : "") : "") +
       "; length " + T.fmt(durAfter) + (trim || Math.abs(durAfter - durBefore) >= half ? " (was " + T.fmt(durBefore) + ")" : " (unchanged)") +
-      "; " + (layers.error ? "adjustment layers: " + layers.error : layers.skipped ? "no adjustment layers (" + layers.skipped + ")" :
-        layers.placed + " question layers on " + layers.track) +
-      "; " + (themes.error ? "theme layers: " + themes.error : themes.skipped ? "no theme layers (" + themes.skipped + ")" : themes.placed + " theme layers on " + themes.track) + ".";
+      // Inner ternaries in brackets: ExtendScript read them as (a ? b : c) ? d : e, so an error showed as "(undefined)".
+      "; " + (layers.error ? "adjustment layers: " + layers.error : (layers.skipped ? "no adjustment layers (" + layers.skipped + ")" :
+        layers.placed + " question layers on " + layers.track)) +
+      "; " + (themes.error ? "theme layers: " + themes.error : (themes.skipped ? "no theme layers (" + themes.skipped + ")" : themes.placed + " theme layers on " + themes.track)) + ".";
     var details = { sequence: String(seq.name), topicsOn: TOPICS, layers: layers, themeLayers: themes, answers: spans.length, joined: 0, cuts: cuts, relinkedGroups: relinked, raised: raised, raisedPiecesFound: up,
       skipped: skipped, unmatched: notUp, linkProblems: linkProblems.concat(linkBad), shifted: shifted,
       durationBefore: durBefore, durationAfter: durAfter, cutLogSample: cutLog.slice(0, 5),
@@ -662,6 +673,26 @@
         holes: trim.holes, problems: trim.problems.slice(0, 20), extractNote: trim.note } : null };
     for (i = 0; i < spans.length; i++) if (spans[i].names.length > 1) details.joined++;
     return ok ? T.ok(text, details) : T.fail(text, details);
+  }
+
+  // "Trim" (Lee, 6 Nov 2026): duplicates a Cut as "<name> Trimmed" and runs only trimDead on the
+  // copy. trimDead needs just the markers and the pieces as they are now, so it works after cut & raise.
+  function trimOnly(seq) {
+    if (!isCut(seq)) return T.fail("Trim only runs on a Cut copy made by Find answers (\"<sequence> Cut\"). \"" + seq.name + "\" is not one.");
+    var frame = 1 / (T.sequenceFps(seq) || 25);
+    if (!answerSpans(seq, frame).length) return T.fail("No question markers (Chapter markers with a length) on \"" + seq.name + "\". Run Find answers first.");
+    var c = copy(seq, TRIMMED);
+    if (!c.ok) return c;
+    var t = T.findSequenceById(c.details.copyId);
+    if (!t || !activate(t)) return T.fail("\"" + c.details.copyName + "\" was made but could not be opened for trimming, so nothing was changed on it.", c.details);
+    app.enableQE();
+    var durBefore = T.sec(t.end), tr = trimDead(t, qe.project.getActiveSequence(), answerSpans(t, frame), frame), durAfter = T.sec(t.end);
+    var ok = !tr.problems.length && Math.abs(durAfter - tr.keptTotal) < frame * 1.5;
+    var text = "Made \"" + c.details.copyName + "\": " + tr.gaps + " dead bits removed (" + T.fmt(tr.removed) + "), " + tr.markersMoved + " markers moved with them" +
+      (tr.problems.length ? ", " + tr.problems.length + " problems, e.g. " + tr.problems[0] : "") + "; length " + T.fmt(durAfter) + " (was " + T.fmt(durBefore) + "); \"" + seq.name + "\" is unchanged.";
+    var d = { sequence: String(seq.name), copyName: c.details.copyName, copyId: c.details.copyId, gaps: tr.gaps, removed: tr.removed, keptTotal: tr.keptTotal,
+      markersMoved: tr.markersMoved, markersRestored: tr.restored || 0, relinked: tr.relinked, holes: tr.holes, problems: tr.problems.slice(0, 20), durationBefore: durBefore, durationAfter: durAfter };
+    return ok ? T.ok(text, d) : T.fail(text, d);
   }
 
   // Extracts every stretch outside the answer (Comment) markers, last first, then checks:
@@ -1057,7 +1088,7 @@
   // here, carrying their topics, on the first empty unlocked track two above the footage
   // (one track is kept free for Cut & raise to move the answers up into).
   function mark(seq, params) {
-    if (!isCut(seq)) return T.fail("Markers only go on a Cut version. \"" + seq.name + "\" is not one.");
+    if (!isCut(seq)) return T.fail("Markers only go on a Cut copy (\"<sequence> Cut\"). \"" + seq.name + "\" is not one.");
     var fps = T.sequenceFps(seq) || 25, frame = 1 / fps, half = frame / 2, i, j;
     function fr(x) { return Math.round(x * fps) / fps; }
     var q = params.questions || [], th = params.themes || [], ans = params.answers || [];

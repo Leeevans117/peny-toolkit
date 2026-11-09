@@ -17,8 +17,8 @@ Premiere freezes only while an ExtendScript call runs, so long calls were remove
   call, 0.3 s pause, stops if another sequence is opened), Proxies Attach (10 per call),
   Ingest import (10 files per call). Day 4 R5 Sync copy (172 clips): Link 21 s in one call ->
   pieces of 1.3-1.6 s, 90 s in all (each piece re-reads the timeline, ~1.2 s on this one).
-- Not split: Cut, raise & trim (its relink and raise use the link groups read before the
-  first cut, and it needs the Cut version active), Colour Apply (importSequences).
+- Not split: Cut & raise and Trim (its relink and raise use the link groups read before the
+  first cut, and it needs the Cut copy active), Colour Apply (importSequences).
 - The panel process runs at nice 10 (main.js), so ffmpeg, REDline, python, whisper and an
   ollama it starts inherit it.
 - Speed switch on Proxies and Ingest + Proxies ("shared" segment input, one value in
@@ -76,6 +76,8 @@ Overall proxy progress bar (x of y, %) from real render exits plus REDline/ffmpe
 **Tested:** Tested 2 Oct 2026 in the TEST project with Canon R5 MP4, Sony FX6 MXF and RED Raptor R3D (normal + slow-mo): 4 imported, 4 proxies rendered (ProRes 1280x720, audio channels matching), 4 attached and verified; re-run did nothing
 
 ## Interviews (interview-selects)
+
+Buttons (6 Nov 2026, Lee): **Find answers, cut & raise** runs Find answers, puts the markers on a copy "<sequence> Cut" (older "<sequence> Cut version" copies still count; a name ending " Cut" counts only if the sequence without " Cut" exists, so Lee's own "Rough Cut" is copied, not changed), then cutraise with trim off on that copy by its id. **Trim** (own tile) copies a Cut as "<name> Trimmed" and runs only trimDead on it (it needs just the markers and the current pieces, so it works after cut & raise). The question/theme layers were placed before the trim, so a layer that spans a removed bit is cut there (two pieces, same name). UNVERIFIED in Premiere.
 
 Find answers (30 Oct 2026): Premiere renders the sequence's own sound (exportAsMediaDirect, wav-float.epr), so exactly the mic on the timeline; with the Audio track box filled, ffmpeg reads that track's files, all channels mixed. whisper.cpp transcribes ~25 s pieces cut at quiet moments, no voice detection. Who speaks: each line's level on that sound (2 groups at least 6 dB apart; the interviewer is quiet on the speaker's lav), else Ollama qwen2.5:14b (32b if 14b is missing) labels every line in two passes. Answers are the runs of the interviewee's lines, cut edges moved to silence measured per interview with 0.25 s / 0.5 s handles that stop short of other speech; one short Ollama call names them; questions come from the interviewer's lines with a "?", themes from Ollama; every job stays on the sequence it started on. Makes "<sequence> Cut version" with a Chapter marker per question, a Segmentation marker per theme, and the small topics as clip markers on the clip on the top video track (Lee, 20 Oct 2026; clip markers belong to the footage, so they show in every sequence using it). Cut, raise & trim answers runs only on a "Cut version": cuts at each question's answer, raises it one track (QE moveToTrack), extracts everything outside the topics (read back from the top clips' markers), moves markers, checks links/frames/length, then one adjustment layer per question above the footage and a row of theme layers above that. Tracks are added at the top when needed (QE addTracks with the top index; the bridge's (n,0,0,0) inserts at the bottom). TOPICS = "layer" in premiere.jsx is the tested alternative (topics on the question layers, each with its own source range on the Adjustment Layer item)
 
