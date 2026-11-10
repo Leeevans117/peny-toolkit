@@ -32,6 +32,7 @@ Input: JSON on stdin {ffmpeg, cacheDir, clips:[{id, path, inPoint, duration, nam
 wavs:[{path, duration}]}. Output: JSON on stdout {results:[...]}. Progress lines on stderr.
 """
 import json, os, re, shutil, subprocess, sys, tempfile
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 COARSE_SR, FINE_SR = 2000, 8000
@@ -40,6 +41,7 @@ WINDOW, STEP = 600.0, 480.0  # coarse windows overlap by the clip length
 MIN_SECONDS = 1.5
 FINE_PAD = 3.0
 AGREE = 0.05
+THREADS = 4  # coarse search: 2.4x on the Mac mini (6 gave no more); the process runs at nice 10
 SILENT_RMS = 10 ** (-70 / 20.0)  # below -70 dBFS is hiss (Komodo 4th channel: -88 dB); real quiet mics ~-43 dB
 
 
@@ -269,17 +271,20 @@ def main():
     specs = []  # (wav index, window start s, spectrum, n, window length)
     win = int(WINDOW * COARSE_SR)
     n = 1 << int(np.ceil(np.log2(win + clipN)))
-    for wi, w in enumerate(wavs if todo else []):
+    pool = ThreadPoolExecutor(THREADS)
+
+    def read_wav(wi):
+        w = wavs[wi]
         say("Reading " + os.path.basename(w["path"]))
         sig = decode(ffmpeg, w["path"], COARSE_SR)
-        if sig is None: continue
-        start = 0
-        while True:
+        out, start = [], 0
+        while sig is not None:
             seg = sig[start:start + win]
-            specs.append((wi, start / COARSE_SR, np.fft.rfft(seg, n), n, len(seg)))
+            out.append((wi, start / COARSE_SR, np.fft.rfft(seg, n), n, len(seg)))
             if start + win >= len(sig): break
             start += int(STEP * COARSE_SR)
-        del sig
+        return out
+    for got in pool.map(read_wav, range(len(wavs)) if todo else []): specs.extend(got)  # in wav order
     results = []
     for clip in job["clips"]:
         if results: drop_streams(job["clips"][len(results) - 1])  # the previous clip's sound
@@ -302,10 +307,10 @@ def main():
             continue
         hits = []  # best coarse hit per channel: (ratio, channel, wav index, seconds)
         for ch, c in chans.items():
-            best, C = None, None
-            for wi, w0, spec, n, wl in specs:
-                if C is None or len(C) != n // 2 + 1: C = np.fft.rfft(c, n)  # same n for every window
-                lag, ratio = peak_ratio(gcc_peak(spec, n, c, -len(c) + 1, wl, C), COARSE_SR)
+            best, C = None, np.fft.rfft(c, n)  # every window has the same n
+            # numpy's FFTs let go of the GIL, so the windows are searched THREADS at a time;
+            # results come back in window order, so the pick is the same as one at a time.
+            for (wi, w0, spec, _, wl), (lag, ratio) in zip(specs, pool.map(lambda sp: peak_ratio(gcc_peak(sp[2], sp[3], c, -len(c) + 1, sp[4], C), COARSE_SR), specs)):
                 if lag is not None and (best is None or ratio > best[0]): best = (ratio, ch, wi, w0 + lag / COARSE_SR)
             if best: hits.append(best)
         if not hits: r["reason"] = "no match in any wav"; continue
