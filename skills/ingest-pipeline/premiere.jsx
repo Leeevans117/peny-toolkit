@@ -9,7 +9,25 @@
     if (!app.project) return T.fail("No project open.");
     var open = [], ps = app.projects;
     for (var i = 0; i < ps.numProjects; i++) { try { open.push({ name: String(ps[i].name), path: String(ps[i].path) }); } catch (e) {} }
-    return T.ok("In front: " + app.project.name, { name: String(app.project.name), path: String(app.project.path), open: open });
+    var seq = app.project.activeSequence;
+    return T.ok("In front: " + app.project.name, { name: String(app.project.name), path: String(app.project.path), open: open,
+      sequenceId: seq ? String(seq.sequenceID) : null, sequenceName: seq ? String(seq.name) : null });
+  }
+
+  // Panel "Up next" (main.js): a waiting task starts only in the project it was pressed in,
+  // with the sequence that was active then brought back to the front (opening it changes nothing in it).
+  function front(params) {
+    if (!app.project || !T.samePath(app.project.path, params.path))
+      return T.fail((app.project ? String(app.project.name) : "No project") + " is in front, not " + params.name + ". Click into " + params.name + " and press again.");
+    if (!params.sequenceId) return T.ok("Project in front.");
+    var s = app.project.activeSequence;
+    if (s && String(s.sequenceID) === String(params.sequenceId)) return T.ok("Same sequence in front.");
+    var seq = T.findSequenceById(params.sequenceId);
+    if (!seq) return T.fail("Sequence " + params.sequenceName + " is not in " + params.name + " any more.");
+    try { app.project.openSequence(String(seq.sequenceID)); } catch (e) {}
+    s = app.project.activeSequence;
+    if (!s || String(s.sequenceID) !== String(params.sequenceId)) return T.fail("Could not bring sequence " + params.sequenceName + " to the front.");
+    return T.ok("Opened " + params.sequenceName + ".");
   }
 
   function save(params) {
@@ -27,6 +45,7 @@
   T.skills["ingest-pipeline"] = function (params) {
     if (params.action === "active") return active();
     if (params.action === "save") return save(params);
+    if (params.action === "front") return front(params);
     return T.fail("Unknown ingest-pipeline action: " + params.action);
   };
 }(PenyToolkit));

@@ -8,7 +8,7 @@
  *    "actions". Each action button calls the module, which can run OS jobs
  *    (core/jobs.js) and call its premiere.jsx through api.evalSkill().
  * Actions marked "control" (e.g. Pause/Cancel) work while another action runs; any
- * other action is refused while one is running.
+ * other button pressed while one is running waits in "Up next" and starts after it.
  *
  * Every ExtendScript call goes through one queue, so only one is ever in flight.
  *
@@ -160,9 +160,12 @@ function runAction(skillId, actionId, params, source) {
   // Pressed again while its own run is going: "queue" names the action that adds a job
   // to that run instead (Ingest + Proxies), so the lock below is left alone.
   var queued = !action.control && running && action.queue && runningSkill === skill.id && skill.module && skill.module.actions[action.queue];
-  if (!action.control && !queued && running) {
-    return Promise.resolve({ ok: false, skill: skillId, error: running + " is still running." });
+  var others = source !== "up next" && (upNext.length || queueStarting); // an Up next start goes ahead of the rest of the list
+  if (!action.control && !queued && (running || others)) {
+    if (source === "button") return enqueueTask(skill, action, params);
+    return Promise.resolve({ ok: false, skill: skillId, error: (running || "Up next") + " is still running." });
   }
+  if (action.control && action.id === "cancel") dropQueue("Cancel pressed");
   if (params) for (var pk in params) if (params.hasOwnProperty(pk) && typeof params[pk] === "string") params[pk] = fileUrlToPath(params[pk]);
   var label = skill.name + (skill.actions ? " > " + action.label : "");
   var locks = !action.control && !queued;
@@ -217,7 +220,72 @@ function runAction(skillId, actionId, params, source) {
     setStatus(skill, result.ok ? result.summary : result.error);
     addHistory({ t: startedAt, ms: Date.now() - startedAt, skill: skill.id, app: skill.name, action: skill.actions ? action.label : "",
       ok: !!result.ok, text: String((result.ok ? result.summary : result.error) || ""), source: source });
+    if (locks) nextQueued(); // a failed run does not stop the next one; Cancel empties the list first
     return result;
+  });
+}
+
+// ---- Up next (Lee, 10 Nov 2026: "even a queue for the next task could help") ----
+// A button pressed while a run is going waits here, with its params, and starts when the
+// run ends, in order; x removes one, Cancel empties the list. Runs never overlap: ExtendScript
+// is already one call at a time (evalJsx), but most skills work on app.project.activeSequence
+// and open sequences themselves, and running/runTimer/projectTarget are panel-wide, so two
+// interleaved runs would act on each other's sequence or project.
+// Each item records the project + sequence in front at the press (Ingest + Proxies' "active",
+// read when Premiere answers) and starts only when that project is in front again, opening
+// that sequence if another one is active; otherwise it is skipped and logged, never run elsewhere.
+var upNext = [], queueStarting = false, queueSeq = 0;
+function frontCall(params) { return evalSkill(findSkill("ingest-pipeline"), params); }
+function enqueueTask(skill, action, params) {
+  var item = { n: ++queueSeq, skillId: skill.id, actionId: action.id, params: params || {},
+    label: skill.name + (skill.actions ? " > " + action.label : "") };
+  item.where = frontCall({ action: "active" }).then(function (a) { return a.ok ? a.details : null; }, function () { return null; });
+  item.where.then(function (w) { item.place = w ? w.name + (w.sequenceName ? " / " + w.sequenceName : "") : "?"; drawUpNext(); });
+  upNext.push(item);
+  log("Up next #" + item.n + ": " + item.label + " " + JSON.stringify(item.params), "warn");
+  drawUpNext();
+  return Promise.resolve({ ok: true, queued: true, skill: skill.id, summary: "Up next: " + item.label + " (" + upNext.length + " waiting)." });
+}
+function nextQueued() {
+  if (running || queueStarting || !upNext.length) return;
+  var item = upNext[0];
+  queueStarting = true; drawUpNext();
+  item.where.then(function (w) {
+    if (!w) return { ok: false, error: "could not read which project was in front when it was pressed." };
+    return frontCall({ action: "front", path: w.path, name: w.name, sequenceId: w.sequenceId, sequenceName: w.sequenceName });
+  }).catch(function (e) { return { ok: false, error: String(e && e.message || e) }; }).then(function (f) {
+    queueStarting = false;
+    if (upNext[0] !== item) return nextQueued(); // removed or cancelled while checking
+    upNext.shift(); drawUpNext();
+    if (!f.ok) {
+      log("Up next #" + item.n + " " + item.label + " skipped: " + f.error, "err");
+      var sk = findSkill(item.skillId); if (sk) setStatus(sk, "Skipped from Up next: " + f.error);
+      return nextQueued();
+    }
+    runAction(item.skillId, item.actionId, item.params, "up next");
+  });
+}
+function dropQueue(why) {
+  var gone = upNext.splice(0, upNext.length);
+  if (gone.length) log(why + ": dropped from Up next: " + gone.map(function (i) { return "#" + i.n + " " + i.label; }).join(", "), "warn");
+  drawUpNext();
+}
+function drawUpNext() {
+  var box = document.getElementById("upnext");
+  if (!box) return;
+  box.classList.toggle("hidden", !upNext.length);
+  document.getElementById("upnext-body").innerHTML = upNext.map(function (i, k) {
+    var starting = k === 0 && queueStarting;
+    return '<div class="qrow"><span class="jname">' + (k + 1) + ". " + esc(i.label) + '</span><span class="jval">' +
+      esc(starting ? "starting…" : i.place || "reading project…") + '</span>' +
+      (starting ? "" : '<button class="qx" data-n="' + i.n + '" title="Remove from Up next" aria-label="Remove ' + esc(i.label) + '">×</button>') + "</div>";
+  }).join("");
+  [].forEach.call(document.querySelectorAll("#upnext .qx"), function (b) {
+    b.addEventListener("click", function () {
+      var n = +b.getAttribute("data-n");
+      upNext = upNext.filter(function (i) { if (i.n === n) log("Up next #" + n + " " + i.label + " removed.", "warn"); return i.n !== n; });
+      drawUpNext();
+    });
   });
 }
 
@@ -375,9 +443,8 @@ var lastView = null; // the app last opened, focused again on the way home
 function setButtons() {
   var bs = document.querySelectorAll("button[data-action]");
   for (var i = 0; i < bs.length; i++) {
-    // A "queue" action stays usable while its own skill runs: pressing it adds a job.
-    var queues = bs[i].getAttribute("data-queue-skill");
-    if (bs[i].getAttribute("data-control") !== "1") bs[i].disabled = !!running && !(queues && queues === runningSkill);
+    // Usable while something runs: a press waits in Up next (or, for Ingest + Proxies' own run, joins its job queue).
+    if (bs[i].getAttribute("data-control") !== "1") bs[i].title = running ? "Add to Up next" : "";
   }
   var tiles = document.querySelectorAll(".tile[data-skill]");
   for (var t = 0; t < tiles.length; t++) {
@@ -735,7 +802,6 @@ function drawSkills() {
       b.className = "pill " + (a.style || (a.control ? "secondary" : "primary"));
       b.setAttribute("data-action", a.id);
       if (a.control) b.setAttribute("data-control", "1");
-      if (a.queue) b.setAttribute("data-queue-skill", s.id);
       b.addEventListener("click", function () { pressAction(s, a, getters); });
       return b;
     }
@@ -1314,7 +1380,7 @@ function pollHook() {
   var skill = req && req.skill ? findSkill(req.skill) : null;
   var action = skill ? findAction(skill, req.action) : null;
   // wait for the running action to finish (a control, or a queue press on the running skill, goes now)
-  if (running && !(action && (action.control || (action.queue && skill.id === runningSkill)))) return;
+  if ((running || upNext.length || queueStarting) && !(action && (action.control || (running && action.queue && skill.id === runningSkill)))) return;
   var claimed = HOOK_RUN + ".claimed";
   try { fs.renameSync(HOOK_RUN, claimed); } catch (e) { return; }
   try { fs.unlinkSync(claimed); } catch (e) {}
@@ -1369,6 +1435,7 @@ var startError = null;
 // a child process). loader.js waits while this returns something.
 function isBusy() {
   if (running) return running;
+  if (upNext.length || queueStarting) return upNext.length + " task(s) up next"; // lost on a reload
   for (var i = 0; i < skills.length; i++) {
     var m = skills[i].module;
     var b = m && typeof m.busy === "function" ? m.busy() : null;
