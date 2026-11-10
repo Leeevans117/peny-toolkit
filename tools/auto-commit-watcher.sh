@@ -33,7 +33,8 @@ if [ "$MODE" = loop ]; then
   # One watcher at a time.
   LOCKDIR="$HOME/.peny-toolkit/autocommit.lock"
   mkdir "$LOCKDIR" 2>/dev/null || exit 0
-  trap 'rmdir "$LOCKDIR" 2>/dev/null' EXIT INT TERM
+  trap 'rmdir "$LOCKDIR" 2>/dev/null' EXIT
+  trap 'rmdir "$LOCKDIR" 2>/dev/null; exit 0' INT TERM
 fi
 
 # commit_once: commit + push if there are changes quiet for $IDLE seconds.
