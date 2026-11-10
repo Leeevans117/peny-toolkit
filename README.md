@@ -131,7 +131,7 @@ section there before changing it.
 | Skill | What it does | Last tested |
 |---|---|---|
 | Link External Audio (app) | Runs Make safe copy, Sync external audio, Link external audio in order | 2 Oct 2026, TEST project |
-| Sync external audio | Lines up recorder wavs to camera clips by waveform (measure.py) | La Thuile, 9 of 14 synced, 0 wrong |
+| Sync external audio | Lines up recorder wavs to camera clips by waveform (measure.py) | 5 Nov 2026, 172 Canon clips (Day 4); measure.py speed-up 10 Nov offline only |
 | Make safe copy | Duplicates the active sequence as "<name> TOOLKIT COPY" | 2 Oct 2026, TEST project |
 | Link external audio | Links each camera clip to its own audio and the wav under it | 2 Oct 2026, TEST project |
 | Proxies | Renders ProRes Proxy files and attaches/detaches them | 2 Oct 2026, small bin only; not at scale |
@@ -140,7 +140,7 @@ section there before changing it.
 | Interviews (interview-selects) | Transcribes, finds answers, makes "<sequence> Cut" with markers, cuts & raises the answers; Trim makes "<Cut> Trimmed" | 30 Oct 2026, Whistler; partly unverified |
 | Interviews > Remove ums & uhs (unum) | Finds and cuts fillers on a "<sequence> No ums" copy | 23 Oct 2026, Episode_1_Korea; not checked by ear |
 | Interviews > Sync Interviews (interview-sync) | Syncs a whole interview timeline by sound, then links | 29 Oct 2026, Whistler copies; some modes untested |
-| Sound Pass | Levels interview voice per clip on a safe copy; rides quiet moments | 3 Oct 2026, TEST project, by hook |
+| Sound Pass | Evens out every phrase of the interview voice to -20 LUFS on a safe copy; keeps the music/camera balance | 6 Nov 2026, Main Assembly V8 audio test (6) TOOLKIT COPY, 230 voice clips |
 | Master for YouTube (loudness-master) | Masters the whole mix to -14 LUFS / -1 dBTP on a master copy | 24 Oct 2026, Episode_1_Korea |
 | Colour (colour-baseline) | Detects cameras, applies a LUT baseline grade on a GRADED copy; makes LUT presets | 3 Oct 2026, TEST project; picker not in real panel yet |
-| Selects Setup (selects-sequences) | Builds UNCUT and empty Selects sequences per group from a footage bin | 6 Nov 2026: by shoot date, Lee ran it on World Champs |
+| Selects Setup (selects-sequences) | Builds UNCUT and empty Selects sequences per shoot date (or bin group) from a footage bin | 6 Nov 2026: by shoot date, Lee ran it on World Champs |

@@ -31,7 +31,8 @@ against the recorder wavs.
 Input: JSON on stdin {ffmpeg, cacheDir, clips:[{id, path, inPoint, duration, name}],
 wavs:[{path, duration}]}. Output: JSON on stdout {results:[...]}. Progress lines on stderr.
 """
-import json, os, re, subprocess, sys
+import json, os, re, shutil, subprocess, sys, tempfile
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 COARSE_SR, FINE_SR = 2000, 8000
@@ -40,6 +41,7 @@ WINDOW, STEP = 600.0, 480.0  # coarse windows overlap by the clip length
 MIN_SECONDS = 1.5
 FINE_PAD = 3.0
 AGREE = 0.05
+THREADS = 4  # coarse search: 2.4x on the Mac mini (6 gave no more); the process runs at nice 10
 SILENT_RMS = 10 ** (-70 / 20.0)  # below -70 dBFS is hiss (Komodo 4th channel: -88 dB); real quiet mics ~-43 dB
 
 
@@ -58,14 +60,64 @@ def decode(ffmpeg, path, sr, start=0.0, dur=None, stream=0):
     return np.frombuffer(p.stdout, dtype=np.float32).astype(np.float64)
 
 
-def gcc_peak(sig_spec, n, clip, lo, hi):
+_nstreams = {}
+
+
+def audio_streams(ffmpeg, path):
+    """Number of audio streams (ffmpeg -i header, cached per file)."""
+    if path not in _nstreams:
+        p = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-i", path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        _nstreams[path] = len(re.findall(r"Stream #0:\d+.*?: Audio:", p.stderr.decode("utf-8", "replace")))
+    return _nstreams[path]
+
+
+def decode_streams(ffmpeg, path, sr, start, dur):
+    """[signal per audio stream] (up to 8), every stream in ONE read of the file: the same
+    seek and -t per output as decode(), so the samples are the same, but a camera file on
+    the NAS is opened once instead of once per stream (Lee, 10 Nov 2026: faster sync).
+    None when ffmpeg fails."""
+    n = min(audio_streams(ffmpeg, path), 8)
+    if not n: return []
+    d = tempfile.mkdtemp(prefix="peny-sync-")
+    try:
+        cmd = [ffmpeg, "-v", "error", "-nostdin", "-y"]
+        if start > 0: cmd += ["-ss", "%.4f" % start]
+        cmd += ["-i", path]
+        files = [os.path.join(d, "a%d.f32" % s) for s in range(n)]
+        for s, f in enumerate(files):
+            cmd += ["-t", "%.4f" % dur, "-map", "0:a:%d" % s, "-ac", "1", "-ar", str(sr), "-f", "f32le", f]
+        if subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE).returncode != 0: return None
+        return [np.fromfile(f, dtype=np.float32).astype(np.float64) for f in files]
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def clip_streams(ffmpeg, clip, sr, length):
+    """The clip's streams at sr, decoded once per clip and rate (fine() runs per coarse hit)."""
+    key = "_sig%d" % sr
+    if key not in clip: clip[key] = decode_streams(ffmpeg, clip["path"], sr, clip.get("audioIn", clip["inPoint"]), length)
+    return clip[key]
+
+
+def drop_streams(clip):
+    """Free a measured clip's decoded sound (a few MB per clip, hundreds of clips)."""
+    for k in [k for k in clip if k.startswith("_sig")]: del clip[k]
+
+
+_lags = {}
+
+
+def gcc_peak(sig_spec, n, clip, lo, hi, C=None):
     """Lag (samples) of clip inside the signal whose rfft (size n) is sig_spec, searched
-    in [lo, hi]; returns (lag, peak, indexes, values) for peak_ratio()."""
-    C = np.fft.rfft(clip, n)
+    in [lo, hi]; returns (lag, peak, indexes, values) for peak_ratio(). C: the clip's
+    rfft of size n, when the caller searches many windows with it."""
+    if C is None: C = np.fft.rfft(clip, n)
     R = sig_spec * np.conj(C)
     R /= np.maximum(np.abs(R), 1e-12)
     r = np.fft.irfft(R, n)
-    lags = np.arange(n); lags[lags > n // 2] -= n
+    lags = _lags.get(n)
+    if lags is None:
+        lags = _lags[n] = np.arange(n); lags[lags > n // 2] -= n
     mask = (lags >= lo) & (lags <= hi)
     if not mask.any(): return None, 0.0, None, None
     idx = np.where(mask)[0]
@@ -88,11 +140,9 @@ def peak_ratio(lags_idx_vals, sr):
 def channels(ffmpeg, clip, length):
     """Camera audio channels as {stream index: 2 kHz signal}, exact copies dropped."""
     out = {}
-    clip["readable"] = False
-    for s in range(8):
-        c = decode(ffmpeg, clip["path"], COARSE_SR, clip.get("audioIn", clip["inPoint"]), length, s)
-        if c is None: break
-        clip["readable"] = True
+    sigs = clip_streams(ffmpeg, clip, COARSE_SR, length)
+    clip["readable"] = bool(sigs)
+    for s, c in enumerate(sigs or []):
         if len(c) < MIN_SECONDS * COARSE_SR or np.abs(c).max() == 0: continue
         if np.sqrt(np.mean(c * c)) < SILENT_RMS:
             clip.setdefault("dropped", []).append(s); continue
@@ -111,8 +161,9 @@ def fine(ffmpeg, wav, clip, approx, streams, sr=FINE_SR, pad=FINE_PAD):
     wseg = decode(ffmpeg, wav["path"], sr, w0, length + 2 * pad)
     out = {}
     if wseg is None or len(wseg) < sr: return out
+    sigs = clip_streams(ffmpeg, clip, sr, length) or []
     for s in streams:
-        c = decode(ffmpeg, clip["path"], sr, clip.get("audioIn", clip["inPoint"]), length, s)
+        c = sigs[s] if s < len(sigs) else None
         if c is None or len(c) < MIN_SECONDS * sr or np.abs(c).max() == 0: continue
         n = 1 << int(np.ceil(np.log2(len(wseg) + len(c))))
         # Only within +-pad of the estimate. Searching every lag of the window let a clip
@@ -220,19 +271,23 @@ def main():
     specs = []  # (wav index, window start s, spectrum, n, window length)
     win = int(WINDOW * COARSE_SR)
     n = 1 << int(np.ceil(np.log2(win + clipN)))
-    for wi, w in enumerate(wavs if todo else []):
+    pool = ThreadPoolExecutor(THREADS)
+
+    def read_wav(wi):
+        w = wavs[wi]
         say("Reading " + os.path.basename(w["path"]))
         sig = decode(ffmpeg, w["path"], COARSE_SR)
-        if sig is None: continue
-        start = 0
-        while True:
+        out, start = [], 0
+        while sig is not None:
             seg = sig[start:start + win]
-            specs.append((wi, start / COARSE_SR, np.fft.rfft(seg, n), n, len(seg)))
+            out.append((wi, start / COARSE_SR, np.fft.rfft(seg, n), n, len(seg)))
             if start + win >= len(sig): break
             start += int(STEP * COARSE_SR)
-        del sig
+        return out
+    for got in pool.map(read_wav, range(len(wavs)) if todo else []): specs.extend(got)  # in wav order
     results = []
     for clip in job["clips"]:
+        if results: drop_streams(job["clips"][len(results) - 1])  # the previous clip's sound
         if clip.get("known"):
             results.append(dict(clip["known"]))
             if "streams" in clip["known"]: clip["streams"] = clip["known"]["streams"]  # step 3 needn't decode them again
@@ -252,9 +307,10 @@ def main():
             continue
         hits = []  # best coarse hit per channel: (ratio, channel, wav index, seconds)
         for ch, c in chans.items():
-            best = None
-            for wi, w0, spec, n, wl in specs:
-                lag, ratio = peak_ratio(gcc_peak(spec, n, c, -len(c) + 1, wl), COARSE_SR)
+            best, C = None, np.fft.rfft(c, n)  # every window has the same n
+            # numpy's FFTs let go of the GIL, so the windows are searched THREADS at a time;
+            # results come back in window order, so the pick is the same as one at a time.
+            for (wi, w0, spec, _, wl), (lag, ratio) in zip(specs, pool.map(lambda sp: peak_ratio(gcc_peak(sp[2], sp[3], c, -len(c) + 1, sp[4], C), COARSE_SR), specs)):
                 if lag is not None and (best is None or ratio > best[0]): best = (ratio, ch, wi, w0 + lag / COARSE_SR)
             if best: hits.append(best)
         if not hits: r["reason"] = "no match in any wav"; continue
@@ -272,6 +328,7 @@ def main():
                 r.update(synced=True, wav=wavs[wi]["path"], wavTime=round(t, 4), recording=wavs[wi]["recording"],
                          recTime=wavs[wi]["recStart"] + t)
                 break
+    for clip in job["clips"]: drop_streams(clip)
     if job.get("firstPassOnly"):
         json.dump({"results": results, "recordings": clock_models(results, job["clips"], wavs)}, sys.stdout)
         return
@@ -314,6 +371,7 @@ def main():
                 r.update(synced=True, wav=w["path"], wavTime=round(t, 4), recording=w["recording"], recTime=w["recStart"] + t)
                 r.pop("reason", None)
                 break
+        drop_streams(clip)
         if notes: r["why"] = (r["why"] + "; " if r.get("rejected") else "") + "; ".join(notes)
     for r, clip in zip(results, job["clips"]):
         r["clock"] = clip_clock(clip)
