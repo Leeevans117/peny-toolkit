@@ -336,6 +336,16 @@
     #jobs { flex: none; display: flex; flex-direction: column; max-height: 42vh; margin: 0 var(--pad) var(--pad); border-radius: var(--r-card);
             background: rgba(18, 18, 18, 0.88); border: 1px solid var(--card-line); }
     body[data-style=compact] #jobs { margin: 0; border-radius: 0; border-width: 1px 0 0; }
+    /* Up next: tasks pressed while one runs (main.js drawUpNext) */
+    #upnext { flex: none; max-height: 30vh; overflow-y: auto; margin: 0 var(--pad) var(--pad); border-radius: var(--r-card);
+              background: rgba(18, 18, 18, 0.88); border: 1px solid var(--card-line); padding: 8px var(--pad); }
+    body[data-style=compact] #upnext { margin: 0; border-radius: 0; border-width: 1px 0 0; }
+    #upnext .jtitle { font-size: var(--fs-s); font-weight: 700; }
+    #upnext .qrow { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-top: 1px solid var(--line-soft); }
+    #upnext .jname { flex: 1; min-width: 0; font-size: var(--fs-s); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #upnext .jval { font: var(--fs-xs) var(--mono); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+    #upnext .qx { flex: none; width: 22px; height: 22px; border: 1px solid var(--line); border-radius: 50%; background: none; color: var(--dim); cursor: pointer; line-height: 1; }
+    #upnext .qx:hover { color: var(--text); background: var(--surface-3); }
     #jobs .jhead { flex: none; display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px var(--pad); background: none; border: 0;
                    color: var(--text); cursor: pointer; text-align: left; }
     #jobs .jtitle { font-size: var(--fs-s); font-weight: 700; white-space: nowrap; }
@@ -466,6 +476,10 @@
     </aside>
   </div>
 
+  <div id="upnext" class="hidden">
+    <div class="jhead"><span class="jtitle">Up next</span></div>
+    <div class="jbody" id="upnext-body"></div>
+  </div>
   <div id="jobs" class="hidden">
     <button class="jhead" id="jobs-head" title="Fold / unfold">
       <span class="jtitle">Jobs</span><span class="jsum" id="jobs-sum"></span>
