@@ -184,6 +184,42 @@ else
   launchctl bootstrap "gui/$(id -u)" "$PLIST" && ok "hourly update (loaded)" || todo "hourly update (launchctl bootstrap failed)"
 fi
 
+# --- Auto-commit --------------------------------------------------------------
+# Commits + pushes changes on main after they have been quiet for 3 minutes, so the
+# hourly update is never blocked by uncommitted work. Only for checkouts in the home
+# folder: launchd may not read a server volume (same restriction as the hourly update
+# above); on a checkout on a server use tools/auto-commit-watcher.sh --once by hand.
+if [ -d "$SRC/.git" ] && [ $ON_SERVER = 0 ]; then
+  ALABEL=com.peny.toolkit.autocommit
+  APLIST="$HOME/Library/LaunchAgents/$ALABEL.plist"
+  AWANT="$(cat <<AL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$ALABEL</string>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>$SRC/tools/auto-commit-watcher.sh</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardErrorPath</key><string>$HOME/Library/Logs/PenyToolkit-autocommit.log</string>
+</dict>
+</plist>
+AL
+)"
+  if [ $CHECK = 1 ]; then
+    [ -f "$APLIST" ] && launchctl print "gui/$(id -u)/$ALABEL" >/dev/null 2>&1 && ok "auto-commit agent" || todo "auto-commit agent (re-run setup.sh without --check)"
+  elif [ -f "$APLIST" ] && [ "$(cat "$APLIST")" = "$AWANT" ] && launchctl print "gui/$(id -u)/$ALABEL" >/dev/null 2>&1; then
+    ok "auto-commit (commits main after 3 quiet minutes; tools/auto-commit-watcher.sh --once by hand)"
+  elif [ "${PENY_NO_LAUNCHD:-0}" = 1 ]; then
+    mkdir -p "$(dirname "$APLIST")" && printf '%s\n' "$AWANT" > "$APLIST" && ok "auto-commit (plist written, not loaded: test mode)"
+  else
+    mkdir -p "$(dirname "$APLIST")" && printf '%s\n' "$AWANT" > "$APLIST"
+    launchctl bootout "gui/$(id -u)/$ALABEL" 2>/dev/null
+    launchctl bootstrap "gui/$(id -u)" "$APLIST" && ok "auto-commit agent (loaded)" || todo "auto-commit (launchctl bootstrap failed)"
+  fi
+fi
+
 # --- The panel ---------------------------------------------------------------
 step "Peny Toolkit panel"
 DEST="$HOME/Library/Application Support/Adobe/CEP/extensions/com.peny.toolkit"

@@ -162,6 +162,14 @@ qwen2.5:32b ~20 GB).
 setup.sh turns these on:
 
 - **Push on commit**: a git hook pushes every commit on `main` to GitHub.
+- **Auto-commit**: the launchd agent `com.peny.toolkit.autocommit` runs
+  `tools/auto-commit-watcher.sh`, which commits and pushes changes on `main` about
+  3 minutes after they stop changing - so work is never left uncommitted and the
+  hourly update is never blocked by "uncommitted changes". It waits for quiet edits,
+  never touches other branches or a checkout with merge conflicts, and a push the
+  other Mac beat you to is retried after a fast-forward pull (otherwise left for the
+  hourly update / a merge by hand). Commit by hand any time:
+  `tools/auto-commit-watcher.sh --once` (or just `git commit` - the hook pushes).
 - **Hourly update**: the launchd agent `com.peny.toolkit.update` runs `auto-update.sh`
   every hour and at log-in. It pulls new commits (fast-forward only) and runs
   `install.sh`, so the open panel soft-reloads (or waits until a running action ends).
@@ -169,6 +177,7 @@ setup.sh turns these on:
   uncommitted changes or on another branch, and stops if both Macs changed the toolkit
   at once (log says "needs a merge by hand").
 
-Log: `~/Library/Logs/PenyToolkit-update.log`. Update now by hand:
-`~/PenyToolkit/com.peny.toolkit/auto-update.sh`. Turn the hourly update off:
-`launchctl bootout gui/$(id -u)/com.peny.toolkit.update`.
+Log: `~/Library/Logs/PenyToolkit-update.log` (auto-commit: `~/Library/Logs/PenyToolkit-autocommit.log`).
+Update now by hand: `~/PenyToolkit/com.peny.toolkit/auto-update.sh`. Turn the hourly
+update off: `launchctl bootout gui/$(id -u)/com.peny.toolkit.update`. Turn auto-commit
+off: `launchctl bootout gui/$(id -u)/com.peny.toolkit.autocommit`.

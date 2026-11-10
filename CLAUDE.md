@@ -23,5 +23,7 @@ never upgrades or overwrites). Then report what `setup.sh` says is still MISSING
 which of those only Lee can do.
 
 After changing code: `./install.sh`, then commit on `main` (the git hook pushes it; the
-other Mac installs it within the hour). Never leave work uncommitted: the hourly update
-skips a checkout with uncommitted changes.
+other Mac installs it within the hour). Prefer a commit that describes the change; if
+work is left uncommitted, the auto-commit watcher commits and pushes it on `main` after
+3 quiet minutes (launchd agent `com.peny.toolkit.autocommit`,
+`tools/auto-commit-watcher.sh` - see "Updates on developer Macs" in `docs/new-machine.md`).
