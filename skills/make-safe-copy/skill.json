@@ -1,7 +1,7 @@
 {
   "id": "make-safe-copy",
   "name": "Make Safe Copy",
-  "description": "Duplicates the active sequence as \"<name> TOOLKIT COPY\", checks the original is unchanged, and opens the copy.",
+  "description": "Duplicates the active sequence as \"<name> V<next>\" in Claude bin/Safe Copy, checks the original is unchanged, and opens the copy.",
   "order": 4,
   "icon": "icon.svg",
   "tint": [

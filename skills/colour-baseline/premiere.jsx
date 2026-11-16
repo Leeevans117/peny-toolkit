@@ -8,7 +8,7 @@
 //                  sequence itself is not changed).
 //   "importseq"  - imports sequences from a .prproj (Project.importSequences) and lists the
 //                  sequences that appeared.
-//   "finish"     - names the imported graded sequence "<name> GRADED TOOLKIT COPY" (unique),
+//   "finish"     - names the imported graded sequence "<name> V<next>" in Claude bin/Colour,
 //                  opens it and scans it.
 //   "frame", "setparam", "addplain" - test hook only.
 //
@@ -116,11 +116,9 @@
   function finish(params) {
     var seq = T.findSequenceById(params.id);
     if (!seq) return T.fail("The imported sequence " + params.id + " is not in the project.");
-    var base = String(params.base).replace(/\s*(\(\d+\)\s*)?(GRADED\s+)?TOOLKIT COPY$/, "").replace(/\s+$/, "");
-    var wanted = base + " " + GRADED;
-    for (var n = 2; T.sequenceNameExists(wanted) && String(seq.name) !== wanted && n < 100; n++) wanted = base + " (" + n + ") " + GRADED;
-    seq.name = wanted;
-    if (String(seq.name) !== wanted && seq.projectItem) seq.projectItem.name = wanted;
+    // "<name> V<next>" in Claude bin/Colour (Lee, 11 Nov 2026).
+    var bad = T.nameVersion(seq, String(params.base), "Colour");
+    if (bad) return T.fail("The graded copy was imported but " + bad + ".", { name: String(seq.name) });
     try { app.project.openSequence(String(seq.sequenceID)); } catch (e) {}
     var active = T.activeSequence();
     if (!active || String(active.sequenceID) !== String(seq.sequenceID)) return T.fail("Imported as \"" + seq.name + "\" but it could not be opened.", { name: String(seq.name) });
@@ -144,7 +142,7 @@
   }
   // Sets one param of the clip's n-th Lumetri (params.lumetri, from the top). TOOLKIT COPY only.
   function setParam(seq, params) {
-    if (!T.isToolkitCopy(seq)) return T.fail("Only on a TOOLKIT COPY.");
+    if (!T.isToolkitCopy(seq)) return T.fail("Only on a Toolkit version in the Claude bin.");
     var it = trackItem(seq, params.track, params.nodeId), n = -1;
     if (!it) return T.fail("Clip not found.");
     for (var c = 0; c < it.components.numItems; c++) {
@@ -180,7 +178,7 @@
   }
   // A plain Lumetri Color added with QE (goes at the bottom). TOOLKIT COPY only.
   function addPlain(seq, params) {
-    if (!T.isToolkitCopy(seq)) return T.fail("Only on a TOOLKIT COPY.");
+    if (!T.isToolkitCopy(seq)) return T.fail("Only on a Toolkit version in the Claude bin.");
     var it = trackItem(seq, params.track, params.nodeId);
     if (!it) return T.fail("Clip not found.");
     app.enableQE();

@@ -157,7 +157,7 @@ module.exports = function (api) {
       return jsx({ action: "scan", tracks: params.tracks || "" });
     }).then(function (s) {
       scan = s.details;
-      if (!scan.isCopy) throw { stop: "The active sequence is not a TOOLKIT COPY after the copy step." };
+      if (!scan.isCopy) throw { stop: "The active sequence is not a Toolkit version after the copy step." };
       clips = scan.clips;
       task = new StepTask({ title: "Sound Pass", steps: STEPS, size: clips.length, defaults: STEP_DEFAULTS,
         historyFile: path.join(os.homedir(), ".peny-toolkit", "sound-pass-eta.json"), onProgress: api.progress || function () {} });

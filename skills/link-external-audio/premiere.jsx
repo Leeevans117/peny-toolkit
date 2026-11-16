@@ -14,11 +14,10 @@ PenyToolkit.skills["link-external-audio"] = function (params) {
   var seq = T.activeSequence();
   if (!seq) return T.fail("No active sequence.");
   if (params.sequenceId && String(seq.sequenceID) !== String(params.sequenceId)) {
-    return T.fail("Stopped: another sequence was opened while Link ran. Open the TOOLKIT COPY again and press Step 3 to finish (clips already linked are skipped).");
+    return T.fail("Stopped: another sequence was opened while Link ran. Open the copy again and press Step 3 to finish (clips already linked are skipped).");
   }
   if (!T.isToolkitCopy(seq)) {
-    return T.fail("Refused: the active sequence \"" + seq.name + "\" does not end in \"" + T.COPY_SUFFIX +
-      "\". Run Make safe copy first and run this on the copy.");
+    return T.fail("Refused: \"" + seq.name + "\" is not a Toolkit version (in the Claude bin). Run Step 1 first and run this on the copy.");
   }
 
   var from = 0, to = Infinity;

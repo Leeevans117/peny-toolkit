@@ -84,10 +84,14 @@
 
   // ---- Cut copy (Lee, 6 Nov 2026: "<sequence> Cut"; 20 Oct 2026 to 6 Nov: "<sequence> Cut version") ----
   var CUT = "Cut", TRIMMED = "Trimmed";
+  // Version names per button (Lee, 11 Nov 2026): "<sequence> Find Answers V1", "... Trim V1", "... Remove Ums V1".
+  var BUTTON = { "Cut": "Find Answers", "Trimmed": "Trim", "No ums": "Remove Ums" };
   // "<name> Cut", "<name> Cut 2", their "Trimmed" copies, and any older "Cut version". A name
   // like "Rough Cut" counts only if "Rough" is a sequence too, so Lee's own cuts get copied, not changed.
   function isCut(seq) {
     var n = String(seq.name), m = /^(.*) Cut(?: \d+)?(?: Trimmed(?: \d+)?)?$/.exec(n);
+    var vb = T.versionBinOf(seq);
+    if ((vb && (vb.button === "Find Answers" || vb.button === "Trim")) || T.versionButton(n, "Find Answers") || T.versionButton(n, "Trim")) return true;
     return n.indexOf("Cut version") >= 0 || !!(m && T.sequenceNameExists(m[1]));
   }
 
@@ -178,7 +182,7 @@
   // name is reported). Only the new sequence is named; no clip is renamed.
   function copy(seq, suffix) {
     suffix = suffix || CUT;
-    if (suffix === CUT && isCut(seq)) return T.ok("\"" + seq.name + "\" is already a Cut copy; markers go on it.", { copyName: String(seq.name), copyId: String(seq.sequenceID), made: false });
+    // Every run makes the next version, also on a Find Answers version (Lee, 11 Nov 2026).
     var originalName = String(seq.name), originalId = String(seq.sequenceID), before = {}, list = T.sequenceList(), i;
     for (i = 0; i < list.length; i++) before[String(list[i].sequenceID)] = true;
     var printBefore = T.fingerprint(seq);
@@ -190,11 +194,9 @@
       if (!created) $.sleep(250);
     }
     if (!created) return T.fail("Sequence.clone() did not create a new sequence (checked for 5 s).");
-    var wanted = originalName + " " + suffix;
-    for (var n = 2; T.sequenceNameExists(wanted) && n < 100; n++) wanted = originalName + " " + suffix + " " + n;
-    created.name = wanted;
-    if (String(created.name) !== wanted && created.projectItem) created.projectItem.name = wanted;
-    if (String(created.name) !== wanted) return T.fail("The copy was made as \"" + created.name + "\" but could not be named \"" + wanted + "\".");
+    // "<sequence> <Button> V<n>" in the Claude bin (Lee, 11 Nov 2026).
+    var bad = T.nameVersion(created, originalName, BUTTON[suffix] || suffix), wanted = String(created.name);
+    if (bad) return T.fail("The copy was made but " + bad + ".", { copyName: wanted, copyId: String(created.sequenceID) });
     var original = T.findSequenceById(originalId), printAfter = original ? T.fingerprint(original) : null;
     var unchanged = !!(printAfter && printAfter.hash === printBefore.hash && printAfter.clips === printBefore.clips && String(original.name) === originalName);
     var printCopy = T.fingerprint(created);
@@ -209,14 +211,13 @@
 
   // ---- Remove ums & uhs ----
   var NOUMS = "No ums";
-  function isNoUms(seq) { return String(seq.name).indexOf(NOUMS) >= 0; }
+  function isNoUms(seq) { return String(seq.name).indexOf(NOUMS) >= 0 || !!T.versionButton(seq.name, "Remove Ums"); }
 
   // params.fillers: [{ word, start, end }] in sequence seconds (found by panel.js on this
   // sequence's sound). Each is snapped to frames; fillers that would cut through an edit,
   // or leave less than 3 frames of a clip, are skipped. The copy is made only after the
   // checks that need no change, so a refused run leaves nothing behind.
   function unum(seq, params) {
-    if (isNoUms(seq)) return T.fail("\"" + seq.name + "\" is already a \"" + NOUMS + "\" copy. Open the sequence it came from and run again.");
     var fps = T.sequenceFps(seq) || 25, frame = 1 / fps, half = frame / 2, i, j, list = params.fillers || [];
     if (!list.length) return T.fail("No fillers to remove.");
     function locked(tracks) {
@@ -476,7 +477,7 @@
   }
 
   function cutraise(seq, params) {
-    if (!isCut(seq)) return T.fail("Cut & raise only runs on a Cut copy made by Find answers (\"<sequence> Cut\"). \"" + seq.name + "\" is not one.");
+    if (!isCut(seq)) return T.fail("Cut & raise only runs on a Cut copy made by Find answers (\"<sequence> V<next>\" in Claude bin/Find Answers). \"" + seq.name + "\" is not one.");
     var fps = T.sequenceFps(seq) || 25, frame = 1 / fps, half = frame / 2;
     var spans = answerSpans(seq, frame);
     if (!spans.length) return T.fail("No question markers (Chapter markers with a length) on this sequence. Run Find answers first.");
@@ -678,7 +679,7 @@
   // "Trim" (Lee, 6 Nov 2026): duplicates a Cut as "<name> Trimmed" and runs only trimDead on the
   // copy. trimDead needs just the markers and the pieces as they are now, so it works after cut & raise.
   function trimOnly(seq) {
-    if (!isCut(seq)) return T.fail("Trim only runs on a Cut copy made by Find answers (\"<sequence> Cut\"). \"" + seq.name + "\" is not one.");
+    if (!isCut(seq)) return T.fail("Trim only runs on a Cut copy made by Find answers (\"<sequence> V<next>\" in Claude bin/Find Answers). \"" + seq.name + "\" is not one.");
     var frame = 1 / (T.sequenceFps(seq) || 25);
     if (!answerSpans(seq, frame).length) return T.fail("No question markers (Chapter markers with a length) on \"" + seq.name + "\". Run Find answers first.");
     var c = copy(seq, TRIMMED);
@@ -1088,7 +1089,7 @@
   // here, carrying their topics, on the first empty unlocked track two above the footage
   // (one track is kept free for Cut & raise to move the answers up into).
   function mark(seq, params) {
-    if (!isCut(seq)) return T.fail("Markers only go on a Cut copy (\"<sequence> Cut\"). \"" + seq.name + "\" is not one.");
+    if (!isCut(seq)) return T.fail("Markers only go on a Cut copy (\"<sequence> V<next>\" in Claude bin/Find Answers). \"" + seq.name + "\" is not one.");
     var fps = T.sequenceFps(seq) || 25, frame = 1 / fps, half = frame / 2, i, j;
     function fr(x) { return Math.round(x * fps) / fps; }
     var q = params.questions || [], th = params.themes || [], ans = params.answers || [];

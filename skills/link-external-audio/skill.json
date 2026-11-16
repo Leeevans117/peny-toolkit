@@ -1,7 +1,7 @@
 {
   "id": "link-external-audio",
   "name": "Link External Audio",
-  "description": "Do the three steps in order: 1, then 2, then 3. Step 1 makes a safe copy of the active sequence (\"<name> TOOLKIT COPY\") and opens it. Step 2 syncs: put the external wav files anywhere on an audio track of the copy (e.g. after the clips) and it lines a wav piece up under each camera clip by matching waveforms; clips it is not sure about are listed for you to sync by hand. Step 3 links each camera clip to its camera audio and the wav piece under it. Every link is checked afterwards.",
+  "description": "Do the three steps in order: 1, then 2, then 3. Step 1 makes a safe copy of the active sequence (\"<name> V<next>\" in Claude bin/Link External Audio) and opens it. Step 2 syncs: put the external wav files anywhere on an audio track of the copy (e.g. after the clips) and it lines a wav piece up under each camera clip by matching waveforms; clips it is not sure about are listed for you to sync by hand. Step 3 links each camera clip to its camera audio and the wav piece under it. Every link is checked afterwards.",
   "order": 5,
   "icon": "icon.svg",
   "tint": [
@@ -27,6 +27,7 @@
       "id": "safecopy",
       "label": "Step 1 · Make safe copy",
       "skill": "make-safe-copy",
+      "params": { "button": "Link External Audio" },
       "style": "secondary"
     },
     {
@@ -35,7 +36,7 @@
       "skill": "sync-external-audio",
       "action": "sync",
       "style": "secondary",
-      "confirm": "Sync the external wavs to the camera clips on this TOOLKIT COPY? It measures each clip against the wavs by waveform (can take a minute or two) and places a wav piece under each clip it is sure about, on the track the wavs are on. Nothing is deleted or moved."
+      "confirm": "Sync the external wavs to the camera clips on this copy? It measures each clip against the wavs by waveform (can take a minute or two) and places a wav piece under each clip it is sure about, on the track the wavs are on. Nothing is deleted or moved."
     },
     {
       "id": "run",
