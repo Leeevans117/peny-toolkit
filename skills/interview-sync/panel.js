@@ -16,6 +16,7 @@ function BUNDLED(name) { return path.join(process.env.HOME || "", "Library", "Ap
 var FFMPEG = [BUNDLED("ffmpeg"), "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"];
 var PYTHON = [BUNDLED("python3"), "/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"];
 var WORK_ROOT = "/tmp/peny-toolkit/interview-sync";
+var AUDIO_FILE = /\.(wav|bwf|mp3|aif|aiff|m4a)$/i;
 
 function firstExisting(list) { for (var i = 0; i < list.length; i++) if (fs.existsSync(list[i])) return list[i]; return null; }
 function fmt(s) {
@@ -75,6 +76,19 @@ module.exports = function (api) {
       var videoTracks = units.filter(function (u) { return u.kind === "video" && !u.skip; }).map(function (u) { return u.track; });
       var audioTracks = units.filter(function (u) { return u.kind === "audio" && !u.skip; }).map(function (u) { return u.track; });
       if (!videoTracks.length && !audioTracks.length) throw { stop: "No clips to sync on this sequence." };
+      // Proxies first (Lee, 16 Nov 2026: a camera clip with no proxy attached made Sync read
+      // the 41.8 GB FX6 original for 6:42 and then fail). Every camera clip (anything that is
+      // not a sound file) needs its proxy attached; otherwise stop now, before any reading.
+      var noProxy = units.filter(function (u) {
+        return !u.skip && !AUDIO_FILE.test(u.path || "") && !(u.proxy && fs.existsSync(u.proxy));
+      });
+      if (noProxy.length) {
+        var seen = {}, names = [];
+        noProxy.forEach(function (u) { if (!seen[u.name]) { seen[u.name] = 1; names.push(u.name + " (" + (u.kind === "video" ? "V" : "A") + (u.track + 1) + ")"); } });
+        throw { stop: "Proxies missing: " + names.length + " camera clip(s) on this sequence have no proxy attached, so nothing was read or changed. " +
+          "Attach their proxies first (Proxies tile > Attach proxies), then run Sync Interviews again. Without proxies it reads the full-size files, which takes many minutes. " +
+          "No proxy: " + names.slice(0, 12).join(", ") + (names.length > 12 ? " and " + (names.length - 12) + " more" : "") + ".", warn: true };
+      }
       var refKind = videoTracks.length ? "video" : "audio";
       var refTrack = Math.min.apply(null, refKind === "video" ? videoTracks : audioTracks);
       var job = { ffmpeg: ffmpeg, fps: scan.fps, gap: 5, units: [] };
@@ -94,6 +108,7 @@ module.exports = function (api) {
       return measure(python, job);
     }).then(function (m) {
       fs.writeFileSync(path.join(dir, "measure.json"), JSON.stringify(m, null, 1));
+      if (m.error) throw { stop: "Sync stopped early: " + m.error };
       var byId = {};
       m.units.forEach(function (x) { byId[x.id] = x; });
       plan = scan.units.filter(function (u) { return byId[u.id]; }).map(function (u) {
@@ -102,7 +117,7 @@ module.exports = function (api) {
           newStart: x.newStart, synced: x.synced, ref: x.ref, withId: x.withId };
       });
       var synced = m.units.filter(function (x) { return x.synced; }).length;
-      if (!synced) throw { stop: "No clip could be matched by waveform, so nothing was changed. " + m.units.filter(function (x) { return !x.ref; }).map(function (x) { return x.name + ": " + x.reason; }).slice(0, 4).join("; ") };
+      if (!synced) throw { stop: "No clip could be matched by sound, picture or timecode, so nothing was changed. " + m.units.filter(function (x) { return !x.ref; }).map(function (x) { return x.name + ": " + (x.reason || "no reason given"); }).slice(0, 4).join("; ") };
       api.status("Moving clips on a copy…");
       return api.evalSkill({ action: "apply", sequenceId: scan.sequenceId, units: plan, link: mode }).then(function (a) { return { m: m, a: a }; });
     }).then(function (o) {

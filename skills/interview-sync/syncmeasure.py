@@ -31,11 +31,15 @@ Measuring (GCC-PHAT, 2 kHz, as Sync external audio; tested on Lee's Whistler int
     6 times the next best and the second-loudest channel agrees within 40 ms (10 alone).
   - A clip that no reference covers (camera A was stopped) is then looked for in the clips
     already placed (second pass), so camera B can carry an external wav on its own.
+  - A camera clip still unplaced (its sound is hiss, e.g. the mic not plugged in) is then
+    matched by picture: movement per frame against camera A's clips (see vmatch).
 Timecode is a fallback only: on Whistler the RED and Canon clocks were 3 min apart and the
 RED's jumped between clips, so it never overrides the waveform. When a clip finds no
 waveform match but both it and a placed clip of the other camera have timecode, the
 offset between the two clocks seen on matched clips predicts it; that is used only if
-every matched pair agrees on that offset to within 1 frame (otherwise the clip is left).
+at least 2 matched clips of the track agree on that offset within CLOCK_TOL (otherwise the
+clip is left). A clip no camera A clip overlaps by clock anchors its own group, laid GAP s
+after everything before it, and the clips around it are lined up to it by timecode.
 
 Layout: each reference clip with everything placed against it is one group. Groups keep
 their order; a group is moved later only when it would start before 0 or run into the
@@ -61,6 +65,23 @@ MIN_SECONDS = 2.0
 AGREE = 0.04
 GAP = 5.0
 AUDIO_EXT = (".wav", ".bwf", ".mp3", ".aif", ".aiff", ".m4a")
+# Picture sync (11 Nov 2026, EOY IV: the RED's mic wasn't plugged in, its sound is hiss).
+# Movement per frame (64x36 grey, frame-to-frame difference) of a camera clip that found no
+# waveform match, against camera A's. Tested on RED A001-A004 vs FX6: 10 pieces of 120 s,
+# every one within 0.04 s of the others in its clip.
+VPIECE = 120.0
+VAGREE = 0.065
+VRATIO = 1.8
+# Clock model: one offset per track to camera A's clock, learnt from matched clips; used only
+# when all of a track's matched clips agree within CLOCK_TOL (catches clock jumps, Whistler).
+CLOCK_TOL = 0.25
+# Reference check (16 Nov 2026, EOY IV Day 3: camera A was the RED again with only hiss, and
+# no reference = 6:42 of reading for nothing). Spread between loud and quiet moments of a
+# clip's best channel (0.25 s windows, 90th - 10th percentile, dB): speech/room sound
+# measured 50+ dB on FX6 and Rode wavs, the unplugged RED mic 8-10 dB.
+SOUND_DB = 20.0
+SOUND_PIECE = 20.0
+MIN_OVERLAP = 2.0
 
 _procs, _plock = set(), threading.Lock()
 
@@ -258,6 +279,103 @@ def match(u, cands):
     return None, "one channel only and not strong enough (" + detail + ")"
 
 
+def motion(ffmpeg, path, start, dur, fps):
+    """Movement per frame of path over [start, start+dur] at fps: log of the mean absolute
+    difference between one 64x36 grey frame and the one before (value k = frame k vs k-1)."""
+    W, H = 64, 36
+    cmd = [ffmpeg, "-v", "error", "-nostdin"]
+    if start > 0: cmd += ["-ss", "%.6f" % start]
+    cmd += ["-t", "%.4f" % dur, "-i", path, "-an", "-sn", "-dn", "-vf", "scale=%d:%d:flags=area,format=gray" % (W, H),
+            "-r", "%.6f" % fps, "-f", "rawvideo", "-"]
+    code, out, _ = run(cmd)
+    n = len(out) // (W * H)
+    if n < 3: return np.zeros(0)
+    a = np.frombuffer(out[:n * W * H], dtype=np.uint8).reshape(n, H, W).astype(np.float32)
+    d = np.abs(np.diff(a, axis=0)).mean(axis=(1, 2))
+    return np.log1p(np.concatenate([[0.0], d])).astype(np.float64)
+
+
+def vpiece_spans(L):
+    """(offset, length) of the picture pieces of a range L s long: 3 of 120 s, or 2 halves-ish."""
+    if L >= VPIECE * 3: return [(round((L - VPIECE) * (k + 0.5) / 3, 2), VPIECE) for k in range(3)]
+    ln = min(VPIECE, L / 2.2)
+    if ln < 20: return []
+    return [(round((L - ln) * (k + 0.5) / 2, 2), ln) for k in range(2)]
+
+
+def vfeat(x):
+    """Movement made comparable: minus its 1 s average (lighting drifts), in robust standard
+    deviations, clipped at 3 so one bump or someone walking past can't outweigh the rest.
+    EOY IV test: without this, big bumps beat the true match in 1 of 3 RED clips."""
+    if len(x) < 30: return x
+    x = x - np.convolve(x, np.ones(25) / 25, "same")
+    m = np.median(x)
+    d = np.median(np.abs(x - m)) * 1.4826 or 1.0
+    return np.clip((x - m) / d, -3, 3)
+
+
+def vxc(sig, piece):
+    """Lag (frames) of piece inside sig, its score and the best score more than 1 s away
+    (cross-correlation; lags where the piece overlaps sig by at least half its length)."""
+    if len(sig) < 10 or len(piece) < 10: return None, 0.0, 0.0
+    p = (piece - piece.mean()) / (piece.std() or 1)
+    n = 1 << int(np.ceil(np.log2(len(sig) + len(p))))
+    r = np.fft.irfft(np.fft.rfft(sig, n) * np.conj(np.fft.rfft(p, n)), n) / len(p)
+    lags = np.arange(n); lags[lags > n // 2] -= n
+    half = len(p) // 2
+    idx = np.where((lags >= -half) & (lags <= len(sig) - half))[0]
+    if not len(idx): return None, 0.0, 0.0
+    v = r[idx]
+    b = int(np.argmax(v))
+    far = np.abs(np.arange(len(v)) - b) > 25
+    return int(lags[idx[b]]), float(v[b]), float(v[far].max()) if far.any() else 0.0
+
+
+def picture_src(u):
+    """File to read u's picture from: the proxy, else the media (not for audio clips)."""
+    if u["kind"] != "video": return None
+    for p in (u.get("proxy"), u.get("media")):
+        if p and os.path.exists(p): return p
+    return None
+
+
+def vmatch(u, upieces, cands, curve, fps):
+    """Picture match of u against the candidate clips: each piece of u (offset, movement) is
+    looked for in the whole of every candidate. 2 pieces in the same candidate within VAGREE,
+    each with a ratio of at least VRATIO. Returns (cand, L, how) or None, reason."""
+    votes = []
+    for k, (off, pu) in enumerate(upieces):
+        hits = []
+        for ci, c in enumerate(cands):
+            lag, top, second = vxc(curve(c), pu)
+            if lag is not None: hits.append((top, second, ci, lag))
+        if not hits: continue
+        # Ratio: the best peak against the next best anywhere (same clip more than 1 s away, or
+        # any other camera A clip). EOY IV: true matches 2.8-4.5, wrong ones about 1.1.
+        hits.sort(key=lambda h: -h[0])
+        top, second, ci, lag = hits[0]
+        if len(hits) > 1: second = max(second, hits[1][0])
+        c = cands[ci]
+        # u's source time (inPoint + off) sits at c's source time (inPoint + lag / fps).
+        L = (c["inPoint"] + lag / fps) - (u["inPoint"] + off)
+        votes.append((ci, L, top / second if second > 0 else 99.0, "piece %d" % (k + 1)))
+    if not votes: return None, "picture: nothing to compare with"
+    detail = ", ".join("%s: %s %+.2f s ratio %.2f" % (v[3], cands[v[0]]["name"], v[1], v[2]) for v in votes)
+    best = None
+    for i in range(len(votes)):
+        for j in range(i + 1, len(votes)):
+            a, b = votes[i], votes[j]
+            if a[0] == b[0] and abs(a[1] - b[1]) <= VAGREE and min(a[2], b[2]) >= VRATIO:
+                if best is None or a[2] + b[2] > best[0]: best = (a[2] + b[2], a)
+    if not best: return None, "picture: pieces disagree (" + detail + ")"
+    a = best[1]
+    same = [v for v in votes if v[0] == a[0] and abs(v[1] - a[1]) <= VAGREE]
+    L = float(np.median([v[1] for v in same]))
+    return (cands[a[0]], L, "picture: %d of %d pieces agree in %s (%.0f ms apart, ratios %s)" %
+            (len(same), len(votes), cands[a[0]]["name"], (max(v[1] for v in same) - min(v[1] for v in same)) * 1000,
+             "/".join("%.1f" % v[2] for v in same))), detail
+
+
 def choose_sources(ffmpeg, units, tmp, pool):
     """u["src"] and u["source"] (how) per unit; non-RED proxies checked against their original."""
     paths = set()
@@ -303,6 +421,57 @@ def choose_sources(ffmpeg, units, tmp, pool):
     return time.time() - t0
 
 
+def sound_spread(ffmpeg, u, tmp):
+    """dB between loud and quiet moments (see SOUND_DB) of u's best channel, from 3 short
+    pieces; 0 when u has no sound source at all."""
+    if not u.get("src"): return 0.0
+    L = u["duration"]
+    ln = min(SOUND_PIECE, L / 3.5)
+    if ln < MIN_SECONDS: return 0.0
+    best = 0.0
+    for k in range(3):
+        ch = decode(ffmpeg, u["src"], u["inPoint"] + (L - ln) * (k + 0.5) / 3, ln, tmp)
+        for c in ch.values():
+            w = int(0.25 * SR)
+            n = len(c) // w
+            if n < 8: continue
+            r = np.sqrt(np.mean(c[:n * w].reshape(n, w) ** 2, axis=1)) + 1e-9
+            db = 20 * np.log10(r)
+            best = max(best, float(np.percentile(db, 90) - np.percentile(db, 10)))
+    return best
+
+
+def choose_reference(ffmpeg, units, tmp, pool):
+    """Keep camera A as the reference when its sound is usable; otherwise make the lowest
+    other track with usable sound (another camera first, then a sound-only track) the
+    reference, and camera A is placed against it (picture, then timecode). Returns a note
+    for the log, or raises SystemExit with a reason when no track has usable sound."""
+    tracks = {}
+    for u in units: tracks.setdefault((u["kind"], u["track"]), []).append(u)
+    def usable(key):
+        us = tracks[key]
+        spreads = list(pool.map(lambda u: sound_spread(ffmpeg, u, tmp), us))
+        for u, sp in zip(us, spreads): u["spread"] = round(sp, 1)
+        return sum(1 for sp in spreads if sp >= SOUND_DB) * 2 > len(us), max(spreads or [0.0])
+    refkey = next((k for k, us in tracks.items() if any(u.get("ref") for u in us)), None)
+    if refkey is None: raise SystemExit("no reference track")
+    ok, sp = usable(refkey)
+    name = ("V" if refkey[0] == "video" else "A") + str(refkey[1] + 1)
+    if ok: return None
+    order = sorted([k for k in tracks if k != refkey], key=lambda k: (k[0] != "video", k[1]))
+    for k in order:
+        ok2, sp2 = usable(k)
+        if not ok2: continue
+        for u in units:
+            if u.get("ref"):
+                u["ref"], u["placed"], u["how"] = False, False, ""
+                u["reason"] = "its sound is unusable (%.0f dB between loud and quiet, needs %.0f)" % (u.get("spread", 0), SOUND_DB) if u.get("src") else "no sound to read (no proxy)"
+        for u in tracks[k]: u["ref"], u["placed"], u["how"] = True, True, "reference (stays): camera A has no usable sound"
+        new = ("V" if k[0] == "video" else "A") + str(k[1] + 1)
+        return "%s has no usable sound (best %.0f dB between loud and quiet, needs %.0f: mic not plugged in?), so %s (%.0f dB) is the reference instead" % (name, sp, SOUND_DB, new, sp2)
+    raise SystemExit("No track on this sequence has usable sound (camera A %s best %.0f dB between loud and quiet, needs %.0f), so there is nothing to sync to. Nothing was read in full or changed." % (name, sp, SOUND_DB))
+
+
 def bps(ffmpeg, u):
     i = probe(ffmpeg, u["src"]) if u.get("src") else None
     return i["size"] / i["duration"] if i and i["duration"] > 0 else 1e12
@@ -325,6 +494,14 @@ def main():
     T0 = time.time()
     pool = ThreadPoolExecutor(WORKERS)
     t_check = choose_sources(ffmpeg, units, tmp, pool)
+    t = time.time()
+    try:
+        note = choose_reference(ffmpeg, units, tmp, pool)
+    except SystemExit as e:
+        say(str(e))
+        json.dump({"error": str(e)}, sys.stdout)
+        return
+    say("Sound check %.1f s%s" % (time.time() - t, ": " + note if note else ""))
     refs = [u for u in units if u.get("ref")]
     others = [u for u in units if not u.get("ref")]
     # One read per file + range (loose camera audio on 4 tracks is one read), whole or as
@@ -405,7 +582,9 @@ def main():
                 continue
             cands = refs if pas == 1 else [c for c in others if c["placed"] and c["track"] != u["track"]]
             cands = [c for c in cands if has_sound(c)]
-            if not cands: continue
+            if not cands:
+                if pas == 1: u["reason"] = "no reference clip with sound to compare with"
+                continue
             if pas == 2 and not u["full"]:
                 for c in cands:
                     if not c["full"]:
@@ -423,29 +602,85 @@ def main():
                 u.update(placed=True, parent=c, L=L, how=how, reason="")
             elif pas == 1 or not u["reason"]:
                 u["reason"] = detail
+    # Picture pass: a camera clip still unplaced (no sound, or sound that matches nothing) is
+    # looked for by movement in camera A's clips, then in camera clips already placed.
+    t_pic = time.time()
+    need = [u for u in others if not u["placed"] and picture_src(u)]
+    vrefs = [c for c in refs if picture_src(c)]
+    if need and vrefs:
+        curves, vp = {}, {}
+        def curve_read(u):
+            t = time.time()
+            curves[u["id"]] = vfeat(motion(ffmpeg, picture_src(u), u["inPoint"], u["duration"], fps))
+            say("Read the picture of %s whole (%.0f s) in %.1f s" % (u["name"], u["duration"], time.time() - t))
+        def pieces_read(u):
+            t = time.time()
+            vp[u["id"]] = [(off, vfeat(m)) for off, m in ((off, motion(ffmpeg, picture_src(u), u["inPoint"] + off, ln, fps))
+                                                   for off, ln in vpiece_spans(u["duration"])) if len(m) > 10]
+            say("Read %d picture piece(s) of %s in %.1f s" % (len(vp[u["id"]]), u["name"], time.time() - t))
+        say("Picture sync: %d camera clip(s) with no waveform match; reading the movement of camera A whole and pieces of those" % len(need))
+        jobs = [(curve_read, c) for c in vrefs] + [(pieces_read, u) for u in need]
+        list(pool.map(lambda j: j[0](j[1]), sorted(jobs, key=lambda j: -j[1]["duration"])))
+        def curve(x):
+            if x["id"] not in curves: curve_read(x)
+            return curves[x["id"]]
+        for pas in (1, 2):
+            for u in need:
+                if u["placed"] or len(vp.get(u["id"], [])) < 2: continue
+                cands = vrefs if pas == 1 else [c for c in others if c["placed"] and c["kind"] == "video" and c["track"] != u["track"] and picture_src(c)]
+                if not cands: continue
+                say("Matching the picture of %s (pass %d)" % (u["name"], pas))
+                got, detail = vmatch(u, vp[u["id"]], cands, curve, fps)
+                if got:
+                    c, L, how = got
+                    u.update(placed=True, parent=c, L=L, how=how, reason="")
+                elif pas == 1:
+                    u["reason"] = (u["reason"] + "; " if u["reason"] else "") + detail
+    t_pic = time.time() - t_pic
     t_match = time.time() - t2
     pool.shutdown()
-    # Timecode fallback: one clock offset per (camera track pair), only if all matched pairs agree.
-    pairs = {}
-    for u in others:
-        if u["placed"] and u["parent"] is not None and u.get("tc") is not None and u["parent"].get("tc") is not None:
-            # tc = timecode at the media's first frame, so a moment's tc = tc + source time.
-            # Clock offset = parent's tc - u's tc at the same moment.
-            off = u["parent"]["tc"] - u["tc"] + u["L"]
-            pairs.setdefault((u["track"], u["parent"]["track"]), []).append(off)
-    for u in others:
-        if u["placed"] or u.get("tc") is None: continue
-        for c in refs + [o for o in others if o["placed"]]:
-            offs = pairs.get((u["track"], c["track"]))
-            if c.get("tc") is None or not offs or len(offs) < 2 or max(offs) - min(offs) > frame: continue
-            off = sum(offs) / len(offs)
-            L = off - (c["tc"] - u["tc"])
-            # Only if the clip then lies inside c (at least half of it).
-            a, b = u["inPoint"] + L, u["inPoint"] + L + u["duration"]
-            ov = min(b, c["inPoint"] + c["duration"]) - max(a, c["inPoint"])
-            if ov >= u["duration"] / 2:
-                u.update(placed=True, parent=c, L=L, how="timecode (clock offset %.2f s, from %d waveform-matched clips)" % (off, len(offs)), reason="")
-                break
+    # Timecode (clock model). Each track's clock offset to camera A's clock is learnt from its
+    # matched clips (chained through the clip each was matched to), and used only when at
+    # least 2 of them agree within CLOCK_TOL: a clock that jumps between clips (the RED on
+    # Whistler) is never used. dA[track]: camera A's clock = this clock + dA at one moment.
+    # tc = timecode at the media's first frame, so a moment's clock = tc + source time.
+    def tkey(u): return (u["kind"], u["track"])
+    dA, nA = {}, {}
+    for r in refs: dA[tkey(r)], nA[tkey(r)] = 0.0, 0
+    for _ in range(4):
+        samples = {}
+        for u in others:
+            p = u["parent"]
+            if u["placed"] and p is not None and u.get("tc") is not None and p.get("tc") is not None and tkey(p) in dA and tkey(u) not in dA:
+                samples.setdefault(tkey(u), []).append(p["tc"] + u["L"] - u["tc"] + dA[tkey(p)])
+        new = False
+        for k, s in samples.items():
+            if len(s) >= 2 and max(s) - min(s) <= CLOCK_TOL:
+                dA[k], nA[k], new = float(np.median(s)), len(s), True
+            elif len(s) >= 2:
+                say("Timecode of %s %d not used: its matched clips disagree by %.2f s" % (k[0], k[1] + 1, max(s) - min(s)))
+        if not new: break
+    def aclock(u): return u["tc"] + dA[tkey(u)]  # camera A clock at u's source time 0
+    anchors = [u for u in refs + [o for o in others if o["placed"]] if u.get("tc") is not None and tkey(u) in dA]
+    todo = [u for u in others if not u["placed"] and u.get("tc") is not None and tkey(u) in dA]
+    todo.sort(key=lambda u: (u["kind"] != "video", aclock(u) + u["inPoint"]))
+    for u in todo:
+        a0 = aclock(u) + u["inPoint"]
+        best = None
+        for c in anchors:
+            c0 = aclock(c) + c["inPoint"]
+            ov = min(a0 + u["duration"], c0 + c["duration"]) - max(a0, c0)
+            if ov >= MIN_OVERLAP and (best is None or (bool(c.get("ref")), ov) > (bool(best[0].get("ref")), best[1])): best = (c, ov)
+        why = "timecode (%s %d clock %+.2f s from camera A, learnt from %d matched clips; check sync by eye)" % (
+            "V" if u["kind"] == "video" else "A", u["track"] + 1, dA[tkey(u)], nA[tkey(u)])
+        if best:
+            c = best[0]
+            u.update(placed=True, parent=c, L=aclock(u) - aclock(c), how=why, reason="")
+        else:
+            # Nothing of camera A was rolling: this clip anchors its own group by timecode.
+            u["clockroot"] = True
+            u["reason"] = "no camera A clip at this time; anchors its own group, clips around it lined up by timecode"
+        anchors.append(u)
     # New starts: root of each group stays; children follow their parent.
     def root(u):
         while u["parent"] is not None: u = u["parent"]
@@ -497,6 +732,9 @@ def main():
     for g in order:
         lo = min(u["ns"] for u in g["members"])
         shift = -lo if lo < 0 else 0.0
+        if g["root"].get("clockroot") and laid:
+            # A group with no camera A: straight after everything laid so far (no long hole).
+            shift = max(e0 for _, _, _, e0 in laid) + gap - lo
         for _ in range(1000):
             need = shift
             for u in g["members"]:
@@ -506,7 +744,7 @@ def main():
                         need = max(need, e0 + gap - u["ns"])
             if need == shift: break
             shift = need
-        shift = round(shift / frame + 0.4999) * frame if shift > 0 else 0.0
+        shift = round(shift / frame + 0.4999) * frame if shift > 0 else round(shift / frame) * frame
         for u in g["members"]:
             u["ns"] += shift
             laid.append((u["kind"], u["track"], u["ns"], u["ns"] + u["duration"]))
@@ -523,7 +761,7 @@ def main():
                         "withId": u["parent"]["id"] if u["parent"] is not None else None,
                         "oldStart": u["start"], "newStart": round(u["ns"], 6), "shift": round(u["ns"] - u["start"], 6),
                         "how": u["how"], "reason": u["reason"], "source": u.get("source", "")})
-    timing = {"check": round(t_check, 1), "read": round(t_read, 1), "match": round(t_match, 1), "total": round(time.time() - T0, 1),
+    timing = {"check": round(t_check, 1), "read": round(t_read, 1), "match": round(t_match, 1), "picture": round(t_pic, 1), "total": round(time.time() - T0, 1),
               "files": len(keys), "wholeSide": "camera A" if refs_full else "others"}
     say("Proxy check %.1f s, reading %.1f s, matching %.1f s" % (t_check, t_read, t_match))
     json.dump({"units": out, "groups": [{"root": g["root"]["name"], "shift": g["shift"], "size": len(g["members"])} for g in order], "timing": timing}, sys.stdout)
