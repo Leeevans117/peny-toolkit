@@ -546,7 +546,7 @@
       pieces = allPieces(seq);
       for (j = 0; j < pieces.length; j++) {
         var pc = pieces[j];
-        if (Math.abs(pc.a - sp.a) < half && Math.abs(pc.b - sp.b) < half && !isAdjClip(pc.item)) {
+        if (within(pc, sp, half) && !isAdjClip(pc.item)) {
           var og = origAt(pc.track, (pc.a + pc.b) / 2);
           if (og && og.name === pc.name) mine.push(pc); // still on its original track = not raised yet
         }
@@ -593,7 +593,7 @@
     }
     for (i = 0; i < pieces.length; i++) {
       var pc2 = pieces[i], inSpan = null;
-      for (j = 0; j < spans.length; j++) if (Math.abs(pc2.a - spans[j].a) < half && Math.abs(pc2.b - spans[j].b) < half) inSpan = spans[j];
+      for (j = 0; j < spans.length; j++) if (within(pc2, spans[j], half)) inSpan = spans[j];
       var src = origAt(pc2.track, (pc2.a + pc2.b) / 2);
       if (src && src.name !== pc2.name) src = null;
       if (!src && inSpan && pc2.index > 0) {
@@ -605,7 +605,7 @@
     }
     for (i = 0; i < spans.length; i++) {
       var inside = [];
-      for (j = 0; j < pieces.length; j++) if (Math.abs(pieces[j].a - spans[i].a) < half && Math.abs(pieces[j].b - spans[i].b) < half && !isAdjClip(pieces[j].item) && pieces[j].linkedBefore) inside.push(pieces[j]);
+      for (j = 0; j < pieces.length; j++) if (within(pieces[j], spans[i], half) && !isAdjClip(pieces[j].item) && pieces[j].linkedBefore) inside.push(pieces[j]);
       for (j = 0; j < inside.length; j++) {
         var n2 = T.linkedNodeIds(inside[j].item).length;
         if (inside.length > 1 && n2 < inside.length) linkBad.push(T.fmt(spans[i].a) + " " + inside[j].track + " linked to " + n2 + " of " + inside.length);
@@ -875,6 +875,11 @@
     walk(app.project.rootItem);
     return plain || byName || any;
   }
+
+  // A piece belongs to an answer when it lies inside the answer's span, not only when it
+  // fills it: a camera that stops early (Orbea HQ, 17 Nov 2026: V2 ended 0.6 s before V1 in
+  // the last answer) left a short piece that blocked the raise of every track under it.
+  function within(p, sp, half) { return p.a > sp.a - half && p.b < sp.b + half && p.b - p.a > half; }
 
   function isAdjClip(c) { try { return !!c.isAdjustmentLayer(); } catch (e) { return false; } }
   function trackHasLayers(tr) {
