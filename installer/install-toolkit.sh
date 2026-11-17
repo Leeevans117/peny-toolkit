@@ -167,7 +167,7 @@ if [ $UPDATE = 0 ]; then
   fetch_whisper ggml-large-v3-turbo.bin "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin" 1624555275
   fetch_whisper ggml-silero-v5.1.2.bin "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin" 885098
 
-  OLLAMA_MODEL="$(sed -n 's/^var MODEL = "\(.*\)";.*/\1/p' "$P/panel/skills/interview-selects/pipeline.js")"
+  OLLAMA_MODEL="$(sed -n 's/^var MODEL = "\([^"]*\)".*/\1/p' "$P/panel/skills/interview-selects/pipeline.js")"
   OM="${OLLAMA_MODELS:-$HOME/.ollama/models}"
   REL="manifests/registry.ollama.ai/library/${OLLAMA_MODEL%%:*}/${OLLAMA_MODEL#*:}"
   if [ -f "$OM/$REL" ]; then done_ "Ollama model $OLLAMA_MODEL"

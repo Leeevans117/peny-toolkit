@@ -28,7 +28,7 @@ WHISPER_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-larg
 WHISPER_SIZE=1624555275
 VAD_URL="https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin"
 VAD_SIZE=885098
-OLLAMA_MODEL="$(sed -n 's/^var MODEL = "\(.*\)";.*/\1/p' "$SRC/skills/interview-selects/pipeline.js")"
+OLLAMA_MODEL="$(sed -n 's/^var MODEL = "\([^"]*\)".*/\1/p' "$SRC/skills/interview-selects/pipeline.js")"
 SETTINGS_DIR="$HOME/.peny-toolkit"
 
 export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_UPGRADE=1

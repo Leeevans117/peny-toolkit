@@ -59,7 +59,7 @@ if [ $MODELS = 1 ]; then
   for f in ggml-large-v3-turbo.bin ggml-silero-v5.1.2.bin; do
     put "$HOME/PenyToolkit-scratch/whisper-models/$f" "$SHARE/models/whisper"
   done
-  M="$(sed -n 's/^var MODEL = "\(.*\)";.*/\1/p' "$REPO/skills/interview-selects/pipeline.js")"
+  M="$(sed -n 's/^var MODEL = "\([^"]*\)".*/\1/p' "$REPO/skills/interview-selects/pipeline.js")"
   REL="manifests/registry.ollama.ai/library/${M%%:*}/${M#*:}"
   OM="$HOME/.ollama/models"
   mkdir -p "$SHARE/models/ollama/blobs" "$(dirname "$SHARE/models/ollama/$REL")"
