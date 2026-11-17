@@ -441,6 +441,28 @@ def sound_spread(ffmpeg, u, tmp):
     return best
 
 
+def sounds_agree(ffmpeg, us_a, us_b, tmp):
+    """L (as in match) when 2+ of 3 pieces of track b's longest clip land within AGREE of each
+    other in track a's longest clip, else None. Hiss lands at random, real sound doesn't.
+    shortcut: longest clip of each track only; a multi-take track whose longest clips are
+    different takes falls back to the old stop, upgrade to pairing clips by timeline overlap."""
+    a = max([u for u in us_a if u.get("src")] or [None], key=lambda u: u and u["duration"])
+    b = max([u for u in us_b if u.get("src")] or [None], key=lambda u: u and u["duration"])
+    if not a or not b or a["duration"] < PIECE or b["duration"] < PIECE: return None
+    ca = pick_channels(decode(ffmpeg, a["src"], a["inPoint"], a["duration"], tmp))
+    if not ca: return None
+    votes = []
+    for k in range(3):
+        off = round((b["duration"] - PIECE) * (k + 1) / 4 * SR) / SR
+        cb = pick_channels(decode(ffmpeg, b["src"], b["inPoint"] + off, PIECE, tmp))
+        if not cb: continue
+        lag, ratio = gcc(ca[0][1], cb[0][1])
+        if lag is not None and ratio >= 2: votes.append((a["inPoint"] + lag / SR) - (b["inPoint"] + off))
+    for v in votes:
+        if sum(1 for w in votes if abs(w - v) <= AGREE) >= 2: return v
+    return None
+
+
 def choose_reference(ffmpeg, units, tmp, pool):
     """Keep camera A as the reference when its sound is usable; otherwise make the lowest
     other track with usable sound (another camera first, then a sound-only track) the
@@ -459,6 +481,13 @@ def choose_reference(ffmpeg, units, tmp, pool):
     name = ("V" if refkey[0] == "video" else "A") + str(refkey[1] + 1)
     if ok: return None
     order = sorted([k for k in tracks if k != refkey], key=lambda k: (k[0] != "video", k[1]))
+    # Noisy scratch mics can score as low as an unplugged mic (17 Nov 2026, Orbea HQ: 10-12 dB,
+    # yet the two cameras matched to 1 ms), so camera A also counts when it lines up with another track.
+    for k in order:
+        L = sounds_agree(ffmpeg, tracks[refkey], tracks[k], tmp)
+        if L is not None:
+            return "%s sound is noisy (%.0f dB between loud and quiet) but lines up with %s (%+.3f s), so it stays the reference" % (
+                name, sp, ("V" if k[0] == "video" else "A") + str(k[1] + 1), L)
     for k in order:
         ok2, sp2 = usable(k)
         if not ok2: continue
