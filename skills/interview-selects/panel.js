@@ -86,7 +86,14 @@ module.exports = function (api) {
   // one track would mean muting the others on his sequence), that track's files are read
   // with ffmpeg, all their channels mixed; RED clips from their proxy.
   function sequenceAudio(ffmpeg, scan, params, dir) {
-    if ((params.track || "").trim()) return fromFiles(ffmpeg, scan, dir);
+    return renderOrRead(ffmpeg, scan, params, dir).then(function (wav) { return checkHeard(ffmpeg, wav, scan); });
+  }
+  function renderOrRead(ffmpeg, scan, params, dir) {
+    // Media Encoder renders the originals, never the proxies: with any original offline it
+    // writes silence, so the files (proxies where attached) are read instead (17 Nov 2026).
+    var offline = scan.segments.filter(function (s) { return s.offline; });
+    if (offline.length) api.log("Interview Selects: " + offline.length + " clip(s) have their original file offline (e.g. " + offline[0].name + "); reading the files and proxies instead of rendering.");
+    if ((params.track || "").trim() || offline.length) return fromFiles(ffmpeg, scan, dir);
     var raw = path.join(dir, "sequence-render.wav"), final = path.join(dir, "interview.wav");
     api.status("Reading the sound of \"" + scan.sequence + "\"…");
     // Media Encoder renders it, so Premiere stays usable (6 Nov 2026).
@@ -101,6 +108,14 @@ module.exports = function (api) {
       try { fs.unlinkSync(raw); } catch (e) {}
       return final;
     });
+  }
+  // A silent wav makes whisper invent text ("Thank you." x56), so stop here instead.
+  function checkHeard(ffmpeg, wav, scan) {
+    var r = childProcess.spawnSync(ffmpeg, ["-hide_banner", "-nostats", "-i", wav, "-af", "volumedetect", "-f", "null", "-"], { encoding: "utf8", timeout: 120000 });
+    var m = /max_volume:\s*(-?[\d.]+|-inf) dB/.exec(String(r.stderr || ""));
+    var peak = m ? parseFloat(m[1]) : NaN; // -inf parses as NaN: silent
+    if (m && !(peak > -60)) throw { stop: "The sound of \"" + scan.sequence + "\" came out silent (loudest " + (isNaN(peak) ? "-inf" : peak) + " dB), so there is nothing to transcribe. Usually the original media is offline on this Mac and has no proxy attached: relink it or attach its proxies, then run again." };
+    return wav;
   }
   function fromFiles(ffmpeg, scan, dir) {
     var usable = scan.segments.filter(function (s) { return !/\.r3d$/i.test(s.path); });
@@ -357,9 +372,9 @@ module.exports = function (api) {
     }).then(function (o) {
       lap("total");
       var d = o.mark.details || {}, cd = o.cut ? o.cut.details || {} : {};
-      var summary = (o.mark.ok ? "" : "Not all markers went on, so nothing was cut. ") + o.mark.summary.replace(/\.$/, "") + "" +
+      var summary = (o.mark.ok ? "" : "Not all markers went on, so nothing was cut. ") + (o.mark.summary || o.mark.error || "").replace(/\.$/, "") + "" +
         (o.copy.details.made ? " (a new copy; the original is untouched)" : "") +
-        (o.cut ? ". Cut & raise: " + (o.cut.summary || o.cut.error).replace(/\.$/, "") : "") + ". Took " + fmt(times.total) +
+        (o.cut ? ". Cut & raise: " + (o.cut.summary || o.cut.error || "").replace(/\.$/, "") : "") + ". Took " + fmt(times.total) +
         " (audio " + times.audio + " s, transcript " + (times.transcribe - times.audio) + " s, answers " + (times.answers - times.transcribe) + " s). List: " + path.join(dir, "answers.csv");
       api.status(summary);
       return { ok: !!(o.mark.ok && o.cut && o.cut.ok), summary: summary, error: summary, details: {

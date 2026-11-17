@@ -147,12 +147,15 @@
         if (!p) { notes.push("\"" + it.name + "\" at " + T.fmt(s + offset) + " has no media file; left out."); continue; }
         // ffmpeg can't read .R3D sound: RED clips are read from their attached proxy (as
         // interview-sync does); without one the clip is left out (Arly Kemp, 29 Oct 2026).
-        if (/\.r3d$/i.test(p)) {
+        // Same when the original is offline (Orbea HQ on the Mac mini, 17 Nov 2026: Media
+        // Encoder rendered pure silence and whisper heard "Thank you." for 17 minutes).
+        var offline = !new File(p).exists;
+        if (/\.r3d$/i.test(p) || offline) {
           var px = "";
           try { if (it.projectItem.hasProxy && it.projectItem.hasProxy()) px = String(it.projectItem.getProxyPath() || ""); } catch (eX) {}
           if (px) p = px;
         }
-        out.push({ path: p, inPoint: inPt, start: cs + offset, end: ce + offset, name: String(it.name), track: tracks[k] + 1, depth: depth });
+        out.push({ path: p, inPoint: inPt, start: cs + offset, end: ce + offset, name: String(it.name), track: tracks[k] + 1, depth: depth, offline: offline });
       }
     }
   }

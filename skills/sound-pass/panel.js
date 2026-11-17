@@ -139,6 +139,10 @@ module.exports = function (api) {
         return jsx({ action: "render", voiceTracks: tracks || voiceTracks, path: wav, preset: preset }).then(function (r) {
           report.passes[name].renderMs = r.details.ms;
           if (!r.details.mutesRestored) throw { stop: "Track mutes on the copy were not restored after the " + name + " render; check the copy's track mute buttons." };
+          // Offline originals render as silence (Orbea HQ, 17 Nov 2026): stop before an hour of passes.
+          var vd = childProcess.spawnSync(ffmpeg, ["-hide_banner", "-nostats", "-i", wav, "-af", "volumedetect", "-f", "null", "-"], { encoding: "utf8", timeout: 300000 });
+          var pk = /max_volume:\s*(-?[\d.]+|-inf) dB/.exec(String(vd.stderr || ""));
+          if (pk && !(parseFloat(pk[1]) > -60)) throw { stop: "The " + name + " render of the voice tracks came out silent (loudest " + pk[1] + " dB). Usually the original media is offline on this Mac: Premiere renders originals, not proxies. Relink the originals, then run again." };
           api.status("Sound Pass: " + name + " — measuring…");
           npz[name] = path.join(dir, name + ".npz");
           return measure(python, { mode: "blocks", ffmpeg: ffmpeg, wav: wav, out: npz[name] });
