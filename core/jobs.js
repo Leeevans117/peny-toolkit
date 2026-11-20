@@ -130,7 +130,11 @@ function JobPool(opts) {
   this.eta = null; // { finishAt, firstAt, firstSec } once estimated
 }
 
+// Keys must be unique: running jobs are kept by key, so a second job with the same key
+// would overwrite the first and one of them would be lost from the summary (QA 20 Nov 2026).
 JobPool.prototype.add = function (job) {
+  var key = job.key, clash = this.running[key] || this.queue.concat(this.done).some(function (j) { return j.key === key; });
+  if (clash) throw new Error("Two jobs have the same key (" + key + "); each job needs its own key, e.g. its output path.");
   job.state = "queued";
   this.queue.push(job);
 };
@@ -396,9 +400,13 @@ JobPool.prototype.wait = function () {
 // opts.limits(): { total, perKind: { r3d: n } }, read each time a job could start (the
 // Full / Half speed switch can change mid-run); without it, maxConcurrent of any kind.
 JobPool.prototype._fill = function () {
-  var lim = this.opts.limits ? this.opts.limits() : { total: this.opts.maxConcurrent }, self = this;
+  var lim = (this.opts.limits && this.opts.limits()) || { total: this.opts.maxConcurrent }, self = this;
+  // A limit below 1 (or missing) would leave the queue waiting for ever, so at least 1 runs
+  // (QA 20 Nov 2026).
+  lim = { total: Math.max(1, Math.floor(lim.total) || 1), perKind: lim.perKind || {} };
   this.opts.maxConcurrent = lim.total; // ETA plays the rest forward with this many at once
-  var per = lim.perKind || {};
+  var per = {};
+  Object.keys(lim.perKind).forEach(function (k) { per[k] = Math.max(1, Math.floor(lim.perKind[k]) || 1); });
   function runningOf(kind) { return Object.keys(self.running).filter(function (k) { return (self.running[k].kind || "job") === kind; }).length; }
   for (var i = 0; !this.paused && !this.cancelled && i < this.queue.length && this.runningCount() < lim.total; ) {
     var kind = this.queue[i].kind || "job";
