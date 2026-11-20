@@ -13,8 +13,8 @@ Every number below comes from a run I watched pass. Where something was not run,
 | Stress runs (`tests/stress/stress.js`, `stress_sync.py`) | cloud, 4 CPUs | all pass (section 4) |
 | Fresh install (`verify_fresh_install.sh`) | cloud | PASS (3 passed, 0 failed, 2 skipped: install.sh needs rsync, installer is macOS only) |
 | Stress runs | Mac Studio, macOS 26.6.2, arm64, 20 CPUs, Node 26 | all pass (section 4) |
-| Full suite from the office-server share | Mac Studio | first run: Python 19/19, pool check pass, Node 157 pass / 2 fail / 3 skipped, both failures from the share, not the Toolkit (see below); re-run after the fixes: MAC_RERUN_PENDING |
-| Fresh install with the one-click installer | Mac Studio | first run FAIL at the clone (share ownership); with that bypassed: panel, 12 skills, bundled ffmpeg/ffprobe/whisper-cli all PASS, full suite from the fresh copy ALL TESTS PASS; re-run after the fixes: MAC_RERUN_PENDING |
+| Full suite from the office-server share | Mac Studio | first run: Python 19/19, pool check pass, Node 157 pass / 2 fail / 3 skipped, both failures from the share, not the Toolkit (see below); re-run after the fixes (5645b4f): Node 159 pass / 0 fail / 3 skipped (a real Ollama holds port 11434), Python 19/19, pool check pass, UI smoke skipped (no Playwright on the Mac), ALL TESTS PASS |
+| Fresh install with the one-click installer | Mac Studio | first run FAIL at the clone (share ownership); with that bypassed: panel, 12 skills, bundled ffmpeg/ffprobe/whisper-cli all PASS, full suite from the fresh copy ALL TESTS PASS; re-run after the fixes (5645b4f): PASS fresh install, 13 passed, 0 failed, 0 skipped (panel, 12 skills, no dev files in the install, installer, bundled ffmpeg/ffprobe/whisper-cli/python3+numpy, full suite from the fresh copy) |
 | Premiere end to end in my own QA project | Mac Studio | PREMIERE_PENDING |
 
 What the Mac Studio run found (all in the test tools, none in the Toolkit; fixed in 5645b4f and re-checked in the cloud on a copy owned by another user with a `._` file added):
