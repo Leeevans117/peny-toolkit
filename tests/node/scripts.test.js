@@ -23,6 +23,24 @@ test("install.sh copies the panel without tests/docs/tools and says NO PANEL whe
   ["tests", "docs", "tools", "setup.sh", "installer", "CLAUDE.md", ".git"].forEach(function (f) { assert.equal(fs.existsSync(path.join(dest, f)), false, f + " should not be installed"); });
 });
 
+// Found on the Mac Studio (20 Nov 2026): install.sh run from a checkout on the office server
+// copied 110 macOS "._" metadata files into the panel.
+test("install.sh leaves macOS ._ files (network shares) out of the panel", { skip: !has("rsync") && "rsync not installed (macOS has it)" }, function () {
+  var src = path.join(H.tmpdir("src"), "com.peny.toolkit"), home = H.tmpdir("home");
+  cp.execSync("git -c safe.directory='*' ls-files", { cwd: H.ROOT }).toString().trim().split("\n").forEach(function (f) {
+    if (!fs.existsSync(path.join(H.ROOT, f))) return;
+    fs.mkdirSync(path.dirname(path.join(src, f)), { recursive: true }); fs.copyFileSync(path.join(H.ROOT, f), path.join(src, f));
+  });
+  fs.chmodSync(path.join(src, "install.sh"), 0o755);
+  ["._main.js", "core/._jobs.js", "skills/._colour-baseline", "skills/colour-baseline/._icon.svg"].forEach(function (f) { fs.writeFileSync(path.join(src, f), "\u0000\u0005\u0016\u0007"); });
+  var r = cp.spawnSync("/bin/bash", [path.join(src, "install.sh")], { env: Object.assign({}, process.env, { HOME: home, PENY_HOOK: path.join(home, "hook") }), encoding: "utf-8" });
+  assert.equal(r.status, 3, r.stdout + r.stderr);
+  var dest = path.join(home, "Library", "Application Support", "Adobe", "CEP", "extensions", "com.peny.toolkit"), found = [];
+  (function walk(d) { fs.readdirSync(d, { withFileTypes: true }).forEach(function (e) { if (e.name.indexOf("._") === 0) found.push(path.relative(dest, path.join(d, e.name))); else if (e.isDirectory()) walk(path.join(d, e.name)); }); })(dest);
+  assert.deepEqual(found, [], "._ files installed: " + found.join(", "));
+  assert.ok(fs.existsSync(path.join(dest, "skills", "colour-baseline", "icon.svg")));
+});
+
 // A fake REDline render: quad audio where file ch k holds a tone at 200*(k+1) Hz, picture at legal-range grey.
 function fakeRedRender(file, channels) {
   var args = ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=0x808080:s=320x180:r=25:d=1"];

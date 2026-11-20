@@ -7,7 +7,7 @@ DEST="$HOME/Library/Application Support/Adobe/CEP/extensions/com.peny.toolkit/"
 HOOK="${PENY_HOOK:-/tmp/peny-toolkit}"
 WAIT=60
 
-rsync -a --delete --exclude .git --exclude .gitignore --exclude __pycache__ --exclude /setup.sh --exclude /auto-update.sh --exclude /CLAUDE.md --exclude /docs --exclude /presets --exclude /installer --exclude /tools --exclude /tests --exclude /QA_CHECKLIST.md --exclude /QA_REPORT.md --exclude /verify_fresh_install.sh --exclude /.gitattributes "$SRC/" "$DEST" || { echo "ERROR rsync failed"; exit 1; }
+rsync -a --delete --exclude '._*' --exclude .DS_Store --exclude .git --exclude .gitignore --exclude __pycache__ --exclude /setup.sh --exclude /auto-update.sh --exclude /CLAUDE.md --exclude /docs --exclude /presets --exclude /installer --exclude /tools --exclude /tests --exclude /QA_CHECKLIST.md --exclude /QA_REPORT.md --exclude /verify_fresh_install.sh --exclude /.gitattributes "$SRC/" "$DEST" || { echo "ERROR rsync failed"; exit 1; }
 
 mkdir -p "$HOOK"
 # loader.js touches loader-alive every second; nothing in the last 5 s means no panel
