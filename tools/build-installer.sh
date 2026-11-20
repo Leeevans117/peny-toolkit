@@ -135,6 +135,7 @@ printf 'PENY_RELEASES="%s"\n' "$RELEASES" > "$P/update.conf.default"
 cat > "$P/VERSION.json" <<JSON
 {"version": "$VERSION", "build": $BUILD, "commit": "$COMMIT", "built": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
 JSON
+cp "$P/VERSION.json" "$P/panel/VERSION.json"   # the panel shows it (core/version.js)
 
 say "5/5 Zip"
 ZIP="Peny-Toolkit-$VERSION.zip"

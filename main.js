@@ -1335,6 +1335,28 @@ function writeHookResult(result, id) {
     });
 }
 
+// ---- Version at the top of the panel (core/version.js) ----
+// Read when the panel opens and every minute: a Mac that installs before it commits
+// (or publishes a little later) shows the final version without a reload.
+var versionTimer = null;
+function startVersion() {
+  var version = nodeRequire(path.join(extRoot, "core", "version.js"));
+  var el = document.getElementById("ver"), pending = false, last = "";
+  function show() {
+    if (pending) return;   // a slow office server: never stack reads
+    pending = true;
+    version.read(extRoot, os.homedir(), function (info) {
+      pending = false;
+      var text = version.label(info);
+      el.textContent = text; el.title = version.tooltip(info);
+      el.classList.toggle("changes", !!info.changes);
+      if (text !== last) { log("Version: " + text); last = text; }
+    });
+  }
+  show();
+  versionTimer = setInterval(show, 60 * 1000);
+}
+
 // ---- Start ----
 var startError = null;
 (function start() {
@@ -1355,6 +1377,7 @@ var startError = null;
     if (!window.PenyLoader) fs.writeFileSync(INSTANCE_FILE, INSTANCE_ID, "utf-8");
     hookTimer = setInterval(pollHook, HOOK_POLL_MS);
     updates = nodeRequire(path.join(extRoot, "core", "updater.js")).start({ log: log, isBusy: isBusy });
+    startVersion();
     document.getElementById("status").textContent = skills.filter(function (s) { return !s.hidden; }).length + " apps";
     log("Panel open (instance " + INSTANCE_ID + "), " + skills.length + " skills: " + skills.map(function (s) { return s.id; }).join(", "));
   } catch (e) {
@@ -1384,6 +1407,7 @@ function stop() {
   stopRunTimer(false);
   flipEnd();
   if (updates) { updates.stop(); updates = null; }
+  if (versionTimer) { clearInterval(versionTimer); versionTimer = null; }
   skills = [];
 }
 
