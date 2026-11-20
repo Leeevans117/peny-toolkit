@@ -126,3 +126,9 @@ test("Sync Interviews apply: works on a copy it makes itself, the scanned sequen
   assert.deepEqual(h.P.mutations.filter(function (m) { return !/^(marker|linkSelection|unlinkSelection)$/.test(m); }), [], JSON.stringify(r).slice(0, 200));
   assert.match(JSON.parse(h.T.run("interview-sync", { action: "apply", sequenceId: "999" })).error, /scanned sequence is gone/);
 });
+
+test("Make safe copy: the 100th and later copies still get their own name (was a repeat of (99))", function () {
+  var h = J.load(["make-safe-copy"], { sequences: [{ name: "S", id: "1" }] }), names = {};
+  for (var k = 0; k < 120; k++) { h.P.project.activeSequence = h.P.project.sequences[0]; var r = JSON.parse(h.T.run("make-safe-copy", {})); assert.equal(r.ok, true, r.error); names[r.details.copyName] = 1; }
+  assert.equal(Object.keys(names).length, 120);
+});

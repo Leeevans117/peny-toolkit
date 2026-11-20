@@ -174,7 +174,7 @@ var PenyToolkit = $.global.PenyToolkit;
     if (!created) return T.fail("Sequence.clone() did not create a new sequence (checked for 5 s).");
 
     var wanted = originalName + " " + T.COPY_SUFFIX;
-    for (var n = 2; T.sequenceNameExists(wanted) && n < 100; n++) wanted = originalName + " (" + n + ") " + T.COPY_SUFFIX;
+    for (var n = 2; T.sequenceNameExists(wanted) && n < 10000; n++) wanted = originalName + " (" + n + ") " + T.COPY_SUFFIX;
     var cloneName = String(created.name);
     created.name = wanted;
     if (String(created.name) !== wanted && created.projectItem) created.projectItem.name = wanted;
