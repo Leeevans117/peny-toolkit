@@ -12,8 +12,18 @@ Every number below comes from a run I watched pass. Where something was not run,
 | Panel UI smoke (headless Chromium, 9 apps, 47 buttons) | cloud | 9 of 9 apps pass, no page errors |
 | Stress runs (`tests/stress/stress.js`, `stress_sync.py`) | cloud, 4 CPUs | all pass (section 4) |
 | Fresh install (`verify_fresh_install.sh`) | cloud | PASS (3 passed, 0 failed, 2 skipped: install.sh needs rsync, installer is macOS only) |
-| Same suite, stress and fresh install on the Mac Studio | Mac Studio | MAC_STUDIO_PENDING |
+| Stress runs | Mac Studio, macOS 26.6.2, arm64, 20 CPUs, Node 26 | all pass (section 4) |
+| Full suite from the office-server share | Mac Studio | first run: Python 19/19, pool check pass, Node 157 pass / 2 fail / 3 skipped, both failures from the share, not the Toolkit (see below); re-run after the fixes: MAC_RERUN_PENDING |
+| Fresh install with the one-click installer | Mac Studio | first run FAIL at the clone (share ownership); with that bypassed: panel, 12 skills, bundled ffmpeg/ffprobe/whisper-cli all PASS, full suite from the fresh copy ALL TESTS PASS; re-run after the fixes: MAC_RERUN_PENDING |
 | Premiere end to end in my own QA project | Mac Studio | PREMIERE_PENDING |
+
+What the Mac Studio run found (all in the test tools, none in the Toolkit; fixed in 5645b4f and re-checked in the cloud on a copy owned by another user with a `._` file added):
+
+- git refuses to read a checkout on the share ("dubious ownership": the share's files belong to uid 1002). The bash -n test, `inventory.js` and `verify_fresh_install.sh` now use a one-command `-c safe.directory`, and the fresh copy is made through a git bundle. No git settings are changed.
+- The icon test read the share's macOS `._icon.svg` metadata files as icons. They are now skipped; every real icon is still checked.
+- The installer exits 1 while anything is left for a person, and in a `--no-models` test run the models and the LUT import always are. The check now accepts exactly those items and fails on anything else.
+- `run-all.sh` and the check looked for the bundled Python at `python/bin/python3`. The installer's launcher, and the one the skills use, is `bin/python3`.
+- 3 Interviews tests skip when a real Ollama already holds port 11434 (by design, so they never talk to the real model).
 
 Run it all again with `tests/run-all.sh` (prints `ALL TESTS PASS`) and `./verify_fresh_install.sh`.
 
@@ -77,6 +87,24 @@ PASS StepTask 1,000 runs, one history file | 129 ms | heap +7.0 MB | history sti
 STRESS PASS on linux x64, node v22.23.5, 4 CPUs
 PASS sync measure: 1 h wav, 20 clips | 36.5 s | peak memory 310 MB | 20/20 synced, worst error 0.1 ms
 ```
+
+Mac Studio (macOS 26.6.2, arm64, 20 CPUs, Node 26.5.0):
+
+```
+PASS JobPool 3,200 jobs x4 | 6144 ms | heap +18.0 MB | 3200 ok, 6400 progress events, slowest progress() 3 ms
+PASS ETA with 3,200 queued, 1,000 progress() calls | 455 ms | heap +0.1 MB | 0.40 ms per call, eta 7 h
+PASS JobPool pause/resume/cancel race | 913 ms | heap -16.5 MB | 91 ok, 4 killed, 205 not started, 0 lost
+PASS 2 pools x 50 runs writing one ETA file | 190 ms | heap -0.4 MB | file still valid JSON, ffmpeg rate 0.0953
+PASS walkTree 40,000 RED clips (in-memory tree) | 116 ms | heap +0.1 MB | 40000 clips, 40000 wavs matched
+PASS camera+shootdate 5,000 files, cold then cached | 505 ms | heap +0.1 MB | cold 46 ms, cached 37 ms
+PASS fillers envelope + tiles, 60 min wav | 3877 ms | heap -0.8 MB | 360000 frames, 720 first-pass clips
+PASS ExtendScript helpers: big timeline, big JSON, 200 safe copies | 5883 ms | heap +0.2 MB | fingerprint 5,000 clips 7.0 ms, json 10,000 records 17 ms, parseTime x100k 70 ms, 200 unique copy names of 200 copies
+PASS StepTask 1,000 runs, one history file | 233 ms | heap +0.1 MB | history still valid
+STRESS PASS on darwin arm64, node v26.5.0, 20 CPUs
+PASS sync measure: 1 h wav, 20 clips | 16.3 s | peak memory 398 MB | 20/20 synced, worst error 0.1 ms
+```
+
+All Mac Studio output files: `/Volumes/ampdata/Peny/Claude/QA-2026-11-20/`.
 
 After every run the harness checks that no file handles were left open and no child
 processes are still running; the long runs also have a time limit (30 s to 2 min) and every result is checked (counts, valid files). None tripped:
