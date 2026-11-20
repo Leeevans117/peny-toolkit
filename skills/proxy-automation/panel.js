@@ -16,6 +16,9 @@
  *    others are reported (Lee's rule for the known collision bug).
  *  - the same media in two bins renders once; attach finds the shared proxy.
  *  - every attach/detach is read back in Premiere.
+ *  - a proxy's audio must be its source's audio (same streams, channels, sample rate):
+ *    checked after every render (core/jobs.js) and before every attach; a proxy that
+ *    differs, or cannot be checked, is reported and never attached (14 Nov 2026).
  */
 var fs = require("fs");
 var path = require("path");
@@ -34,6 +37,9 @@ var REDLINE = ["/Applications/REDCINE-X Professional/REDCINE-X PRO.app/Contents/
 function firstExisting(list) { for (var i = 0; i < list.length; i++) if (fs.existsSync(list[i])) return list[i]; return null; }
 function q(s) { return '"' + String(s).replace(/(["\\$`])/g, "\\$1") + '"'; }
 function extOf(p) { var d = p.lastIndexOf("."); return d === -1 ? "" : p.substring(d + 1).toLowerCase(); }
+// Only real movie files are proxies: Premiere writes sidecars next to them
+// ("X_Proxy.mov.pek", "X_Proxy.xmp") that the name match alone would take for a proxy.
+function isProxyFile(name) { var e = extOf(name); return e === "mov" || e === "mp4"; }
 function stripExt(n) { var d = n.lastIndexOf("."); return d > -1 ? n.substring(0, d) : n; }
 // Source bytes, the ETA's work measure. A RED clip is _001.R3D, _002.R3D... in one folder.
 function sourceBytes(p) {
@@ -65,6 +71,7 @@ function commonPrefix(a, b) { var i = 0, n = Math.min(a.length, b.length); while
 module.exports = function (api) {
   var jobs = api.jobs;
   var pool = null;
+  var warming = null;   // set while the files are read ahead of a plan or attach (warm)
 
   // RED proxies use --useMeta: REDline develops each clip with its own recorded colour
   // space, gamma, white balance/tint and ISO, as Premiere does for the R3D. Log clips
@@ -117,7 +124,7 @@ module.exports = function (api) {
         var full = path.join(dir, d.name);
         if (d.isDirectory()) { stack.push(full); return; }
         var pos = d.name.toLowerCase().indexOf(infix);
-        if (pos === -1) return;
+        if (pos === -1 || !isProxyFile(d.name)) return;
         var base = d.name.substring(0, pos).toLowerCase();
         (index[base] = index[base] || []).push({ file: full, dir: dir });
       });
@@ -125,44 +132,31 @@ module.exports = function (api) {
     return index;
   }
 
-  // Seconds of video in a file by ffprobe, or null when it cannot be read (offline, R3D).
-  var durationCache = {};
-  function mediaSeconds(file) {
-    if (file in durationCache) return durationCache[file];
-    var d = null, ffmpeg = firstExisting(FFMPEG);
-    if (ffmpeg && extOf(file) !== "r3d") {
-      try {
-        var out = require("child_process").execFileSync(path.join(path.dirname(ffmpeg), "ffprobe"),
-          ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file], { encoding: "utf-8", timeout: 20000 });
-        d = parseFloat(out); if (!isFinite(d)) d = null;
-      } catch (e) { d = null; }
-    }
-    return (durationCache[file] = d);
+  // One ffprobe call per file, kept between runs (core/jobs.js probeMedia): the length,
+  // the frame count and the audio layout all come from it.
+  function ffprobePath() { var ff = firstExisting(FFMPEG); return ff ? path.join(path.dirname(ff), "ffprobe") : null; }
+  function probe(file) { return extOf(file) === "r3d" ? { ok: false } : jobs.probeMedia(ffprobePath(), file); }
+  // Seconds of video in a file, or null when it cannot be read (offline, R3D).
+  function mediaSeconds(file) { var r = probe(file); return r.ok ? r.duration : null; }
+  // Is this proxy's audio the source's audio? core/jobs.js audioCheck:
+  // { state: "ok" | "differs" | "unchecked", reason }. Only "ok" may be attached.
+  // A proxy whose length could not be compared with the source (lengthState) is "unchecked"
+  // here too, so it is reported and left detached like one whose audio could not be read.
+  function audioState(proxyFile, mediaPath) {
+    var l = lengthState(proxyFile, mediaPath);
+    if (l.state === "unchecked") return l;
+    return jobs.audioCheck({ ffprobe: ffprobePath(), redline: firstExisting(REDLINE), mediaPath: mediaPath, proxyPath: proxyFile });
   }
-  // Video frame count of a file by ffprobe, or null when it cannot be read (offline, R3D).
-  var frameCache = {};
-  function frameCount(file) {
-    if (file in frameCache) return frameCache[file];
-    var n = null, ffmpeg = firstExisting(FFMPEG);
-    if (ffmpeg && extOf(file) !== "r3d") {
-      try {
-        var out = require("child_process").execFileSync(path.join(path.dirname(ffmpeg), "ffprobe"),
-          ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=nb_frames", "-of", "csv=p=0", file],
-          { encoding: "utf-8", timeout: 30000 });
-        var v = parseInt(String(out).split("\n")[0], 10);
-        if (isFinite(v) && v > 0) n = v;
-      } catch (e) { n = null; }
-    }
-    return (frameCache[file] = n);
+  function lengthState(proxyFile, mediaPath) {
+    return jobs.lengthCheck({ ffprobe: ffprobePath(), redline: firstExisting(REDLINE), mediaPath: mediaPath, proxyPath: proxyFile });
   }
   // A proxy with a different frame count than its source is broken, even though it looks
   // finished (issue 1: the Orbea Canonball proxies lost 9 frames in render and stuttered
   // in Premiere; the re-rendered "V2" set lost them again). { proxy, source } or null.
   function brokenFrames(proxyFile, mediaPath) {
     if (!mediaPath) return null;
-    var a = frameCount(proxyFile), b = frameCount(mediaPath);
-    if (a === null || b === null) return null;
-    return a === b ? null : { proxy: a, source: b };
+    var l = lengthState(proxyFile, mediaPath);
+    return l.state === "differs" ? { proxy: l.proxy, source: l.source } : null;
   }
 
   // A proxy found away from the clip's own folder only counts if it is as long as the clip:
@@ -177,6 +171,31 @@ module.exports = function (api) {
     return Math.abs(a - b) <= Math.max(0.5, a * 0.01);
   }
 
+  // Before a plan or an attach: read every file the checks will ask about (each clip's
+  // media, every proxy file with the clip's name anywhere under the proxy folder, the
+  // proxy attached now), several at once, into the probe cache. Without it the checks
+  // read them one by one with the panel frozen.
+  function warm(items, index, what) {
+    var files = [];
+    items.forEach(function (it) {
+      if (it.offline) return;
+      if (it.mediaPath) files.push(it.mediaPath);
+      if (it.hasProxy && it.proxyPath) files.push(it.proxyPath);
+      (index[stripExt(it.name).toLowerCase()] || []).forEach(function (c) { files.push(c.file); });
+    });
+    var last = 0, w = warming = { cancelled: false };
+    return jobs.warmProbes({ ffprobe: ffprobePath(), redline: firstExisting(REDLINE), files: files,
+      cancelled: function () { return w.cancelled; },
+      onProgress: function (done, total) {
+        if (done === total || Date.now() - last > 500) { last = Date.now(); api.status(what + ": reading files " + done + " of " + total + "…"); }
+      } }).then(function () {
+        if (warming === w) warming = null;
+        // Cancel pressed while reading: nothing has been rendered or attached yet.
+        if (w.cancelled) { var e = new Error("Cancelled while reading files. Nothing was rendered or attached."); e.cancelled = true; throw e; }
+      });
+  }
+  function cancelledResult(e) { if (e && e.cancelled) return { ok: false, error: e.message, summary: e.message }; throw e; }
+
   // Same lookup order as the original findExistingProxyFile + resolveProxyFromGlobalIndex,
   // but never climbing above the proxy root. Matches outside the clip's own folder must
   // pass sameLength().
@@ -187,7 +206,7 @@ module.exports = function (api) {
       var names = [];
       try { names = fs.readdirSync(dir); } catch (e) {}
       for (var i = 0; i < names.length; i++) {
-        if (names[i].toLowerCase().indexOf(prefix) !== 0) continue;
+        if (names[i].toLowerCase().indexOf(prefix) !== 0 || !isProxyFile(names[i])) continue;
         var hit = path.join(dir, names[i]);
         if (level === 0 || sameLength(hit, mediaPath)) return hit;
       }
@@ -218,9 +237,17 @@ module.exports = function (api) {
   }
 
   // Works out what to render without touching anything.
-  function plan(items, root) {
-    var index = indexProxies(root);
-    var p = { render: [], done: [], skipped: [], shared: [] };
+  function plan(items, root, index) {
+    // audioDiffers / unchecked: also in skipped (with the reason), listed apart for the counts.
+    var p = { render: [], done: [], skipped: [], shared: [], audioDiffers: [], unchecked: [] };
+    function audioBad(rec, file, what) {
+      var a = audioState(file, rec.mediaPath);
+      if (a.state === "ok") return false;
+      rec.reason = (a.state === "differs" ? what : "proxy could not be checked") + ": " + file + " - " + a.reason + (a.state === "differs" ? " - it must not be attached; delete it by hand to re-render" : "; not attached");
+      p.skipped.push(rec);
+      (a.state === "differs" ? p.audioDiffers : p.unchecked).push(rec);
+      return true;
+    }
     var byOutput = {}, byMedia = {};
     items.forEach(function (it) {
       var rec = { nodeId: it.nodeId, name: it.name, mediaPath: it.mediaPath, binPath: it.binPath };
@@ -229,6 +256,7 @@ module.exports = function (api) {
         var badAtt = brokenFrames(it.proxyPath, it.mediaPath);
         if (badAtt) { rec.reason = "attached proxy is broken: " + it.proxyPath + " has " + badAtt.proxy +
           " video frames, the source " + badAtt.source + " (frames lost in an earlier render)"; p.skipped.push(rec); }
+        else if (audioBad(rec, it.proxyPath, "attached proxy has the wrong audio")) { /* reported */ }
         else { rec.reason = "proxy attached: " + it.proxyPath; p.done.push(rec); }
         return;
       }
@@ -240,6 +268,7 @@ module.exports = function (api) {
           var bad = brokenFrames(found, it.mediaPath);
           if (bad) { rec.reason = "broken proxy on disk: " + found + " has " + bad.proxy +
             " video frames, the source " + bad.source + " (frames lost in an earlier render) - delete it by hand to re-render"; p.skipped.push(rec); }
+          else if (audioBad(rec, found, "proxy on disk has the wrong audio")) { /* reported */ }
           else { rec.reason = "proxy on disk: " + found; p.done.push(rec); }
         }
         return;
@@ -276,6 +305,14 @@ module.exports = function (api) {
     });
   }
 
+  // " (2 audio differs, 1 could not be checked)" or "".
+  function audioCounts(p) {
+    var a = [];
+    if (p.audioDiffers.length) a.push(p.audioDiffers.length + " audio differs from the source");
+    if (p.unchecked.length) a.push(p.unchecked.length + " audio could not be checked");
+    return a.length ? " (" + a.join(", ") + ")" : "";
+  }
+
   var actions = {};
 
   actions.render = function (params) {
@@ -284,19 +321,27 @@ module.exports = function (api) {
     if (c.error) return Promise.resolve({ ok: false, error: c.error });
     return listScope(params).then(function (res) {
       if (!res.ok) return res;
-      var p = plan(res.details.items, c.root);
+      var index = indexProxies(c.root);
+      return warm(res.details.items, index, "Checking proxies").then(function () {
+      var p = plan(res.details.items, c.root, index);
       api.log("Plan: " + p.render.length + " to render, " + p.done.length + " already have proxies, " +
-        p.shared.length + " share media, " + p.skipped.length + " skipped.");
+        p.shared.length + " share media, " + p.skipped.length + " skipped" + audioCounts(p) + ".");
       p.skipped.forEach(function (r) { api.log("  skipped: " + r.binPath + "/" + r.name + " - " + r.reason, "warn"); });
       if (params.dryRun) {
-        return { ok: true, summary: "Dry run: " + p.render.length + " would render.", details: {
+        var dryBad = p.audioDiffers.length + p.unchecked.length;
+        var drySummary = "Dry run: " + p.render.length + " would render" + (dryBad ? "; " + p.skipped.length + " skipped" + audioCounts(p) : "") + ".";
+        return { ok: true, summary: drySummary, details: {
           scope: res.details.scope, tally: res.details.tally, render: brief(p.render, 500), done: brief(p.done),
-          shared: brief(p.shared), skipped: brief(p.skipped, 500) } };
+          shared: brief(p.shared), skipped: brief(p.skipped, 500),
+          audioDiffers: brief(p.audioDiffers, 500), unchecked: brief(p.unchecked, 500) } };
       }
       if (!p.render.length) {
         api.progress({ event: "none", total: 0, finished: 0, ok: 0, failed: 0, running: 0, queued: 0, fraction: 1, percent: 100,
           already: p.done.length });
-        return { ok: true, summary: "Nothing to render.", details: { done: brief(p.done), shared: brief(p.shared), skipped: brief(p.skipped, 500) } };
+        var noneBad = p.audioDiffers.length + p.unchecked.length;
+        var noneSummary = "Nothing to render" + (noneBad ? "; " + p.skipped.length + " skipped" + audioCounts(p) : "") + ".";
+        return { ok: true, summary: noneSummary, details: { done: brief(p.done), shared: brief(p.shared),
+          skipped: brief(p.skipped, 500), audioDiffers: brief(p.audioDiffers, 500), unchecked: brief(p.unchecked, 500) } };
       }
 
       pool = new jobs.JobPool({
@@ -342,8 +387,10 @@ module.exports = function (api) {
           weight: sourceBytes(r.mediaPath), kind: isR3d ? "r3d" : "ffmpeg",
           group: r.camera,
           // core/jobs.js refuses the proxy when its frame count differs from the source
-          // (issue 1: the Orbea Canonball renders lost 9 frames and looked finished).
-          mediaPath: r.mediaPath, ffprobe: ff ? path.join(path.dirname(ff), "ffprobe") : null });
+          // (issue 1: the Orbea Canonball renders lost 9 frames and looked finished) or
+          // when its audio is not the source's audio (redline: reads an R3D's channels).
+          mediaPath: r.mediaPath, ffprobe: ff ? path.join(path.dirname(ff), "ffprobe") : null,
+          redline: firstExisting(REDLINE) });
       });
       var startedAt = Date.now();
       pool.start();
@@ -360,11 +407,15 @@ module.exports = function (api) {
         pool = null;
         var summary = s.ok + " of " + s.total + " rendered and checked complete" +
           (s.failed + s.killed ? ", " + (s.failed + s.killed) + " failed or killed" : "") +
-          (s.cancelled ? " (cancelled)" : "") + ". " + p.done.length + " already had proxies, " + p.skipped.length + " skipped.";
+          (s.cancelled ? " (cancelled)" : "") + ". " + p.done.length + " already had proxies, " + p.skipped.length + " skipped" + audioCounts(p) + ".";
+        // Existing proxies with the wrong audio do not fail the render (as with broken
+        // frame counts): they are in the summary here and Attach refuses them.
         return { ok: s.failed + s.killed === 0 && !s.cancelled && !noCmd.length, summary: summary, error: summary, details: {
           scope: res.details.scope, jobs: s.jobs, done: brief(p.done), shared: brief(p.shared),
-          skipped: brief(p.skipped, 500), noCommand: brief(noCmd), eta: etaCheck } };
+          skipped: brief(p.skipped, 500), audioDiffers: brief(p.audioDiffers, 500), unchecked: brief(p.unchecked, 500),
+          noCommand: brief(noCmd), eta: etaCheck } };
       });
+      }).catch(cancelledResult);
     });
   };
 
@@ -379,6 +430,10 @@ module.exports = function (api) {
     return Promise.resolve({ ok: true, summary: "Resumed." });
   };
   actions.cancel = function () {
+    if (!pool && warming) {
+      warming.cancelled = true;
+      return Promise.resolve({ ok: true, summary: "Cancel sent: stopping after the files being read now. Nothing has been rendered or attached." });
+    }
     if (!pool) return Promise.resolve({ ok: false, error: "No render running." });
     pool.cancel();
     return Promise.resolve({ ok: true, summary: "Cancel sent: queued renders dropped, running ones killed. Partial files are left on disk (nothing is deleted)." });
@@ -390,17 +445,36 @@ module.exports = function (api) {
     return listScope(params).then(function (res) {
       if (!res.ok) return res;
       var index = indexProxies(c.root), pairs = [], missing = [], incomplete = [], already = [], broken = [];
+      return warm(res.details.items, index, "Attaching proxies").then(function () {
+      // audioDiffers: the proxy's audio is not the source's. unchecked: the source or the
+      // proxy could not be read, so the audio could not be compared. Neither is attached.
+      var audioDiffers = [], unchecked = [];
+      function audioBad(it, file, attachedNow) {
+        var a = audioState(file, it.mediaPath);
+        if (a.state === "ok") return false;
+        var rec = { name: it.name, bin: it.binPath, file: file, reason: a.reason };
+        if (attachedNow) rec.attached = true;
+        (a.state === "differs" ? audioDiffers : unchecked).push(rec);
+        return true;
+      }
+      // The clip keeps the proxy it has now (nothing usable was found to replace it):
+      // if that one is another file, its audio is checked and reported too.
+      function keepsAttached(it, found) {
+        return !!(it.hasProxy && it.proxyPath && (!found || path.resolve(it.proxyPath) !== path.resolve(found)) &&
+          fs.existsSync(it.proxyPath) && audioBad(it, it.proxyPath, true));
+      }
       res.details.items.forEach(function (it) {
         var found = resolveProxy(c.root, it.binPath, stripExt(it.name), index, it.mediaPath);
-        if (!found) { missing.push({ name: it.name, bin: it.binPath }); return; }
-        if (!jobs.isCompleteMov(found)) { incomplete.push({ name: it.name, bin: it.binPath, file: found }); return; }
+        if (!found) { if (!keepsAttached(it, null)) missing.push({ name: it.name, bin: it.binPath }); return; }
+        if (!jobs.isCompleteMov(found)) { incomplete.push({ name: it.name, bin: it.binPath, file: found }); keepsAttached(it, found); return; }
         var bad = brokenFrames(found, it.mediaPath);
-        if (bad) { broken.push({ name: it.name, bin: it.binPath, file: found, frames: bad.proxy, source: bad.source }); return; }
+        if (bad) { broken.push({ name: it.name, bin: it.binPath, file: found, frames: bad.proxy, source: bad.source }); keepsAttached(it, found); return; }
+        if (audioBad(it, found, !!(it.hasProxy && it.proxyPath && path.resolve(it.proxyPath) === path.resolve(found)))) { keepsAttached(it, found); return; }
         if (it.hasProxy && it.proxyPath && path.resolve(it.proxyPath) === path.resolve(found)) { already.push({ name: it.name, file: found }); return; }
         pairs.push({ nodeId: it.nodeId, path: found });
       });
       // Small pieces with a pause between, so Premiere answers while it attaches (6 Nov 2026).
-      var d = { attached: [], failed: [], broken: broken }, okAll = true;
+      var d = { attached: [], failed: [], broken: broken, audioDiffers: audioDiffers, unchecked: unchecked }, okAll = true;
       function piece(i) {
         if (i >= pairs.length) return Promise.resolve({ ok: okAll, details: d });
         return api.evalSkill({ action: "attach", pairs: pairs.slice(i, i + ATTACH_PIECE) }).then(function (r) {
@@ -415,11 +489,17 @@ module.exports = function (api) {
       return piece(0).then(function (r) {
         var summary = (d.attached || []).length + " attached and verified, " + already.length + " already attached, " +
           (d.failed || []).length + " failed, " + missing.length + " have no proxy file, " + incomplete.length +
-          " proxy files incomplete, " + broken.length + " broken (frames lost in render, left detached)." + (r.error ? " Stopped: " + r.error : "");
-        return { ok: r.ok && !incomplete.length && !broken.length, summary: summary, error: summary, details: {
+          " proxy files incomplete, " + broken.length + " broken (frames lost in render, left detached), " +
+          audioDiffers.length + " audio differs from the source (not attached), " + unchecked.length +
+          " could not be checked (not attached)." + (r.error ? " Stopped: " + r.error : "");
+        audioDiffers.concat(unchecked).forEach(function (x) {
+          api.log("  not attached: " + x.bin + "/" + x.name + " - " + x.file + " - " + x.reason + (x.attached ? " (this proxy is attached now: detach it)" : ""), "warn");
+        });
+        return { ok: r.ok && !incomplete.length && !broken.length && !audioDiffers.length && !unchecked.length, summary: summary, error: summary, details: {
           attached: d.attached || [], failed: d.failed || [], alreadyAttached: already, noProxyFile: missing,
-          incomplete: incomplete, broken: broken } };
+          incomplete: incomplete, broken: broken, audioDiffers: audioDiffers, unchecked: unchecked } };
       });
+      }).catch(cancelledResult);
     });
   };
 
