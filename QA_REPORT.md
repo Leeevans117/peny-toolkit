@@ -6,7 +6,7 @@ Every number below comes from a run I watched pass. Where something was not run,
 
 | Part | Where it ran | Result |
 |---|---|---|
-| Node tests (`node --test`, 162 tests) | cloud, Linux x64, Node 22 | 161 pass, 0 fail, 1 skipped (install.sh copy test: no rsync in the cloud; macOS has it) |
+| Node tests (`node --test`, 166 tests) | cloud, Linux x64, Node 22 | 165 pass, 0 fail, 1 skipped (install.sh copy test: no rsync in the cloud; macOS has it) |
 | Python tests (`unittest`, 19 tests) | cloud | 19 pass |
 | Pool limits self-check | cloud | pass |
 | Panel UI smoke (headless Chromium, 9 apps, 47 buttons) | cloud | 9 of 9 apps pass, no page errors |
@@ -15,7 +15,7 @@ Every number below comes from a run I watched pass. Where something was not run,
 | Stress runs | Mac Studio, macOS 26.6.2, arm64, 20 CPUs, Node 26 | all pass (section 4) |
 | Full suite from the office-server share | Mac Studio | first run: Python 19/19, pool check pass, Node 157 pass / 2 fail / 3 skipped, both failures from the share, not the Toolkit (see below); re-run after the fixes (5645b4f): Node 159 pass / 0 fail / 3 skipped (a real Ollama holds port 11434), Python 19/19, pool check pass, UI smoke skipped (no Playwright on the Mac), ALL TESTS PASS |
 | Fresh install with the one-click installer | Mac Studio | first run FAIL at the clone (share ownership); with that bypassed: panel, 12 skills, bundled ffmpeg/ffprobe/whisper-cli all PASS, full suite from the fresh copy ALL TESTS PASS; re-run after the fixes (5645b4f): PASS fresh install, 13 passed, 0 failed, 0 skipped (panel, 12 skills, no dev files in the install, installer, bundled ffmpeg/ffprobe/whisper-cli/python3+numpy, full suite from the fresh copy) |
-| Premiere end to end in my own QA project | Mac Studio | PREMIERE_PENDING |
+| Premiere end to end in my own QA project (`/Volumes/ampdata/Peny/Claude/QA-2026-11-20/premiere-e2e/QA-E2E.prproj`) | Mac Studio, Premiere 27.0.0, installed panel 2026.11.18.1600 (0894e9b) | 10 skills run; 3 failures, all fixed on this branch (bugs 17-19); details in section 2b |
 
 What the Mac Studio run found (all in the test tools, none in the Toolkit; fixed in 5645b4f and re-checked in the cloud on a copy owned by another user with a `._` file added):
 
@@ -47,6 +47,52 @@ skipped or deleted.
 | 11 | Low | `skills/loudness-master/measure.py` | Duration came out 0.1 s short (it used the meter's last block, not the file length). | Prefers the file's own Duration. | cf682d8 |
 | 12 | Low | `install.sh`, `.gitattributes` | The new tests and QA files would have been copied into every panel install and installer zip. | Excluded from rsync and `git archive`. | b437e25 |
 | 13-16 | Low | `core/core.jsx`, colour-baseline, interview-selects, interview-sync `premiere.jsx` | After 99 copies of one sequence, new copies reused a name. | Name search goes to 10,000. | 43284da |
+
+## 2b. Premiere end to end (Mac Studio, Premiere 27.0.0)
+
+Run through the test hook in a new project made only for this, on test media with known sync
+offsets; one line per check with its evidence: `/Volumes/ampdata/Peny/Claude/QA-2026-11-20/premiere-e2e/results.md`
+(raw results in `premiere-e2e/hook-results/`). This tested the panel already installed
+(0894e9b, main), not this branch. No other project was opened or changed.
+
+| Check | Result |
+|---|---|
+| Ingest: 4 items into the right bins; same folder again adds no duplicates | PASS |
+| Proxies: 3 of 3 rendered (frame counts match), attach verified; missing destination refused; cancel leaves no stray ffmpeg | PASS |
+| Selects Setup: scan + build, UNCUT layout and markers read back | PASS |
+| Make safe copy: original unchanged (same fingerprint before/after), name clash gets "(2)" | PASS |
+| Sync and Link refuse a sequence that is not a TOOLKIT COPY; Link before Sync does nothing and says to sync first | PASS |
+| Sync: offsets exact (12.00 s, 57.25 s); pieces placed within 10 ms (Premiere's frame snap) | PASS |
+| Sound Pass: keyframes and red check marker read back | PASS |
+| Master for YouTube: -14.3 LUFS / -1.1 dBTP (the skill's own measurement; an export was not measured separately) | PASS |
+| Two requests back to back: the second waited for the first | PASS |
+| Colour: detect found ILME-FX6V and ILCE-7SM3; apply made a GRADED copy with Lumetri on all 3 clips | PASS |
+| Link External Audio on Premiere 27.0.0 | FAIL: bug 17 |
+| Interviews Find answers | FAIL: bug 18 (crash hid the real error) |
+| Interviews question/answer split | not conclusive: the test interviewer was only 12 dB quieter on the same mic (Lee's interviews use his own lav); transcript was word-perfect |
+| Close the panel mid-render | not run (closing a CEP panel needs the screen) |
+
+Bugs from this run, fixed on this branch with failing tests first (offline-tested; **not yet
+re-run in Premiere**, because that needs this branch installed in the Mac Studio's panel):
+
+| # | Severity | Where | Bug | Fix | Commit |
+|---|---|---|---|---|---|
+| 17 | High | `skills/link-external-audio/premiere.jsx` | On Premiere 27.0.0 `linkSelection()` does nothing. Link had already unlinked each camera clip from its own sound, so every camera on the copy lost its picture/sound link (the original was untouched). | Tries to put the first clip's link back, stops there, and says which clip, whether it is still unlinked, and that linking must be done by hand on this Premiere version. | 26068a2 |
+| 18 | Medium | `skills/interview-selects/panel.js` | A failed marker step crashed with "Cannot read properties of undefined (reading 'replace')", hiding Premiere's own error. | Shows the step's error (or "no reason given"). | 26068a2 |
+| 19 | Medium | `skills/proxy-automation/panel.js` | After a cancelled render the half-written proxy stays under its final name (by design, nothing is deleted), and the next render said only "Nothing to render." | Lists those files and says to delete them by hand, then render again. | 26068a2 |
+
+Seen, not changed (each would change how the app behaves, so it is Lee's call):
+
+- A cancelled proxy render writes straight to the final `_Proxy.mov` name. Rendering to a
+  temporary name and renaming after the frame check would mean a cancel never leaves a
+  broken file there.
+- Sound Pass and Master for YouTube make their own TOOLKIT COPY when run on an original,
+  where Sync and Link refuse. Both are safe; they are just different.
+- A queued hook request runs on whichever sequence is active when it starts, not when it was
+  sent.
+- The GRADED copy's name drops the "(2)" of the sequence it was made from.
+- Quitting Premiere from a script: AppleScript could not reach Premiere 27, and a terminate
+  signal made it abort while shutting down (no project was open; crash report 09:57).
 
 ## 3. Coverage
 
@@ -123,9 +169,9 @@ processes (tested in `tests/node/jobs.test.js` with a shell that starts a child)
 
 ## 6. Remaining risks, most likely first
 
-1. **Premiere API changes between versions** (the Mac Studio runs 26.3.2, the Mac mini 26.5.2).
-   The QE and Lumetri calls are undocumented; a Premiere update can change them. The
-   TOOLKIT COPY guard keeps any damage on copies.
+1. **Premiere API changes between versions.** It has already happened: Premiere 27.0.0 (now on
+   the Mac Studio) no longer links clips from scripts (bug 17). The QE and Lumetri calls are
+   undocumented too. The TOOLKIT COPY guard keeps any damage on copies.
 2. **Tools found only in three places.** ffmpeg, ffprobe and python are looked for only in the
    bundle, `/opt/homebrew` and `/usr/local`; a Mac with them anywhere else gets "not found".
    ffprobe is taken from ffmpeg's folder.
