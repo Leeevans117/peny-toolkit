@@ -17,8 +17,7 @@ if [ -f "$SRC/VERSION.json" ]; then
   cp "$SRC/VERSION.json" "$DEST/VERSION.json"
 elif commit="$(git -c safe.directory='*' -C "$SRC" rev-parse --short HEAD 2>/dev/null)"; then
   tree="$(cd "$SRC" && idx="$(mktemp)" && cp "$(git -c safe.directory='*' rev-parse --git-path index)" "$idx" 2>/dev/null
-    GIT_INDEX_FILE="$idx" git -c safe.directory='*' add -A -- . ':(exclude,glob)**/._*' ':(exclude,glob)**/.DS_Store' \
-      ':(exclude)docs' ':(exclude)presets' ':(exclude)installer' ':(exclude)tools' ':(exclude)tests' 2>/dev/null \
+    GIT_INDEX_FILE="$idx" git -c safe.directory='*' add -A -- . ':(exclude,glob)**/._*' ':(exclude,glob)**/.DS_Store' 2>/dev/null \
       && GIT_INDEX_FILE="$idx" git -c safe.directory='*' write-tree; rm -f "$idx")"
   clean=false
   [ -n "$tree" ] && [ "$tree" = "$(git -c safe.directory='*' -C "$SRC" rev-parse 'HEAD^{tree}')" ] && clean=true
