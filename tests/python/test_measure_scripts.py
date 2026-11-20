@@ -108,7 +108,8 @@ class LoudnessMeasure(unittest.TestCase):
         d = tmpdir()
         code, out = self._measure({"wav": os.path.join(d, "nope.wav"), "ffmpeg": FFMPEG})
         self.assertEqual(code, 1); self.assertIn("no such file", out["error"])
-        g = os.path.join(d, "junk.wav"); open(g, "wb").write(b"\x00garbage" * 100)
+        g = os.path.join(d, "junk.wav")
+        with open(g, "wb") as f: f.write(b"\x00garbage" * 100)
         code, out = self._measure({"wav": g, "ffmpeg": FFMPEG})
         self.assertEqual(code, 1); self.assertIn("ffmpeg exited", out["error"])
 
@@ -147,7 +148,9 @@ class LutPreset(unittest.TestCase):
     m = load("skills/colour-baseline/lutpreset.py", "lutpreset")
 
     def _cube(self, text):
-        d = tmpdir(); p = os.path.join(d, "look é.cube"); open(p, "w", encoding="utf-8").write(text); return p
+        d = tmpdir(); p = os.path.join(d, "look é.cube")
+        with open(p, "w", encoding="utf-8") as f: f.write(text)
+        return p
 
     def test_parse_identity_cube(self):
         rows = "\n".join("%f %f %f" % (r, g, b) for b in (0, 1) for g in (0, 1) for r in (0, 1))

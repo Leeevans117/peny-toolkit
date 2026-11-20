@@ -8,7 +8,7 @@ var FFMPEG = has("ffmpeg") ? cp.execSync("command -v ffmpeg", { shell: "/bin/bas
 var PRORES = FFMPEG && /prores_ks/.test(cp.execFileSync(FFMPEG, ["-hide_banner", "-encoders"]).toString());
 
 test("every shell script parses (bash -n)", function () {
-  var files = cp.execSync("git ls-files '*.sh' '*.command'", { cwd: H.ROOT }).toString().trim().split("\n").concat(["verify_fresh_install.sh"])
+  var files = cp.execSync("git -c safe.directory='*' ls-files '*.sh' '*.command'", { cwd: H.ROOT }).toString().trim().split("\n").concat(["verify_fresh_install.sh"])
     .filter(function (f) { return fs.existsSync(path.join(H.ROOT, f)); });
   assert.ok(files.length >= 10);
   files.forEach(function (f) { cp.execFileSync("bash", ["-n", path.join(H.ROOT, f)]); });

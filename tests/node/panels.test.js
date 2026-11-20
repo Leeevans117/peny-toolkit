@@ -71,7 +71,7 @@ test("every skill.json: required fields, files it names exist, ids and number ke
 });
 test("every icon.svg is well-formed SVG with the Peny frame", function () {
   IDS.forEach(function (d) {
-    fs.readdirSync(path.join(SK, d)).filter(function (f) { return /\.svg$/.test(f); }).forEach(function (f) {
+    fs.readdirSync(path.join(SK, d)).filter(function (f) { return /\.svg$/.test(f) && f.indexOf("._") !== 0; /* ._x.svg: macOS metadata on network shares, not an icon */ }).forEach(function (f) {
       var s = fs.readFileSync(path.join(SK, d, f), "utf-8");
       assert.ok(/<svg[\s>]/.test(s) && /<\/svg>\s*$/.test(s), d + "/" + f + " is not a whole <svg>");
       assert.equal((s.match(/</g) || []).length, (s.match(/>/g) || []).length, d + "/" + f + ": unbalanced < >");

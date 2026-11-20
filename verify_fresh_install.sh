@@ -47,10 +47,14 @@ v="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
 [ "$v" -ge 22 ] && ok "node $v (tests need 22+)" || bad "node 22 or newer not found (got: ${v}); Homebrew: brew install node"
 
 part "Fresh copy of the code (git clone of the committed tree, nothing uncommitted)"
-if git clone -q "$SRC" "$SB/src/com.peny.toolkit" 2>&1; then
+# Through a bundle, because git refuses to clone a checkout owned by another user (files on
+# the office server's NFS share belong to its uid, not the person logged in). The bundle is
+# made by one git command that trusts this one checkout; no git settings are changed.
+if git -C "$SRC" -c safe.directory='*' bundle create "$SB/src.bundle" HEAD >/dev/null 2>&1 \
+   && git -c advice.detachedHead=false clone -q "$SB/src.bundle" "$SB/src/com.peny.toolkit" 2>&1; then
   R="$SB/src/com.peny.toolkit"; ok "cloned $(git -C "$R" rev-parse --short HEAD) ($(git -C "$R" ls-files | wc -l | tr -d ' ') files)"
 else bad "git clone of $SRC failed"; exit 1; fi
-[ -n "$(git -C "$SRC" status --porcelain)" ] && echo "   note: $SRC has uncommitted changes; they are NOT in this check"
+[ -n "$(git -C "$SRC" -c safe.directory='*' status --porcelain --untracked-files=no)" ] && echo "   note: $SRC has uncommitted changes; they are NOT in this check"
 
 part "Panel install (README: ./install.sh)"
 D="$SB/Library/Application Support/Adobe/CEP/extensions/com.peny.toolkit"
@@ -77,12 +81,19 @@ elif [ ! -f "$INSTALLER/payload/install-toolkit.sh" ]; then bad "no payload/inst
 else
   "$INSTALLER/payload/install-toolkit.sh" --home "$SB" --no-models > "$SB/installer.txt" 2>&1; rc=$?
   tail -25 "$SB/installer.txt" | sed 's/^/   /'
-  [ $rc = 0 ] && ok "installer finished (exit 0)" || bad "installer exit $rc (full output: $SB/installer.txt, use --keep)"
+  # The installer exits 1 while anything is left under "Still needs you". In this test run
+  # three such items are expected and nothing else: the models (--no-models) and the LUT
+  # import (the throw-away home has no Premiere profile).
+  other="$(grep 'STILL TO DO:' "$SB/installer.txt" | grep -v -e 'STILL TO DO: Whisper model .* (run the installer again without --no-models)' \
+    -e 'STILL TO DO: Ollama model .* (about 20 GB; run the installer again without --no-models)' -e 'STILL TO DO: Import the LUT presets once:')"
+  if [ $rc = 0 ] || { [ $rc = 1 ] && [ -z "$other" ]; }; then ok "installer finished (exit $rc; only the expected models + LUT import left for a person)"
+  else bad "installer exit $rc with unexpected items: ${other:-none} (full output: $SB/installer.txt, use --keep)"; fi
   B="$SB/Library/Application Support/PenyToolkit"
   for t in ffmpeg ffprobe whisper-cli; do
     "$B/bin/$t" -version >/dev/null 2>&1 || "$B/bin/$t" --help >/dev/null 2>&1 && ok "bundled $t runs" || bad "bundled $t does not run ($B/bin/$t)"
   done
-  "$B/python/bin/python3" -c "import numpy" 2>/dev/null && ok "bundled python3 + numpy" || bad "bundled python3 cannot import numpy"
+  # bin/python3 is the launcher the skills use (BUNDLED("python3") in each panel.js).
+  "$B/bin/python3" -c "import numpy" 2>/dev/null && ok "bundled python3 + numpy" || bad "bundled python3 ($B/bin/python3) cannot import numpy"
   [ -f "$D/CSXS/manifest.xml" ] && ok "installer put the panel in CEP" || bad "installer did not install the panel"
 fi
 

@@ -40,7 +40,7 @@ var WHY = {
   js: "not reached by the offline tests"
 };
 
-var files = cp.execSync("git ls-files", { cwd: ROOT }).toString().trim().split("\n")
+var files = cp.execSync("git -c safe.directory='*' ls-files", { cwd: ROOT }).toString().trim().split("\n")
   .filter(function (f) { return /\.(js|jsx|py|sh|command)$/.test(f) && f.indexOf("tests/") !== 0; }).sort();
 var out = [], total = 0, covered = 0, perStatus = { unit: 0, e2e: 0, none: 0 };
 out.push("# QA checklist: every function in the Peny Toolkit", "",

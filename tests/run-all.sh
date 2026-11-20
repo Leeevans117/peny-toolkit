@@ -12,7 +12,7 @@ fail=0
 part() { printf '\n== %s\n' "$1"; }
 
 NODE="$(command -v node || ls "$HOME/Library/Application Support/PenyToolkit/bin/node" /opt/homebrew/bin/node 2>/dev/null | head -1)"
-PY="$(ls "$HOME/Library/Application Support/PenyToolkit/python/bin/python3" /opt/homebrew/opt/python@3.14/bin/python3.14 2>/dev/null | head -1)"
+PY="$(ls "$HOME/Library/Application Support/PenyToolkit/bin/python3" /opt/homebrew/opt/python@3.14/bin/python3.14 2>/dev/null | head -1)"
 [ -z "$PY" ] && PY="$(command -v python3)"
 
 part "Node tests"
