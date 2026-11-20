@@ -39,6 +39,7 @@ function pool(items, n, fn) {
 }
 
 function tc(sec) {
+  sec = Math.round(sec * 10) / 10; // round first so 59.96 s reads 1:00.0, not 0:60.0 (QA 20 Nov 2026)
   var h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, s = (sec % 60).toFixed(1);
   return (h ? h + ":" : "") + (m < 10 && h ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
 }
