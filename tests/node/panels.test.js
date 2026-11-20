@@ -115,3 +115,35 @@ IDS.forEach(function (d) {
     });
   });
 });
+
+// Found in the Premiere run (20 Nov 2026): after a cancelled render the half-written proxy
+// stays on disk (by design: the Toolkit never deletes), and the next render said only
+// "Nothing to render." with ok:true, so nobody knew those clips still had no proxy.
+test("proxy-automation render: an incomplete proxy on disk is named in the summary, not hidden behind 'Nothing to render.'", async function () {
+  var root = H.tmpdir("proxies"), media = path.join(root, "A001 é.mp4");
+  fs.writeFileSync(media, "source");
+  H.writeAtoms(path.join(root, "A001 é_Proxy.mov"), [["ftyp", 16], ["mdat", 8192]]); // no moov: cut off mid-render
+  fs.mkdirSync(path.join(root, "Day 1 (B cam)"));  // a folder name with " (" must come through whole
+  fs.writeFileSync(path.join(root, "Day 1 (B cam)", "B002.mp4"), "source");
+  H.writeAtoms(path.join(root, "Day 1 (B cam)", "B002_Proxy.mov"), [["ftyp", 16], ["mdat", 8192]]);
+  var mod = loadPanel("proxy-automation", { ok: true, details: { scope: "all", tally: {}, items: [{ nodeId: "n1", name: "A001 é.mp4", mediaPath: media, binPath: "" },
+    { nodeId: "n2", name: "B002.mp4", mediaPath: path.join(root, "Day 1 (B cam)", "B002.mp4"), binPath: "Day 1 (B cam)" }] } });
+  var r = await mod.actions.render({ dest: root });
+  assert.equal(r.ok, true);
+  assert.match(r.summary, /2 clips.*not rendered/i, r.summary);
+  assert.ok(r.summary.indexOf(path.join(root, "A001 é_Proxy.mov")) >= 0, r.summary);
+  assert.ok(r.summary.indexOf(path.join(root, "Day 1 (B cam)", "B002_Proxy.mov")) >= 0, r.summary);
+  assert.match(r.summary, /delete .* by hand/i, r.summary);
+});
+
+// Found in the Premiere run: when the marker step failed, Interviews crashed with
+// "Cannot read properties of undefined (reading 'replace')" and hid Premiere's real error.
+test("interview-selects find: a failed marker or cut step shows its own error, no TypeError", function () {
+  var mod = loadPanel("interview-selects", { ok: false, error: "no Premiere" });
+  var s = mod.findSummary({ copy: { details: { copyName: "IV Cut", made: true } }, mark: { ok: false, error: "Premiere refused 2 markers" } },
+    { total: 10, audio: 1, transcribe: 5, answers: 9 }, "/tmp/work");
+  assert.match(s, /Not all markers went on, so nothing was cut\. Premiere refused 2 markers/);
+  var s2 = mod.findSummary({ copy: { details: { copyName: "IV Cut" } }, mark: { ok: true, summary: "12 markers." }, cut: { ok: false } },
+    { total: 10, audio: 1, transcribe: 5, answers: 9 }, "/tmp/work");
+  assert.match(s2, /12 markers\. Cut & raise: no reason given/);
+});

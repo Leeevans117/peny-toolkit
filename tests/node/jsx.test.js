@@ -132,3 +132,43 @@ test("Make safe copy: the 100th and later copies still get their own name (was a
   for (var k = 0; k < 120; k++) { h.P.project.activeSequence = h.P.project.sequences[0]; var r = JSON.parse(h.T.run("make-safe-copy", {})); assert.equal(r.ok, true, r.error); names[r.details.copyName] = 1; }
   assert.equal(Object.keys(names).length, 120);
 });
+
+// Found in the Premiere 27.0.0 run (20 Nov 2026): linkSelection() does nothing there, but the
+// skill had already unlinked each camera clip from its own sound first, so every camera on
+// the copy lost its picture/sound link. linkWorks=false behaves like 27.0.0.
+function linkScene(linkWorks) {
+  var lay = [];
+  ["C001", "C002", "C003"].forEach(function (n, i) {
+    var s = i * 20;
+    lay.push({ kind: "video", track: 0, name: n + ".MP4", start: s, end: s + 10 }, { kind: "audio", track: 0, name: n + ".MP4", start: s, end: s + 10 },
+      { kind: "audio", track: 1, name: "ZOOM0001.WAV", start: s + 1, end: s + 9 });
+  });
+  var h = J.load(["link-external-audio"], { sequences: [{ name: "Day 1 TOOLKIT COPY", layout: lay }] });
+  var seq = h.P.project.sequences[0], groups = {}, x = { h: h, unlinks: 0 };
+  function all() { var out = []; ["videoTracks", "audioTracks"].forEach(function (k) { for (var t = 0; t < seq[k].numTracks; t++) seq[k][t].clips.forEach(function (c) { out.push(c); }); }); return out; }
+  function arr(items) { var a = h.inCtx("[]"); items.forEach(function (i) { a.push(i); }); a.numItems = a.length; return a; }
+  var clips = x.clips = all();
+  clips.forEach(function (c) { if (c.mediaType === "Video") { var g = [c, clips.filter(function (a) { return a.mediaType === "Audio" && a.name === c.name; })[0]]; g.forEach(function (m) { groups[m.nodeId] = g; }); } });
+  clips.forEach(function (c) { c.getLinkedItems = function () { return arr((groups[c.nodeId] || []).filter(function (m) { return m !== c; })); }; });
+  seq.getSelection = function () { return arr(all().filter(function (c) { return c._sel; })); };
+  seq.unlinkSelection = function () { x.unlinks++; all().forEach(function (c) { if (c._sel) delete groups[c.nodeId]; }); return true; };
+  seq.linkSelection = function () { if (linkWorks) { var g = all().filter(function (c) { return c._sel; }); g.forEach(function (m) { groups[m.nodeId] = g; }); } return true; };
+  x.linkedToSound = function (name) { var v = clips.filter(function (c) { return c.name === name && c.mediaType === "Video"; })[0]; return (groups[v.nodeId] || []).length > 1; };
+  return x;
+}
+test("link-external-audio: when Premiere's link does nothing, stop after the first clip and say so (do not unlink every camera)", function () {
+  var x = linkScene(false);
+  var r = JSON.parse(x.h.T.run("link-external-audio", {}));
+  assert.equal(r.ok, false, JSON.stringify(r).slice(0, 400));
+  assert.equal(x.unlinks, 1, "unlinked " + x.unlinks + " camera clips; only the first may be touched");
+  assert.ok(x.linkedToSound("C002.MP4") && x.linkedToSound("C003.MP4"), "the other cameras must keep their sound link");
+  assert.match(r.error, /link did nothing/i, r.error);
+  assert.match(r.error, /C001\.MP4.*unlinked: select them and use Clip > Link/, r.error);
+});
+test("link-external-audio: with a working link every camera is linked to its sound and wav (unchanged behaviour)", function () {
+  var x = linkScene(true);
+  var r = JSON.parse(x.h.T.run("link-external-audio", {}));
+  assert.equal(r.ok, true, JSON.stringify(r).slice(0, 400));
+  assert.equal(r.details.linked.length, 3, JSON.stringify(r.details).slice(0, 400));
+  assert.equal(x.unlinks, 3);
+});
