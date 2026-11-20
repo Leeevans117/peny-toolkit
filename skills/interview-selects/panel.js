@@ -102,8 +102,9 @@ module.exports = function (api) {
     // Media Encoder renders it, so Premiere stays usable (6 Nov 2026).
     return api.evalSkill({ action: "queueaudio", sequenceId: scan.sequenceId, sequenceName: scan.sequence, path: raw, preset: path.join(api.skillDir, "wav-float.epr") }).then(function (q) {
       if (!q.ok) throw { stop: q.error };
-      return ame.wait(q.details.jobId, raw);
+      return ame.wait(q.details.jobId, raw, { cancelled: function () { return cancelled; } });
     }).then(function (r) {
+      if (r.cancelled) throw { stop: "Cancelled." };
       if (!r.ok) throw { stop: "Could not render the sequence's sound: " + r.error };
       if (!fs.existsSync(raw) || !fs.statSync(raw).size) throw { stop: "Premiere didn't write the sequence's sound (" + raw + ")." };
       return run(ffmpeg, ["-hide_banner", "-loglevel", "error", "-y", "-i", raw, "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", final]);

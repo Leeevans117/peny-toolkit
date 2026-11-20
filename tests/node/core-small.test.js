@@ -203,3 +203,13 @@ test("updater.start: stop() clears its timers; nothing runs while busy", functio
   assert.equal(u.running(), false);
   u.stop(); // must not leave timers that keep the process alive (the test would hang)
 });
+
+// Found in the Premiere run (20 Nov 2026): Media Encoder never picked up an Interviews audio
+// render; Cancel answered "stops after the current step" but the step was this wait (4 h).
+test("ame.wait: stops within about a second when the run is cancelled", { timeout: 5000 }, async function () {
+  var stop = false, t0 = Date.now();
+  setTimeout(function () { stop = true; }, 300);
+  var r = await ame.wait("never-" + process.pid, "/nonexistent.wav", { cancelled: function () { return stop; } });
+  assert.equal(r.ok, false); assert.equal(r.cancelled, true); assert.match(r.error, /cancel/i);
+  assert.ok(Date.now() - t0 < 2500, "took " + (Date.now() - t0) + " ms");
+});

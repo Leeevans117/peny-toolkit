@@ -81,6 +81,11 @@ re-run in Premiere**, because that needs this branch installed in the Mac Studio
 | 18 | Medium | `skills/interview-selects/panel.js` | A failed marker step crashed with "Cannot read properties of undefined (reading 'replace')", hiding Premiere's own error. | Shows the step's error (or "no reason given"). | 26068a2 |
 | 19 | Medium | `skills/proxy-automation/panel.js` | After a cancelled render the half-written proxy stays under its final name (by design, nothing is deleted), and the next render said only "Nothing to render." | Lists those files and says to delete them by hand, then render again. | 26068a2 |
 
+| 20 | Medium | `core/ame.js`, `skills/interview-selects/panel.js` | Interviews' audio render went to a Media Encoder that never picked it up (it predated the Premiere restart); the panel sat at "95% · Estimating time left…" and Cancel answered "the run stops after the current step" while that step was a 4-hour wait. | The Media Encoder wait checks Cancel every second and stops with "Cancelled while waiting for Media Encoder". | see git log |
+| 21 | Low | `install.sh` | Run from a checkout on the office server, it copied 110 macOS `._` files into the panel. | `._*` and `.DS_Store` are never copied (test passes on the Mac Studio). | 67995cd |
+
+Re-test of 17-19 in Premiere with this branch installed (20 Nov, Mac Studio): **17 PASS** (Link stopped at the first clip with the new message; all 3 cameras kept their sound link). 18 and 19: see `premiere-e2e/results.md`.
+
 Seen, not changed (each would change how the app behaves, so it is Lee's call):
 
 - A cancelled proxy render writes straight to the final `_Proxy.mov` name. Rendering to a
@@ -91,6 +96,8 @@ Seen, not changed (each would change how the app behaves, so it is Lee's call):
 - A queued hook request runs on whichever sequence is active when it starts, not when it was
   sent.
 - The GRADED copy's name drops the "(2)" of the sequence it was made from.
+- The Media Encoder wait still times out only after 4 hours when nobody cancels; a job that
+  Media Encoder never starts is not detected sooner.
 - Quitting Premiere from a script: AppleScript could not reach Premiere 27, and a terminate
   signal made it abort while shutting down (no project was open; crash report 09:57).
 
