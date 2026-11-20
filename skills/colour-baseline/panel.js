@@ -6,7 +6,7 @@
  *   camera is remembered in ~/.peny-toolkit/colour-baseline.json.
  * - Apply baseline grade: exports the active sequence to a project file, adds a Lumetri named
  *   "Adjustments" and the camera's LUT preset above each clip's existing Lumetri effects
- *   (lutpreset.py grade), imports it back as "<name> GRADED TOOLKIT COPY" and reads every clip
+ *   (lutpreset.py grade), imports it back as "<name> V<next>" in Claude bin/Colour and reads every clip
  *   back. Clips that already have Adjustments / a named LUT Lumetri are not given another. The
  *   open sequence is not edited; nothing is saved.
  * - Make LUT presets: .cube files in a folder -> one preset file for Effects panel > Import Presets.
@@ -298,7 +298,7 @@ module.exports = function (api) {
 
   // Apply: export the active sequence to a project file, add "Adjustments" and the camera's LUT
   // preset to every video clip there (lutpreset.py grade), import it back as a new
-  // "<name> GRADED TOOLKIT COPY" and read every clip back. The open sequence is never edited.
+  // "<name> V<next>" in Claude bin/Colour and read every clip back. The open sequence is never edited.
   function apply(params) {
     var adj = params.adjustments || ADJUSTMENTS, settings = readSettings(), choices = params.choices || settings.choices;
     var work = path.join("/tmp/peny-toolkit/colour", new Date().toISOString().replace(/[:.]/g, "-"));

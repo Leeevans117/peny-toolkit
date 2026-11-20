@@ -162,11 +162,11 @@
   function copy() {
     var seq = T.activeSequence();
     if (!seq) return T.fail("No active sequence.");
-    if (T.isToolkitCopy(seq)) return T.ok("\"" + seq.name + "\" is already a TOOLKIT COPY; levels go on it.", { copyName: String(seq.name), copyId: String(seq.sequenceID), made: false });
+    // Every run makes the next version, also on a Toolkit version (Lee, 11 Nov 2026).
     var file = new File(File($.fileName).parent.parent.fsName + "/make-safe-copy/premiere.jsx");
     if (!file.exists) return T.fail("Make safe copy skill not found at " + file.fsName);
     $.evalFile(file);
-    var r = T.skills["make-safe-copy"]({});
+    var r = T.skills["make-safe-copy"]({ button: "Sound Pass" });
     if (!r.ok) return r;
     if (!r.details.copyIsActive) return T.fail("The copy \"" + r.details.copyName + "\" was made but is not the active sequence. Open it and run again.", r.details);
     r.details.made = true;
@@ -197,7 +197,7 @@
 
   // params.clips: [{track, nodeId, bypass, boost, max}] (boost/max are Hard Limiter values 0..1).
   function set(seq, params) {
-    if (!T.isToolkitCopy(seq)) return T.fail("Sound Pass only changes a TOOLKIT COPY; \"" + seq.name + "\" is not one.");
+    if (!T.isToolkitCopy(seq)) return T.fail("Sound Pass only changes a Toolkit version in the Claude bin; \"" + seq.name + "\" is not one.");
     var list = params.clips || [], done = 0, failed = [], added = 0, volReset = 0;
     for (var i = 0; i < list.length; i++) {
       var c = list[i], it = itemByNode(seq, c.track, c.nodeId);
@@ -236,7 +236,7 @@
   }
 
   function render(seq, params) {
-    if (!T.isToolkitCopy(seq)) return T.fail("Render only runs on a TOOLKIT COPY.");
+    if (!T.isToolkitCopy(seq)) return T.fail("Render only runs on a Toolkit version in the Claude bin.");
     var keep = {}, saved = [], t;
     for (t = 0; t < (params.voiceTracks || []).length; t++) keep[params.voiceTracks[t]] = true;
     for (t = 0; t < seq.audioTracks.numTracks; t++) {
@@ -268,7 +268,7 @@
   // params.clips: [{track, nodeId, keys: [{t: sequence seconds, db}], clear}] - Volume > Level
   // keyframes on a TOOLKIT COPY, read back (key times are clip/media time: in + (t - start)).
   function keys(seq, params) {
-    if (!T.isToolkitCopy(seq)) return T.fail("Sound Pass only changes a TOOLKIT COPY; \"" + seq.name + "\" is not one.");
+    if (!T.isToolkitCopy(seq)) return T.fail("Sound Pass only changes a Toolkit version in the Claude bin; \"" + seq.name + "\" is not one.");
     var list = params.clips || [], out = [], failed = 0;
     for (var i = 0; i < list.length; i++) {
       var c = list[i], it = itemByNode(seq, c.track, c.nodeId);
@@ -298,7 +298,7 @@
   var MARKER_NAME = "Sound Pass: check level", RED = 1;
   function ours(m) { return String(m.name).indexOf("Sound Pass:") === 0; }
   function markers(seq, params) {
-    if (!T.isToolkitCopy(seq)) return T.fail("Sound Pass only changes a TOOLKIT COPY; \"" + seq.name + "\" is not one.");
+    if (!T.isToolkitCopy(seq)) return T.fail("Sound Pass only changes a Toolkit version in the Claude bin; \"" + seq.name + "\" is not one.");
     var mc = seq.markers, old = [], m = mc.getFirstMarker(), others = 0, i;
     while (m) { if (ours(m)) old.push(m); else others++; m = mc.getNextMarker(m); }
     for (i = 0; i < old.length; i++) mc.deleteMarker(old[i]);
@@ -358,7 +358,7 @@
   // params.clips: [{track, nodeId, keys: [{t: sequence s, db}], add}] - on a TOOLKIT COPY: keys
   // on our BED_FX gain (added when `add` or missing), read back.
   function bed(seq, params) {
-    if (!T.isToolkitCopy(seq)) return T.fail("Sound Pass only changes a TOOLKIT COPY; \"" + seq.name + "\" is not one.");
+    if (!T.isToolkitCopy(seq)) return T.fail("Sound Pass only changes a Toolkit version in the Claude bin; \"" + seq.name + "\" is not one.");
     var list = params.clips || [], out = [], failed = 0, added = 0;
     for (var i = 0; i < list.length; i++) {
       var c = list[i], it = itemByNode(seq, c.track, c.nodeId);
@@ -395,7 +395,7 @@
 
   // Test: params {track, nodeId, name} adds that audio effect to one clip of a TOOLKIT COPY.
   function addfx(seq, params) {
-    if (!T.isToolkitCopy(seq)) return T.fail("Only on a TOOLKIT COPY.");
+    if (!T.isToolkitCopy(seq)) return T.fail("Only on a Toolkit version in the Claude bin.");
     var it = itemByNode(seq, params.track, params.nodeId);
     if (!it) return T.fail("clip not found");
     var err = addEffect(seq, params.track, it, params.name);

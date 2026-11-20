@@ -124,9 +124,128 @@ var PenyToolkit = $.global.PenyToolkit;
     for (var i = 0; i < list.length; i++) if (list[i].name === name) return true;
     return false;
   };
+  // ---- Versions in the "Claude bin" (Lee, 11 Nov 2026) ----
+  // Every button that makes a new sequence files it in "Claude bin/<Button>" under the next
+  // version name (T.versionName). Older "... <Button> V<n>" and "... TOOLKIT COPY" sequences
+  // still count as Toolkit copies.
+  T.VERSION_BIN = "Claude bin";
+  T.BUTTONS = ["Safe Copy", "Link External Audio", "Sound Pass", "Colour", "Sync Interviews", "Find Answers", "Trim", "Remove Ums"];
+  function reEsc(x) { return String(x).replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&"); }
+  function buttonsRe() {
+    var a = [];
+    for (var i = 0; i < T.BUTTONS.length; i++) a.push(reEsc(T.BUTTONS[i]));
+    a.push("Master for \\S+");
+    return "(?:" + a.join("|") + ")";
+  }
+  // Name of a Toolkit version made by `button` (any button when left out), or false.
+  T.versionButton = function (name, button) {
+    var m = new RegExp("^(.*) (" + (button ? reEsc(button) : buttonsRe()) + ") V(\\d+)$").exec(String(name));
+    return m ? { base: m[1], button: m[2], n: parseInt(m[3], 10) } : false;
+  };
+  // The sequence a version came from: "C001 Sync Interviews V2 Colour V1" -> "C001"; older
+  // suffixes (TOOLKIT COPY, Synced, Cut, No ums) are taken off too.
+  T.versionBase = function (name) {
+    var n = String(name), prev = null, m;
+    var old = /\s+(?:\(\d+\)\s+)?(?:(?:MASTER \S+|GRADED)\s+)?TOOLKIT COPY$|\s+(?:Synced|No ums|Cut version|Cut(?: \d+)?(?: Trimmed(?: \d+)?)?)(?: \d+)?$/;
+    while (n !== prev) {
+      prev = n;
+      m = T.versionButton(n);
+      if (m) n = m.base;
+      n = n.replace(old, "").replace(/(\S) V\d+$/, "$1");
+    }
+    return n.replace(/\s+$/, "") || String(name);
+  };
+  // Lee, 12 Nov 2026: the name keeps Lee's own version mark and only its number goes up
+  // ("Tony EOY IV_V1" -> "Tony EOY IV_V2", "KAOS EOY IV V1" -> "KAOS EOY IV V2"); a name with
+  // none gets " V1". The button is shown by its bin (Claude bin/<Button>), not in the name.
+  // The last "V<digits>" that starts the name or follows a space, _, - or ( counts.
+  T.versionMark = function (name) {
+    var n = String(name), re = /(^|[\s_\-(])([Vv])(\d+)(?![0-9A-Za-z])/g, m, last = null;
+    while ((m = re.exec(n)) !== null) { last = m; if (m[0] === "") re.lastIndex++; }
+    if (!last) return null;
+    var at = last.index + last[1].length;
+    return { head: n.substr(0, at) + last[2], n: parseInt(last[3], 10), tail: n.substr(at + 1 + last[3].length) };
+  };
+  T.versionNumber = function (name) { var v = T.versionMark(name); return v ? v.n : 0; };
+  // Next free name: the existing number + 1 (or V1), past any sequence already named that.
+  T.versionName = function (srcName) {
+    var v = T.versionMark(srcName), k = v ? v.n + 1 : 1, wanted;
+    for (; k < 10000; k++) {
+      wanted = v ? v.head + k + v.tail : String(srcName) + " V" + k;
+      if (!T.sequenceNameExists(wanted)) break;
+    }
+    return wanted;
+  };
+  // Where seq sits in the Claude bin: { button: "<its sub-bin>" or "" (top) }, or null.
+  T.versionBinOf = function (seq) {
+    var item = seq && seq.projectItem;
+    if (!item) return null;
+    var tp = "";
+    try { tp = String(item.treePath || ""); } catch (e) {}
+    var parts = tp.split("\\");
+    // "", "<project>.prproj", "Claude bin", ["<Button>",] "<name>"
+    if (parts.length >= 4 && parts[2] === T.VERSION_BIN) return { button: parts.length >= 5 ? parts[3] : "" };
+    return null;
+  };
   T.isToolkitCopy = function (seq) {
     var n = String(seq.name);
-    return n.length >= T.COPY_SUFFIX.length && n.substr(n.length - T.COPY_SUFFIX.length) === T.COPY_SUFFIX;
+    if (n.length >= T.COPY_SUFFIX.length && n.substr(n.length - T.COPY_SUFFIX.length) === T.COPY_SUFFIX) return true;
+    return !!(T.versionButton(n) || T.versionBinOf(seq));
+  };
+  // The root bin "Claude bin", made when missing (create true).
+  T.claudeBin = function (create) {
+    var root = app.project.rootItem;
+    for (var i = 0; i < root.children.numItems; i++) {
+      var c = root.children[i];
+      if (c && c.type === ProjectItemType.BIN && String(c.name) === T.VERSION_BIN) return c;
+    }
+    if (!create) return null;
+    var b = null;
+    try { b = root.createBin(T.VERSION_BIN); } catch (e) {}
+    return b || T.claudeBin(false);
+  };
+  // The button's own bin inside the Claude bin ("Claude bin/Find Answers"), made when missing.
+  T.buttonBin = function (button) {
+    var top = T.claudeBin(true);
+    if (!top || !button) return top;
+    for (var i = 0; i < top.children.numItems; i++) {
+      var c = top.children[i];
+      if (c && c.type === ProjectItemType.BIN && String(c.name) === String(button)) return c;
+    }
+    var b = null;
+    try { b = top.createBin(String(button)); } catch (e) {}
+    if (b) return b;
+    for (var j = 0; j < top.children.numItems; j++) {
+      var d = top.children[j];
+      if (d && d.type === ProjectItemType.BIN && String(d.name) === String(button)) return d;
+    }
+    return null;
+  };
+  // Moves seq's project item into its button's bin in the Claude bin (Lee, 11 Nov 2026: one
+  // sub-bin per button). Returns null, or what went wrong.
+  T.fileVersion = function (seq, button) {
+    var item = seq && seq.projectItem;
+    if (!item) return "the sequence has no project item";
+    var where = T.VERSION_BIN + (button ? "/" + button : "");
+    var bin = button ? T.buttonBin(button) : T.claudeBin(true);
+    if (!bin) return "could not make the \"" + where + "\" bin";
+    function inside() {
+      for (var i = 0; i < bin.children.numItems; i++) if (String(bin.children[i].nodeId) === String(item.nodeId)) return true;
+      return false;
+    }
+    if (inside()) return null;
+    try { item.moveBin(bin); } catch (e) { return "moveBin failed: " + e; }
+    for (var t = 0; t < 8 && !inside(); t++) $.sleep(250);
+    return inside() ? null : "it did not move into \"" + where + "\"";
+  };
+  // Names a freshly made sequence as the next version of `button` and files it. Returns
+  // null, or what went wrong.
+  T.nameVersion = function (seq, srcName, button) {
+    var wanted = T.versionName(srcName);
+    seq.name = wanted;
+    if (String(seq.name) !== wanted && seq.projectItem) seq.projectItem.name = wanted;
+    if (String(seq.name) !== wanted) return "it was made as \"" + seq.name + "\" but could not be named \"" + wanted + "\"";
+    return T.fileVersion(seq, button);
   };
 
   // Fingerprint of a sequence's timeline (track and clip counts, names, edges) so
@@ -152,8 +271,9 @@ var PenyToolkit = $.global.PenyToolkit;
 
   // Duplicates seq with Sequence.clone() (the call the MCP bridge's
   // duplicate_sequence uses), finds the new sequence by diffing sequence IDs, and
-  // names it "<name> TOOLKIT COPY". Only the new sequence is renamed.
-  T.duplicateSequence = function (seq) {
+  // names it "<name> <button> V<n>" in the Claude bin. Only the new sequence is renamed.
+  T.duplicateSequence = function (seq, button) {
+    button = button || "Safe Copy";
     var originalName = String(seq.name);
     var originalId = String(seq.sequenceID);
     var before = {}, list = T.sequenceList(), i;
@@ -172,15 +292,10 @@ var PenyToolkit = $.global.PenyToolkit;
     }
     if (!created) return T.fail("Sequence.clone() did not create a new sequence (checked for 5 s).");
 
-    var wanted = originalName + " " + T.COPY_SUFFIX;
-    for (var n = 2; T.sequenceNameExists(wanted) && n < 100; n++) wanted = originalName + " (" + n + ") " + T.COPY_SUFFIX;
     var cloneName = String(created.name);
-    created.name = wanted;
-    if (String(created.name) !== wanted && created.projectItem) created.projectItem.name = wanted;
-    if (String(created.name) !== wanted) {
-      return T.fail("The copy was created as \"" + cloneName + "\" but could not be renamed to \"" + wanted + "\".",
+    var bad = T.nameVersion(created, originalName, button), wanted = String(created.name);
+    if (bad) return T.fail("The copy was created as \"" + cloneName + "\" but " + bad + ".",
         { copyId: String(created.sequenceID), copyName: String(created.name) });
-    }
 
     var original = T.findSequenceById(originalId);
     var printAfter = original ? T.fingerprint(original) : null;

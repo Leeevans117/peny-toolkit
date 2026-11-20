@@ -4,7 +4,7 @@
 //             audio linked to it, or an audio clip linked to no video (external recorder wav,
 //             lav, any loose sound). Media path, proxy path (RED: ffmpeg can't read R3D sound,
 //             the toolkit's proxies carry it), timecode of the media's first frame. Read only.
-//   "apply" - duplicates the scanned sequence as "<name> Synced" and opens it, moves every
+//   "apply" - duplicates the scanned sequence as "<name> V<next>" in Claude bin/Sync Interviews and opens it, moves every
 //             unit (its video and all its linked audio) to the start measured by
 //             syncmeasure.py, reads every clip back, then links as asked:
 //               "all"     - each camera A clip with the camera B clips and the audio clips
@@ -127,10 +127,9 @@
       if (!created) $.sleep(250);
     }
     if (!created) return { error: "Sequence.clone() did not make a copy (checked for 5 s)." };
-    var wanted = String(seq.name) + " " + SUFFIX;
-    for (var n = 2; T.sequenceNameExists(wanted) && n < 100; n++) wanted = String(seq.name) + " " + SUFFIX + " " + n;
-    created.name = wanted;
-    if (String(created.name) !== wanted && created.projectItem) created.projectItem.name = wanted;
+    // "<sequence> V<next>" in Claude bin/Sync Interviews (Lee, 11 Nov 2026).
+    var bad = T.nameVersion(created, String(seq.name), "Sync Interviews");
+    if (bad) return { error: "The copy was made but " + bad + "." };
     var printCopy = T.fingerprint(created);
     if (printCopy.hash !== printBefore.hash) return { error: "The copy does not match the original (" + printCopy.clips + " vs " + printBefore.clips + " clips)." };
     app.project.openSequence(created.sequenceID);
@@ -380,7 +379,7 @@
 
   // ---- Probe (test hook only, on a Synced copy) ----
   function probe(seq, params) {
-    if (String(seq.name).indexOf(SUFFIX) < 0 && String(seq.name).indexOf("Copy") < 0) return T.fail("Probe only on a copy.");
+    if (String(seq.name).indexOf(SUFFIX) < 0 && String(seq.name).indexOf("Copy") < 0 && !T.isToolkitCopy(seq)) return T.fail("Probe only on a copy.");
     var it = itemAt(seq, params.kind || "video", params.track || 0, params.index || 0);
     if (!it) return T.fail("No clip there.");
     var r = { name: String(it.name), hasMove: typeof it.move, before: [it.start.seconds, it.end.seconds, it.inPoint.seconds], linkedBefore: [] };

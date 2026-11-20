@@ -445,7 +445,6 @@ module.exports = function (api) {
     return api.evalSkill({ action: "scan", track: params.track || "" }).then(function (r) {
       if (!r.ok) throw { stop: r.error };
       scan = r.details;
-      if (scan.sequence.indexOf("No ums") >= 0) throw { stop: "\"" + scan.sequence + "\" is already a \"No ums\" copy. Open the sequence it came from and run again." };
       var safe = scan.sequence.replace(/[^A-Za-z0-9 _-]+/g, "").replace(/\s+/g, "_").slice(0, 60);
       dir = path.join(WORK_ROOT, safe + "-ums-" + new Date().toISOString().replace(/[:.]/g, "-"));
       fs.mkdirSync(dir, { recursive: true });

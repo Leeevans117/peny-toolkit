@@ -1,11 +1,12 @@
-// Make safe copy: duplicate the active sequence as "<name> TOOLKIT COPY" and open
+// Make safe copy: duplicate the active sequence as "<name> V<next>" in Claude bin/Safe Copy (params.button
+// sets the button name, e.g. "Sound Pass") in the Claude bin and open
 // the copy, so later skills work on it and never on the original.
 PenyToolkit.skills["make-safe-copy"] = function (params) {
   var T = PenyToolkit;
   var seq = T.activeSequence();
   if (!seq) return T.fail("No active sequence. Open the sequence you want to copy first.");
 
-  var r = T.duplicateSequence(seq);
+  var r = T.duplicateSequence(seq, (params && params.button) || "Safe Copy");
   if (!r.ok) return r;
 
   var opened = false;

@@ -179,8 +179,12 @@ function runAction(skillId, actionId, params, source) {
       // "Make safe copy" step, which runs the make-safe-copy skill.
       var other = findSkill(action.skill);
       if (!other) p = Promise.resolve({ ok: false, error: "Unknown skill: " + action.skill });
-      else if (other.module) p = other.module.actions[action.action || "run"](params || {});
-      else p = evalSkill(other, params);
+      // action.params (e.g. Link External Audio's version name) go along with the form's.
+      var merged = {}, k;
+      for (k in (action.params || {})) merged[k] = action.params[k];
+      for (k in (params || {})) merged[k] = params[k];
+      if (other.module) p = other.module.actions[action.action || "run"](merged);
+      else p = evalSkill(other, merged);
     } else if (skill.module) {
       var fn = skill.module.actions[action.id];
       p = fn ? fn(params || {}) : Promise.resolve({ ok: false, error: "Action not implemented: " + action.id });
