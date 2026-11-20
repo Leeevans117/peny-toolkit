@@ -84,7 +84,16 @@ re-run in Premiere**, because that needs this branch installed in the Mac Studio
 | 20 | Medium | `core/ame.js`, `skills/interview-selects/panel.js` | Interviews' audio render went to a Media Encoder that never picked it up (it predated the Premiere restart); the panel sat at "95% · Estimating time left…" and Cancel answered "the run stops after the current step" while that step was a 4-hour wait. | The Media Encoder wait checks Cancel every second and stops with "Cancelled while waiting for Media Encoder". | c8dc1b1 |
 | 21 | Low | `install.sh` | Run from a checkout on the office server, it copied 110 macOS `._` files into the panel. | `._*` and `.DS_Store` are never copied (test passes on the Mac Studio). | 67995cd |
 
-Re-test of 17-19 in Premiere with this branch installed (20 Nov, Mac Studio): **17 PASS** (Link stopped at the first clip with the new message; all 3 cameras kept their sound link). 18 and 19: see `premiere-e2e/results.md`.
+Re-test of 17-19 in Premiere 27.0.0 with this branch (f756c86) installed, 20 Nov, Mac Studio (`premiere-e2e/results.md`, raw results `hook-results/result-rt-*.json`):
+
+- **17 PASS:** Link stopped at FX6_A001C001.MOV with "Premiere's link did nothing on ..."; read back, all 3 camera clips are still linked to their sound.
+- **18 PASS:** Find answers made "UNCUT (4) TOOLKIT COPY Cut" and said "Not all markers went on, so nothing was cut. ..." with the real reason ("no footage on the video tracks there" at 2:14 and 2:57, correct: that stretch is audio only); markers read back.
+- **19 PASS:** 2 five-minute clips, cancelled after 5 s: both encodes killed, no ffmpeg left, partial files kept. Render again said verbatim: "Nothing rendered: 2 clips have a half-written or broken proxy on disk, so they were not rendered. Delete them by hand, then render again: .../FX6_C003C001_Proxy.mov, .../FX6_C003C002_Proxy.mov." (It still returns ok:true.)
+- **21 PASS:** `scripts.test.js` 6/6 on the Mac Studio, including the `._` test.
+- **20:** offline-tested; Premiere check pending.
+- Panel restored afterwards: content hash matches the backup, installed.json 2026.11.18.1600 / 0894e9b, no `._` files.
+
+Also seen in the re-test: while the 4-hour wait was stuck, the active sequence switched by itself to the empty "_Selects"; the panel log printed "failed: Camera 1 Scene - undefined"; with a fresh Media Encoder the same audio render took about 7 s.
 
 Seen, not changed (each would change how the app behaves, so it is Lee's call):
 
