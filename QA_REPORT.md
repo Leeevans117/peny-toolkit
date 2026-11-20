@@ -90,7 +90,8 @@ Re-test of 17-19 in Premiere 27.0.0 with this branch (f756c86) installed, 20 Nov
 - **18 PASS:** Find answers made "UNCUT (4) TOOLKIT COPY Cut" and said "Not all markers went on, so nothing was cut. ..." with the real reason ("no footage on the video tracks there" at 2:14 and 2:57, correct: that stretch is audio only); markers read back.
 - **19 PASS:** 2 five-minute clips, cancelled after 5 s: both encodes killed, no ffmpeg left, partial files kept. Render again said verbatim: "Nothing rendered: 2 clips have a half-written or broken proxy on disk, so they were not rendered. Delete them by hand, then render again: .../FX6_C003C001_Proxy.mov, .../FX6_C003C002_Proxy.mov." (It still returns ok:true.)
 - **21 PASS:** `scripts.test.js` 6/6 on the Mac Studio, including the `._` test.
-- **20:** offline-tested; Premiere check pending.
+- **20 PASS** (round 2, with c8dc1b1 installed): Media Encoder quit first to force a real wait; Find queued its audio at 14:32:04.0, Cancel was pressed at 14:32:04.4, and the run stopped at 14:32:05.0 with "Cancelled." (Media Encoder only finished at 14:32:10; no Cut copy made). Left as is: the queued Media Encoder job still runs and writes its wav into the work folder, and Cancel's own reply still says "the run stops after the current step".
+- `install.sh` from the office server share: 0 `._` files copied.
 - Panel restored afterwards: content hash matches the backup, installed.json 2026.11.18.1600 / 0894e9b, no `._` files.
 
 Also seen in the re-test: while the 4-hour wait was stuck, the active sequence switched by itself to the empty "_Selects"; the panel log printed "failed: Camera 1 Scene - undefined"; with a fresh Media Encoder the same audio render took about 7 s.
