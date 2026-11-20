@@ -52,7 +52,7 @@ function envelope(file) {
     if (id === "data") { data = { at: pos + 8, size: Math.min(size, b.length - pos - 8) }; break; }
     pos += 8 + size + (size % 2);
   }
-  if (!fmt || !data || fmt.bits !== 16) throw new Error("Not a 16-bit PCM wav: " + file);
+  if (!fmt || !data || fmt.bits !== 16 || !(fmt.ch >= 1) || !(fmt.sr >= 100)) throw new Error("Not a 16-bit PCM wav: " + file);
   var hop = Math.round(fmt.sr / 100), step = 2 * fmt.ch, n = Math.floor(data.size / step / hop), db = new Float32Array(n);
   for (var f = 0; f < n; f++) {
     var sum = 0;

@@ -61,7 +61,8 @@ var PenyToolkit = $.global.PenyToolkit;
   T.sec = function (ticks) { return parseFloat(ticks) / T.TICKS_PER_SECOND; };
   T.ticks = function (seconds) { return Math.round(parseFloat(seconds) * T.TICKS_PER_SECOND); };
   T.fmt = function (seconds) {
-    var s = Math.max(0, seconds), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    // Rounded to hundredths first so 59.999 s reads 0:01:00.00, not 0:00:60.00 (QA 20 Nov 2026).
+    var s = Math.round(Math.max(0, seconds) * 100) / 100, h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
     var r = s - h * 3600 - m * 60;
     return h + ":" + pad(m) + ":" + (r < 10 ? "0" : "") + r.toFixed(2);
   };
@@ -173,7 +174,7 @@ var PenyToolkit = $.global.PenyToolkit;
     if (!created) return T.fail("Sequence.clone() did not create a new sequence (checked for 5 s).");
 
     var wanted = originalName + " " + T.COPY_SUFFIX;
-    for (var n = 2; T.sequenceNameExists(wanted) && n < 100; n++) wanted = originalName + " (" + n + ") " + T.COPY_SUFFIX;
+    for (var n = 2; T.sequenceNameExists(wanted) && n < 10000; n++) wanted = originalName + " (" + n + ") " + T.COPY_SUFFIX;
     var cloneName = String(created.name);
     created.name = wanted;
     if (String(created.name) !== wanted && created.projectItem) created.projectItem.name = wanted;
@@ -274,6 +275,7 @@ var PenyToolkit = $.global.PenyToolkit;
       T.targetPath = params && params.projectPath ? String(params.projectPath) : null;
       T.log("run " + skillId + " params=" + T.json(params || {}));
       var r = fn(params || {});
+      if (!r || typeof r !== "object") r = T.fail("The " + skillId + " script returned no result (Toolkit bug: please send Lee the log).");
       r.skill = skillId;
       try { var rp = T.proj(); r.project = rp ? String(rp.name) : null; } catch (eP) {}
       r.ms = new Date().getTime() - started;

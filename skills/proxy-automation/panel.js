@@ -235,10 +235,10 @@ module.exports = function (api) {
       var nameNoExt = stripExt(it.name);
       var found = resolveProxy(root, it.binPath, nameNoExt, index, it.mediaPath);
       if (found) {
-        if (!jobs.isCompleteMov(found)) { rec.reason = "incomplete proxy on disk, left alone (delete it by hand to re-render): " + found; p.skipped.push(rec); }
+        if (!jobs.isCompleteMov(found)) { rec.stuckFile = found; rec.reason = "incomplete proxy on disk, left alone (delete it by hand to re-render): " + found; p.skipped.push(rec); }
         else {
           var bad = brokenFrames(found, it.mediaPath);
-          if (bad) { rec.reason = "broken proxy on disk: " + found + " has " + bad.proxy +
+          if (bad) { rec.stuckFile = found; rec.reason = "broken proxy on disk: " + found + " has " + bad.proxy +
             " video frames, the source " + bad.source + " (frames lost in an earlier render) - delete it by hand to re-render"; p.skipped.push(rec); }
           else { rec.reason = "proxy on disk: " + found; p.done.push(rec); }
         }
@@ -296,7 +296,13 @@ module.exports = function (api) {
       if (!p.render.length) {
         api.progress({ event: "none", total: 0, finished: 0, ok: 0, failed: 0, running: 0, queued: 0, fraction: 1, percent: 100,
           already: p.done.length });
-        return { ok: true, summary: "Nothing to render.", details: { done: brief(p.done), shared: brief(p.shared), skipped: brief(p.skipped, 500) } };
+        // Half-written or frame-short proxies are left alone (never deleted), so say which.
+        var stuck = p.skipped.filter(function (r) { return r.stuckFile; });
+        var summary = !stuck.length ? "Nothing to render." :
+          "Nothing rendered: " + stuck.length + " clip" + (stuck.length === 1 ? " has" : "s have") + " a half-written or broken proxy on disk, so " +
+          (stuck.length === 1 ? "it was" : "they were") + " not rendered. Delete " + (stuck.length === 1 ? "it" : "them") + " by hand, then render again: " +
+          stuck.slice(0, 5).map(function (r) { return r.stuckFile; }).join(", ") + (stuck.length > 5 ? " and " + (stuck.length - 5) + " more (see the log)" : "") + ".";
+        return { ok: true, summary: summary, details: { done: brief(p.done), shared: brief(p.shared), skipped: brief(p.skipped, 500) } };
       }
 
       pool = new jobs.JobPool({

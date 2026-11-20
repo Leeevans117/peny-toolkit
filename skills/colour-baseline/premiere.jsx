@@ -118,7 +118,7 @@
     if (!seq) return T.fail("The imported sequence " + params.id + " is not in the project.");
     var base = String(params.base).replace(/\s*(\(\d+\)\s*)?(GRADED\s+)?TOOLKIT COPY$/, "").replace(/\s+$/, "");
     var wanted = base + " " + GRADED;
-    for (var n = 2; T.sequenceNameExists(wanted) && String(seq.name) !== wanted && n < 100; n++) wanted = base + " (" + n + ") " + GRADED;
+    for (var n = 2; T.sequenceNameExists(wanted) && String(seq.name) !== wanted && n < 10000; n++) wanted = base + " (" + n + ") " + GRADED;
     seq.name = wanted;
     if (String(seq.name) !== wanted && seq.projectItem) seq.projectItem.name = wanted;
     try { app.project.openSequence(String(seq.sequenceID)); } catch (e) {}

@@ -128,7 +128,7 @@
     }
     if (!created) return { error: "Sequence.clone() did not make a copy (checked for 5 s)." };
     var wanted = String(seq.name) + " " + SUFFIX;
-    for (var n = 2; T.sequenceNameExists(wanted) && n < 100; n++) wanted = String(seq.name) + " " + SUFFIX + " " + n;
+    for (var n = 2; T.sequenceNameExists(wanted) && n < 10000; n++) wanted = String(seq.name) + " " + SUFFIX + " " + n;
     created.name = wanted;
     if (String(created.name) !== wanted && created.projectItem) created.projectItem.name = wanted;
     var printCopy = T.fingerprint(created);

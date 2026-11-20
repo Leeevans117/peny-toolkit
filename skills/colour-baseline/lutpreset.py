@@ -49,7 +49,10 @@ def parse_cube(path):
                 continue
             head = s.split()[0].upper()
             if head == "LUT_3D_SIZE":
-                size = int(s.split()[1])
+                try:
+                    size = int(s.split()[1])
+                except (IndexError, ValueError):
+                    raise LutError("bad LUT_3D_SIZE line: " + s[:40])
             elif head == "LUT_1D_SIZE":
                 raise LutError("1D LUT (LUT_1D_SIZE) - only 3D .cube LUTs are supported")
             elif head == "DOMAIN_MIN":
@@ -529,6 +532,8 @@ def grade(project_in, project_out, plan):
 
 
 def main(argv):
+    if not argv:
+        raise SystemExit(__doc__)
     if argv[0] == "presets":
         # presets <out.prfpset> <spec.json>: {"bin", "entries": [...], "paths": [...], "adjustments"}
         spec = json.load(open(argv[2]))
