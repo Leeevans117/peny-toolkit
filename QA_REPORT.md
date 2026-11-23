@@ -98,9 +98,7 @@ Also seen in the re-test: while the 4-hour wait was stuck, the active sequence s
 
 Seen, not changed (each would change how the app behaves, so it is Lee's call):
 
-- A cancelled proxy render writes straight to the final `_Proxy.mov` name. Rendering to a
-  temporary name and renaming after the frame check would mean a cancel never leaves a
-  broken file there.
+- ~~A cancelled proxy render writes straight to the final `_Proxy.mov` name.~~ Built at Lee's request (23 Nov, cfe9f29): proxies render as `<name>_Proxy-rendering.mov` and are renamed only once complete and frame-checked. Mac Studio, real VideoToolbox renders: `proxy-render-real.test.js` 2/2 PASS, full suite 172 pass / 0 fail / 3 skipped (Ollama port in use).
 - Sound Pass and Master for YouTube make their own TOOLKIT COPY when run on an original,
   where Sync and Link refuse. Both are safe; they are just different.
 - A queued hook request runs on whichever sequence is active when it starts, not when it was
