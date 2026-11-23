@@ -147,3 +147,20 @@ test("interview-selects find: a failed marker or cut step shows its own error, n
     { total: 10, audio: 1, transcribe: 5, answers: 9 }, "/tmp/work");
   assert.match(s2, /12 markers\. Cut & raise: no reason given/);
 });
+
+// Lee, 23 Nov 2026: proxies render under "<name>_Proxy-rendering.mov" and are renamed to
+// "<name>_Proxy.mov" only when complete and checked (core/jobs.js finalPath).
+test("proxy-automation render: ffmpeg writes a temporary name, the pool renames it to the real proxy name", async function () {
+  var root = H.tmpdir("proxies"), media = path.join(root, "A001 é.mp4"), bundled = path.join(process.env.HOME, "Library", "Application Support", "PenyToolkit", "bin");
+  fs.writeFileSync(media, "source"); fs.mkdirSync(bundled, { recursive: true });
+  fs.writeFileSync(path.join(bundled, "ffmpeg"), "#!/bin/sh\n"); fs.chmodSync(path.join(bundled, "ffmpeg"), 0o755);
+  var mod = loadPanel("proxy-automation", { ok: true, details: { scope: "all", tally: {}, items: [{ nodeId: "n1", name: "A001 é.mp4", mediaPath: media, binPath: "Day 1" }] } });
+  var before = spawned.length, r = await mod.actions.render({ dest: root });
+  var cmd = spawned.slice(before).filter(function (c) { return /ffmpeg/.test(c); })[0] || "";
+  assert.ok(cmd.indexOf(path.join(root, "Day 1", "A001 é_Proxy-rendering.mov")) >= 0, "ffmpeg must write the temporary name: " + cmd);
+  assert.equal(cmd.indexOf("A001 é_Proxy.mov"), -1, "ffmpeg must not write the real name: " + cmd);
+  var job = (r.details.jobs || [])[0] || {};
+  assert.equal(fs.existsSync(path.join(root, "Day 1", "A001 é_Proxy.mov")), false, "a failed render leaves no file under the real name");
+  assert.match(r.summary, /0 of 1 rendered/, r.summary + " " + JSON.stringify(job));
+  fs.rmSync(bundled, { recursive: true, force: true });
+});

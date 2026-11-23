@@ -238,3 +238,38 @@ test("pool: onProgress or log throwing does not break the run", async function (
   p.add({ key: "a", cmd: "true", label: "a" }); p.start();
   var s = await p.wait(); assert.equal(s.ok, 1);
 });
+
+// Lee, 23 Nov 2026: a proxy is rendered under a temporary name and only gets its real name
+// once it is complete and checked, so a cancelled or failed render never leaves a broken
+// file under the real proxy name.
+function movCmd(src, dest) { return "cp '" + src + "' '" + dest + "'"; }
+test("pool: finalPath: a checked render is renamed to its real name; the temporary file is gone", async function () {
+  var d = H.tmpdir("final"), good = H.writeAtoms(path.join(d, "good.mov"), [["ftyp", 12], ["mdat", 8000], ["moov", 5000]]);
+  var tmp = path.join(d, "A001 é_Proxy-rendering.mov"), fin = path.join(d, "A001 é_Proxy.mov");
+  var p = pool(); p.add({ key: fin, cmd: movCmd(good, tmp), outputPath: tmp, finalPath: fin, label: "A001" });
+  p.start(); var s = await p.wait();
+  assert.equal(s.ok, 1, JSON.stringify(s.jobs)); assert.ok(fs.existsSync(fin)); assert.equal(fs.existsSync(tmp), false);
+  assert.equal(s.jobs[0].outputPath, fin);
+});
+test("pool: finalPath: an incomplete render stays under its temporary name; the real name is never created", async function () {
+  var d = H.tmpdir("final"), tmp = path.join(d, "B_Proxy-rendering.mov"), fin = path.join(d, "B_Proxy.mov");
+  var p = pool(); p.add({ key: fin, cmd: "head -c 10000 /dev/zero > '" + tmp + "'", outputPath: tmp, finalPath: fin, label: "B" });
+  p.start(); var s = await p.wait();
+  assert.equal(s.failed, 1); assert.equal(fs.existsSync(fin), false); assert.ok(fs.existsSync(tmp));
+});
+test("pool: finalPath: a cancelled render never creates the real name", async function () {
+  var d = H.tmpdir("final"), tmp = path.join(d, "C_Proxy-rendering.mov"), fin = path.join(d, "C_Proxy.mov");
+  var p = pool(); p.add({ key: fin, cmd: "head -c 10000 /dev/zero > '" + tmp + "'; sleep 30", outputPath: tmp, finalPath: fin, label: "C" });
+  p.start(); for (var i = 0; i < 50 && !fs.existsSync(tmp); i++) await H.sleep(20);
+  p.cancel(); var s = await p.wait();
+  assert.equal(s.killed, 1); assert.equal(fs.existsSync(fin), false); assert.ok(fs.existsSync(tmp));
+});
+test("pool: finalPath: never overwrites a file that already has the real name", async function () {
+  var d = H.tmpdir("final"), good = H.writeAtoms(path.join(d, "good.mov"), [["ftyp", 12], ["mdat", 8000], ["moov", 5000]]);
+  var tmp = path.join(d, "D_Proxy-rendering.mov"), fin = path.join(d, "D_Proxy.mov");
+  fs.writeFileSync(fin, "someone else's file");
+  var p = pool(); p.add({ key: fin, cmd: movCmd(good, tmp), outputPath: tmp, finalPath: fin, label: "D" });
+  p.start(); var s = await p.wait();
+  assert.equal(s.failed, 1); assert.match(s.jobs[0].reason, /already exists/); assert.equal(fs.readFileSync(fin, "utf-8"), "someone else's file");
+  assert.ok(fs.existsSync(tmp), "the finished render is kept under its temporary name");
+});

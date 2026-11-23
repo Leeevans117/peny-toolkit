@@ -108,7 +108,8 @@ function frameCountMismatch(job) {
 }
 
 /* new JobPool({ maxConcurrent, log, onChange })
- * pool.add({ key, cmd, outputPath, label })   key must be unique (outputPath is fine)
+ * pool.add({ key, cmd, outputPath, label, finalPath? })   key must be unique (outputPath is fine);
+ *   with finalPath, outputPath is a temporary name, renamed to finalPath once complete and checked
  * pool.start() / pause() / resume() / cancel()
  * pool.wait() -> Promise resolving with pool.summary() when nothing is left to run */
 function JobPool(opts) {
@@ -444,6 +445,15 @@ JobPool.prototype._launch = function (job) {
     } else if (job.outputPath) {
       var mismatch = frameCountMismatch(job);
       if (mismatch) { job.state = "failed"; job.reason = mismatch; }
+      else if (job.finalPath) {
+        // Rendered under a temporary name; it gets its real name only now it is checked
+        // (Lee, 23 Nov 2026), and never over a file that already has that name.
+        if (fs.existsSync(job.finalPath)) { job.state = "failed"; job.reason = job.finalPath + " already exists; the finished render was kept as " + job.outputPath; }
+        else {
+          try { fs.renameSync(job.outputPath, job.finalPath); job.outputPath = job.finalPath; job.state = "ok"; }
+          catch (eR) { job.state = "failed"; job.reason = "could not rename " + job.outputPath + " to " + job.finalPath + ": " + eR.message; }
+        }
+      }
       else job.state = "ok";
     } else {
       job.state = "ok";
