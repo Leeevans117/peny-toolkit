@@ -49,6 +49,8 @@ fi
 
 cd "$REPO"
 COMMIT="$(git rev-parse --short HEAD)"
+# V number shown on the panel (VERSION_BASE): commits on main since base
+V="V$(sed -n 's/^major=//p' VERSION_BASE).$(git rev-list --count "$(sed -n 's/^base=//p' VERSION_BASE)..HEAD")" || V=""
 BUILD="$(date -u +%Y%m%d%H%M)"
 VERSION="$(date -u +%Y.%m.%d.%H%M)"
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
@@ -133,7 +135,7 @@ cp "$REPO/installer/install-toolkit.sh" "$REPO/installer/update.sh" "$P/"
 chmod +x "$ROOT/Install Peny Toolkit.command" "$P/install-toolkit.sh" "$P/update.sh"
 printf 'PENY_RELEASES="%s"\n' "$RELEASES" > "$P/update.conf.default"
 cat > "$P/VERSION.json" <<JSON
-{"version": "$VERSION", "build": $BUILD, "commit": "$COMMIT", "built": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
+{"v": "$V", "version": "$VERSION", "build": $BUILD, "commit": "$COMMIT", "built": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
 JSON
 cp "$P/VERSION.json" "$P/panel/VERSION.json"   # the panel shows it (core/version.js)
 
@@ -144,6 +146,6 @@ ditto -c -k --keepParent "$ROOT" "$OUT/$ZIP"
 SHA="$(shasum -a 256 "$OUT/$ZIP" | cut -d' ' -f1)"
 SIZE="$(stat -f %z "$OUT/$ZIP")"
 cat > "$OUT/version.json" <<JSON
-{"version": "$VERSION", "build": $BUILD, "commit": "$COMMIT", "zip": "$ZIP", "sha256": "$SHA", "size": $SIZE}
+{"v": "$V", "version": "$VERSION", "build": $BUILD, "commit": "$COMMIT", "zip": "$ZIP", "sha256": "$SHA", "size": $SIZE}
 JSON
-say "Built $OUT/$ZIP ($(( SIZE / 1048576 )) MB), version $VERSION, commit $COMMIT"
+say "Built $OUT/$ZIP ($(( SIZE / 1048576 )) MB), $V, version $VERSION, commit $COMMIT"

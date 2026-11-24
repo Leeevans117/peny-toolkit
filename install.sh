@@ -11,7 +11,7 @@ rsync -a --delete --exclude .git --exclude .gitignore --exclude __pycache__ --ex
 
 # Which build this is, shown at the top of the panel (core/version.js). A release
 # (one-click installer / office-server update) brings its own VERSION.json; from a git
-# checkout it records the commit and the git tree of the files as installed (uncommitted
+# checkout it records the V number, the commit and the git tree of the files as installed (uncommitted
 # changes included, worked out in a scratch index so git's own index is not touched).
 if [ -f "$SRC/VERSION.json" ]; then
   cp "$SRC/VERSION.json" "$DEST/VERSION.json"
@@ -21,8 +21,11 @@ elif commit="$(git -c safe.directory='*' -C "$SRC" rev-parse --short HEAD 2>/dev
       && GIT_INDEX_FILE="$idx" git -c safe.directory='*' write-tree; rm -f "$idx")"
   clean=false
   [ -n "$tree" ] && [ "$tree" = "$(git -c safe.directory='*' -C "$SRC" rev-parse 'HEAD^{tree}')" ] && clean=true
-  printf '{"commit": "%s", "tree": "%s", "clean": %s, "repo": "%s", "installed": "%s"}\n' \
-    "$commit" "$tree" "$clean" "$SRC" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$DEST/VERSION.json"
+  # V number (VERSION_BASE): commits on main since base
+  major="$(sed -n 's/^major=//p' "$SRC/VERSION_BASE" 2>/dev/null)"; base="$(sed -n 's/^base=//p' "$SRC/VERSION_BASE" 2>/dev/null)"
+  n="$(git -c safe.directory='*' -C "$SRC" rev-list --count "$base..HEAD" 2>/dev/null)" && [ -n "$major" ] && v="V$major.$n" || v=""
+  printf '{"v": "%s", "major": "%s", "base": "%s", "commit": "%s", "tree": "%s", "clean": %s, "repo": "%s", "installed": "%s"}\n' \
+    "$v" "$major" "$base" "$commit" "$tree" "$clean" "$SRC" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$DEST/VERSION.json"
 fi
 
 mkdir -p "$HOOK"

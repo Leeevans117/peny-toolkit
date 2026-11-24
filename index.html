@@ -157,7 +157,7 @@
     #back { border-color: var(--line); background: var(--card); border-radius: 999px; }
     .tools { display: flex; gap: 0; flex: none; }
     /* Build shown on every Mac, so they can be checked against each other (core/version.js) */
-    #ver { flex: none; margin-top: -4px; padding: 0 10px 2px; text-align: right; font-size: 10.5px; line-height: 1.2; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+    #ver { flex: none; margin-top: -4px; padding: 0 12px 2px; text-align: right; font-size: var(--fs-xs); font-weight: 600; line-height: 1.2; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
     #ver:empty { display: none; }
     #ver.changes { color: var(--warn); }
 
@@ -440,7 +440,7 @@
       </button>
     </div>
   </header>
-  <div class="ver mono" id="ver"></div>
+  <div class="ver" id="ver"></div>
 
   <div id="work">
     <div id="main">

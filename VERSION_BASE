@@ -1,0 +1,5 @@
+# The V number on the panel (core/version.js): V<major>.<n>, where n counts the commits on
+# main since base, so it goes up by one with every update and is the same on every Mac.
+# For a new major version (V2.1, V2.2...) set major=2 and base= the current commit.
+major=1
+base=dd05d4f2e1ce7c46417cd2c4ebf9e2d7d03c3002
