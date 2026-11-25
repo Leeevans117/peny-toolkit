@@ -1,0 +1,23 @@
+{
+  "id": "multicam-sync",
+  "name": "Multicam Sync Test",
+  "description": "TEST VERSION. Puts every camera and every external sound file on the active sequence on one clock, on a NEW sequence \"<sequence> MULTICAM SYNC TEST\": timecode first (Tentacle LTC on the camera sound, then the camera's own timecode once its sound proves it), then waveform, then file dates for recorders and cameras whose clock is checked against others. Clips that can't be placed go at the end. Labels on the new sequence: Iris = placed frame-exact by sound or timecode, Mango = placed by clock or file date only (about 1 s), Violet = not placed (at the end). The active sequence is not changed and nothing is saved.",
+  "order": 5.5,
+  "icon": "icon.svg",
+  "tint": [
+    "#1c1c1e",
+    "#000000"
+  ],
+  "progress": true,
+  "entry": "premiere.jsx",
+  "panel": "panel.js",
+  "actions": [
+    {
+      "id": "sync",
+      "label": "Multicam sync (test)",
+      "style": "primary",
+      "confirm": "Sync every camera and sound file on the active sequence onto one clock? A NEW sequence \"<active sequence> MULTICAM SYNC TEST\" is imported into the project (with its own new clip items in the project root, as an XML import does). The active sequence is not changed and nothing is saved. The first run of a shoot reads all its sound and can take half an hour (380 clips: 34 min on the Mac Studio); a second run of the same shoot takes seconds."
+    },
+    { "id": "cancel", "label": "Cancel", "control": true }
+  ]
+}
