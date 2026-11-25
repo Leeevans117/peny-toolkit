@@ -36,6 +36,11 @@
       "label": "Even out interview audio",
       "style": "primary",
       "confirm": "Even out the interview voice on a safe copy of this sequence? Every voice clip gets one Hard Limiter (ceiling -6 dB on the meters) with its own input boost, and with Even out every phrase on, Volume keyframes so quiet and loud phrases and different speakers sound equally loud. Volume keyframes from an earlier Sound Pass run are replaced. Only the TOOLKIT COPY changes; clip gain and faders are left as they are, and nothing is saved."
+    },
+    {
+      "id": "runSelected",
+      "label": "Even out selected clips",
+      "confirm": "Even out only the clips you have selected on the timeline, on a safe copy of this sequence? The same as Even out interview audio, but only the selected voice clips get a Hard Limiter and Volume keyframes, and only the music/camera sound under them moves. Other clips are left as they are. Only the TOOLKIT COPY changes; nothing is saved."
     }
   ]
 }

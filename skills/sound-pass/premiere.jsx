@@ -3,6 +3,9 @@
 //              audio clip on an unmuted track whose sound comes from a .wav (the wireless
 //              recorder), directly or through a nested sequence; camera audio (R3D/MP4/MXF/MOV)
 //              is left alone. params.tracks ("A1,A8") overrides the rule.
+//   "selection" - read only: the audio clips selected on the active sequence's timeline, as
+//              "track:startTicks" keys (read before the copy is made, matched on the copy).
+//              scan with params.selected (those keys) then takes only those clips as voice.
 //   "copy"   - Make safe copy unless the active sequence already is a TOOLKIT COPY.
 //   "set"    - on a TOOLKIT COPY: gives each listed clip one Hard Limiter (added with QE if it
 //              has none) and sets Bypass / Input Boost / Maximum Amplitude, then reads them back.
@@ -29,6 +32,7 @@
     var seq = T.activeSequence();
     if (!seq) return T.fail("No active sequence. Open the interview sequence first.");
     if (action === "scan") return scan(seq, params);
+    if (action === "selection") return selection(seq);
     if (action === "set") return set(seq, params);
     if (action === "render") return render(seq, params);
     if (action === "probe") return probe(seq, params);
@@ -122,8 +126,24 @@
     return any ? out : null;
   }
 
+  function selection(seq) {
+    var keys = [], names = [];
+    for (var t = 0; t < seq.audioTracks.numTracks; t++) {
+      var tc = seq.audioTracks[t].clips;
+      for (var c = 0; c < tc.numItems; c++) {
+        var on = false;
+        try { on = !!tc[c].isSelected(); } catch (e) {}
+        if (on) { keys.push(t + ":" + tc[c].start.ticks); names.push("A" + (t + 1) + " " + tc[c].name); }
+      }
+    }
+    if (!keys.length) return T.fail("No audio clips are selected on \"" + seq.name + "\". Select the interview clips on the timeline (their audio, or the camera clip linked to it), then press again.");
+    return T.ok(keys.length + " audio clip(s) selected.", { sequence: String(seq.name), keys: keys, names: names });
+  }
+
   function scan(seq, params) {
     var only = trackFilter(params.tracks), clips = [], tracks = [], skipped = {}, gains = qeGains(seq), bedClips = [];
+    var sel = null, unselected = 0;
+    if (params.selected) { sel = {}; for (var q = 0; q < params.selected.length; q++) sel[params.selected[q]] = true; }
     for (var t = 0; t < seq.audioTracks.numTracks; t++) {
       var tr = seq.audioTracks[t], muted = false;
       try { muted = tr.isMuted(); } catch (e) {}
@@ -147,6 +167,7 @@
           bedClips.push(bedInfo(t, it));
           continue;
         }
+        if (sel && !sel[t + ":" + it.start.ticks]) { unselected++; continue; } // voice clip not selected: left as it is
         var g = gains[t + ":" + it.start.ticks];
         clips.push({ track: t, label: "A" + (t + 1), index: c, nodeId: String(it.nodeId), name: String(it.name), start: it.start.seconds, end: it.end.seconds,
           source: source, wavs: wavs, clipGainDb: g === undefined ? null : g, volumeDb: volumeDb(it), hl: hlState(it) });
@@ -154,9 +175,17 @@
     }
     var sk = [];
     for (var s in skipped) if (skipped.hasOwnProperty(s)) sk.push(s + (skipped[s] === true ? "" : " x" + skipped[s]));
+    if (sel) {
+      // Selected mode: only the music/camera sound under the selected clips moves with them.
+      var kept = [];
+      for (var b = 0; b < bedClips.length; b++) for (var v = 0; v < clips.length; v++) if (bedClips[b].start < clips[v].end && bedClips[b].end > clips[v].start) { kept.push(bedClips[b]); break; }
+      bedClips = kept;
+      if (unselected) sk.push("voice clips not selected x" + unselected);
+      if (!clips.length) return T.fail("None of the " + params.selected.length + " selected clip(s) is interview voice (.wav audio, directly or in a nested sequence, on an unmuted track). Skipped: " + (sk.join(", ") || "nothing"), { tracks: tracks });
+    }
     if (!clips.length) return T.fail("No interview voice clips found (looked for .wav audio, directly or in nested sequences, on unmuted tracks). Skipped: " + (sk.join(", ") || "nothing"), { tracks: tracks });
     return T.ok("Found " + clips.length + " voice clip(s).", { sequence: String(seq.name), sequenceId: String(seq.sequenceID), isCopy: T.isToolkitCopy(seq),
-      end: T.sec(seq.end), fps: T.sequenceFps(seq), tracks: tracks, clips: clips, skipped: sk, bed: bedClips, hasMarkers: hasOurMarkers(seq) });
+      end: T.sec(seq.end), fps: T.sequenceFps(seq), tracks: tracks, clips: clips, skipped: sk, bed: bedClips, hasMarkers: hasOurMarkers(seq), selectedOnly: !!sel });
   }
 
   function copy() {
@@ -299,8 +328,10 @@
   function ours(m) { return String(m.name).indexOf("Sound Pass:") === 0; }
   function markers(seq, params) {
     if (!T.isToolkitCopy(seq)) return T.fail("Sound Pass only changes a TOOLKIT COPY; \"" + seq.name + "\" is not one.");
-    var mc = seq.markers, old = [], m = mc.getFirstMarker(), others = 0, i;
-    while (m) { if (ours(m)) old.push(m); else others++; m = mc.getNextMarker(m); }
+    // params.ranges [[start, end] s]: only our markers inside them are replaced (selected clips mode).
+    function inside(mk) { if (!params.ranges) return true; for (var r = 0; r < params.ranges.length; r++) if (mk.start.seconds >= params.ranges[r][0] - 0.05 && mk.start.seconds <= params.ranges[r][1] + 0.05) return true; return false; }
+    var mc = seq.markers, old = [], m = mc.getFirstMarker(), others = 0, oursKept = 0, i;
+    while (m) { if (ours(m) && inside(m)) old.push(m); else if (ours(m)) oursKept++; else others++; m = mc.getNextMarker(m); }
     for (i = 0; i < old.length; i++) mc.deleteMarker(old[i]);
     var list = params.spots || [], bad = [];
     for (i = 0; i < list.length; i++) {
@@ -315,7 +346,8 @@
     m = mc.getFirstMarker();
     while (m) { if (ours(m)) now++; else kept++; m = mc.getNextMarker(m); }
     var d = { removed: old.length, added: list.length, now: now, othersKept: kept, othersBefore: others, bad: bad };
-    if (now !== list.length || kept !== others || bad.length) return T.fail("Sound Pass markers did not read back: " + now + " of " + list.length + " (other markers " + kept + " of " + others + ").", d);
+    d.oursKept = oursKept;
+    if (now !== list.length + oursKept || kept !== others || bad.length) return T.fail("Sound Pass markers did not read back: " + now + " of " + list.length + " (other markers " + kept + " of " + others + ").", d);
     return T.ok(list.length + " Sound Pass marker(s) on the copy (" + old.length + " earlier one(s) replaced).", d);
   }
 

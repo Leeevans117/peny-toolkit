@@ -338,7 +338,8 @@ def bed(job):
     """Gain curve for the music / camera sound (the bed) so Lee's voice-to-bed balance stays
     as he set it: the bed moves by Sound Pass's net voice change (final minus before voice
     render, energy average of the clear speech within +-1.5 s), held through pauses; where no
-    voice plays it moves by the median change; 0.5 s ramps, within +-`cap` dB, thinned to
+    voice plays it moves by the median change (or by `outside` dB when given: 0 in selected clips
+    mode, where the voice outside the selected clips is left as it was); 0.5 s ramps, within +-`cap` dB, thinned to
     `tol` dB. `prev` (bed clip id -> [[t, dB]]) is the gain an earlier run on this copy left,
     already in the before render, so it is added back. Returns {bed clip id: [[t, dB], ...]}."""
     b, f, dm = np.load(job["before"])["m"], np.load(job["file"])["m"], np.load(job["mask"])["m"]
@@ -353,6 +354,7 @@ def bed(job):
     chg[ok] = 10 * np.log10(np.maximum(roll(f)[ok], 1e-30) / np.maximum(roll(b)[ok], 1e-30))
     cap = float(job.get("cap", 12))
     mid = float(np.median(chg[sp & ok])) if (sp & ok).any() else 0.0
+    away = mid if job.get("outside") is None else float(job["outside"])
     inside = np.zeros(n, dtype=bool)
     for c in clips:
         a, e = int(c["start"] / 0.1), min(n, int(np.ceil(c["end"] / 0.1)))
@@ -362,7 +364,7 @@ def bed(job):
         if not np.isnan(chg[i]):
             cur = chg[i]
         elif not inside[i]:
-            cur = mid
+            cur = away
         g[i] = cur
     # 0.5 s ramps, like Lee's own ducking keyframes (0.35 s); a slower fader kept the balance worse
     # (5 Nov 2026: 2 dB/s gave Chris +1.5 dB, Laura -1.2 dB off his balance).
@@ -372,7 +374,7 @@ def bed(job):
     for c in job["bed"]:
         a, e = max(0, int(np.floor((c["start"] + 0.1) / 0.1))), min(n, int(np.ceil((c["end"] + 0.1) / 0.1)) + 1)
         if e - a < 2:
-            out[c["id"]] = [[round(c["start"], 3), round(mid, 2)], [round(c["end"], 3), round(mid, 2)]]
+            out[c["id"]] = [[round(c["start"], 3), round(away, 2)], [round(c["end"], 3), round(away, 2)]]
             continue
         tt = np.concatenate([[c["start"]], np.clip(t[a:e], c["start"], c["end"]), [c["end"]]])
         gg = g[a:e].copy()
