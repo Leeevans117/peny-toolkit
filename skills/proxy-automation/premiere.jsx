@@ -293,7 +293,19 @@
 
   // Audio channel groups of an item (AudioChannelMapping.audioClipsNumber), or null.
   function audioGroups(item) {
-    try { var m = item.getAudioChannelMapping(); var n = Number(m.audioClipsNumber); if (isFinite(n) && n >= 0) return n; } catch (e) {}
+    // A method on some builds, a property on others (Premiere 27: the call form returned
+    // nothing for an MXF in QA, 27 Nov 2026), like hasProxy/getProxyPath.
+    var m = null;
+    try { m = item.getAudioChannelMapping; if (typeof m === "function") m = m.call(item); } catch (e) { m = null; }
+    try { var n = m ? Number(m.audioClipsNumber) : NaN; if (isFinite(n) && n >= 0) return n; } catch (e2) {}
+    // Fallback: Premiere's own Audio Info column ("48000 Hz - 24-bit - 4 Channel mapped to 2 Stereo",
+    // "48000 Hz - 16-bit - Stereo", "... - 4 Mono").
+    var md = ""; try { md = String(item.getProjectMetadata()); } catch (e3) { return null; }
+    var ai = /Intrinsic\.AudioInfo>([^<]*)</.exec(md);
+    if (!ai) return null;
+    var t = ai[1], mm = /mapped to (\d+)\s/.exec(t) || /-\s*(\d+)\s+(?:Mono|Stereo)\s*$/.exec(t);
+    if (mm) return parseInt(mm[1], 10);
+    if (/-\s*(?:Mono|Stereo|5\.1)\s*$/.test(t)) return 1;
     return null;
   }
   // How many audio channel groups Premiere gives the camera file. Premiere decides this from
