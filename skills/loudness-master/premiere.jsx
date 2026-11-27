@@ -16,10 +16,16 @@
 (function () {
   var T = PenyToolkit;
   var HL = "Hard Limiter";
-  // The master is named "<S> MASTER <label> TOOLKIT COPY": the working rules let timeline
-  // edits run only on a sequence whose name ends TOOLKIT COPY.
-  var MASTER_RE = / MASTER [^\/]+ TOOLKIT COPY$/;
+  // The master is named "<S> Master for <label> V<n>" in the Claude bin (before 11 Nov 2026:
+  // "<S> MASTER <label> TOOLKIT COPY"); timeline edits run only on a master.
+  var MASTER_RE = / MASTER [^\/]+ TOOLKIT COPY$| Master for \S+ V\d+$/;
   var MARK = "Mastered ";
+  // A master: in "Claude bin/Master for <label>" (12 Nov 2026), or an older-named one.
+  function isMaster(seq) {
+    var vb = T.versionBinOf(seq);
+    if (vb && /^Master for /.test(vb.button)) return true;
+    return MASTER_RE.test(String(seq.name)) && T.isToolkitCopy(seq);
+  }
 
   T.skills["loudness-master"] = function (params) {
     var action = params.action || "prepare";
@@ -29,7 +35,7 @@
     if (!seq) return T.fail(params.sequenceId ? "The MASTER sequence is no longer in the open project; nothing was changed." : "No active sequence. Open the sequence to master first.");
     if (action === "prepare") return prepare(seq, params);
     if (action === "probe") return probe(seq, params);
-    if (!MASTER_RE.test(String(seq.name)) || !T.isToolkitCopy(seq)) return T.fail("\"" + seq.name + "\" is not a MASTER sequence; only the master is changed.");
+    if (!isMaster(seq)) return T.fail("\"" + seq.name + "\" is not a MASTER sequence; only the master is changed.");
     if (action === "limit") return limit(seq, params);
     if (action === "render") return render(seq, params);
     if (action === "queue") return T.queueRender(seq, params.path, params.preset, 0);
@@ -119,7 +125,7 @@
   function prepare(active, params) {
     var label = String(params.label || "YouTube");
     var src = active, srcFromMaster = false;
-    if (MASTER_RE.test(String(active.name))) {
+    if (isMaster(active)) {
       var nested = pick(audioClips(active), function (c) { return c.nests; });
       if (!nested.length) return T.fail("\"" + active.name + "\" looks like a master but nests no sequence. Open the sequence to master.");
       src = T.findSequenceById(nested[0].nests);
@@ -128,23 +134,24 @@
     }
     var srcName = String(src.name), srcId = String(src.sequenceID), srcItem = src.projectItem;
     if (!srcItem) return T.fail("\"" + srcName + "\" has no project item to nest.");
-    // "<S> MASTER <label> TOOLKIT COPY", with S's own " TOOLKIT COPY" left off so it is not
-    // there twice; a master made under the longer name (first run, 24 Oct 2026) is reused.
-    var base = T.isToolkitCopy(src) ? srcName.substr(0, srcName.length - T.COPY_SUFFIX.length).replace(/\s+$/, "") : srcName;
-    var name = base + " MASTER " + label + " " + T.COPY_SUFFIX, made = false;
-    var master = sequenceByName(name) || sequenceByName(srcName + " MASTER " + label + " " + T.COPY_SUFFIX);
+    // A new "<S> Master for <label> V<n>" in the Claude bin each run (Lee, 11 Nov 2026); run on
+    // a master (new or old "<S> MASTER <label> TOOLKIT COPY" name) and that master is reused.
+    // Every run makes the next master version, also when run on a master (Lee, 11 Nov 2026).
+    var name, made = false, master = null;
     if (master) {
       name = String(master.name);
-      var nests = pick(audioClips(master), function (c) { return c.nests === srcId; });
-      if (!nests.length) return T.fail("A sequence named \"" + name + "\" exists but does not nest \"" + srcName + "\". Rename or remove it and run again.");
     } else {
+      name = T.versionName(srcFromMaster ? String(active.name) : srcName);
       var before = T.fingerprint(src);
-      var bin = binOf(app.project.rootItem, String(srcItem.nodeId), 0) || app.project.rootItem;
+      var bin = T.buttonBin("Master for " + label);
+      if (!bin) return T.fail("Could not make the \"" + T.VERSION_BIN + "\" bin.");
       var res = null, err = null;
       try { res = app.project.createNewSequenceFromClips(name, [srcItem], bin); } catch (e) { err = String(e); }
       master = sequenceByName(name);
       if (!master) return T.fail("Could not make \"" + name + "\" with createNewSequenceFromClips: " + (err || String(res)));
       made = true;
+      var filed = T.fileVersion(master, "Master for " + label);
+      if (filed) return T.fail("\"" + name + "\" was made but " + filed + ".");
       var after = T.fingerprint(T.findSequenceById(srcId));
       if (after.hash !== before.hash || after.clips !== before.clips) return T.fail("\"" + srcName + "\" changed while its master was made; check it (undo).", { before: before, after: after });
     }

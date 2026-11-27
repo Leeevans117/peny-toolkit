@@ -1,7 +1,7 @@
 {
   "id": "colour-baseline",
   "name": "Colour",
-  "description": "Sets up a baseline grade. Detect cameras lists the cameras in the active sequence with one of your Lumetri presets (LUT) for each. Apply baseline grade makes \"<name> GRADED TOOLKIT COPY\" where every video clip has a Lumetri called \"Adjustments\" on top and the camera's LUT Lumetri under it, so you grade by selecting Adjustments. Make LUT presets turns a folder of .cube files into presets to import. The open sequence is not changed; nothing is saved.",
+  "description": "Sets up a baseline grade. Detect cameras lists the cameras in the active sequence with one of your Lumetri presets (LUT) for each. Apply baseline grade makes \"<name> V<next>\" in Claude bin/Colour where every video clip has a Lumetri called \"Adjustments\" on top and the camera's LUT Lumetri under it, so you grade by selecting Adjustments. Make LUT presets turns a folder of .cube files into presets to import. The open sequence is not changed; nothing is saved.",
   "order": 8,
   "icon": "icon.svg",
   "tint": [
@@ -22,7 +22,7 @@
       "id": "apply",
       "label": "Apply baseline grade",
       "style": "primary",
-      "confirm": "Make a graded copy of this sequence? Premiere gets a new sequence \"<name> GRADED TOOLKIT COPY\" in which every video clip has a Lumetri called \"Adjustments\" on top and its camera's LUT Lumetri under it (clips that already have a LUT keep theirs). The open sequence is not changed; nothing is saved."
+      "confirm": "Make a graded copy of this sequence? Premiere gets a new sequence \"<name> V<next>\" in Claude bin/Colour in which every video clip has a Lumetri called \"Adjustments\" on top and its camera's LUT Lumetri under it (clips that already have a LUT keep theirs). The open sequence is not changed; nothing is saved."
     },
     {
       "id": "makepresets",

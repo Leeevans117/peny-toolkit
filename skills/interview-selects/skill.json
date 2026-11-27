@@ -59,19 +59,19 @@
       "id": "find",
       "label": "Find answers, cut & raise",
       "style": "primary",
-      "confirm": "Transcribe this sequence, find the answers on this Mac, then cut and raise them? It takes about 20 minutes for an hour of interview. A copy called \"<sequence> Cut\" is made; the markers go on it, then each answer is cut and moved up one track, with an adjustment layer per question and a row per theme above. Nothing between the answers is removed (that is the Trim button). The original is not changed, no footage is deleted and nothing is saved."
+      "confirm": "Transcribe this sequence, find the answers on this Mac, then cut and raise them? It takes about 20 minutes for an hour of interview. A copy called \"<sequence> V<next>\" in Claude bin/Find Answers is made; the markers go on it, then each answer is cut and moved up one track, with an adjustment layer per question and a row per theme above. Nothing between the answers is removed (that is the Trim button). The original is not changed, no footage is deleted and nothing is saved."
     },
     {
       "id": "trim",
       "label": "Trim",
       "style": "secondary",
-      "confirm": "Make a copy of this Cut called \"<sequence> Trimmed\" and remove everything between the answers (questions, crew chat, pauses) so the answers run back to back? Markers move with their answers and links are kept. The Cut itself is not changed, no footage is deleted and nothing is saved."
+      "confirm": "Make a copy of this Cut called \"<sequence> V<next>\" in Claude bin/Trim and remove everything between the answers (questions, crew chat, pauses) so the answers run back to back? Markers move with their answers and links are kept. The Cut itself is not changed, no footage is deleted and nothing is saved."
     },
     {
       "id": "unum",
       "label": "Remove ums & uhs",
       "style": "primary",
-      "confirm": "Find the ums and uhs in this sequence and cut them on a copy called \"<sequence> No ums\"? It takes about 12 minutes for an hour of interview. Every track is cut at the same place so picture and sound stay in sync; links are kept, each cut gets a marker and the list goes in a CSV. The original is not changed, no footage is deleted and nothing is saved."
+      "confirm": "Find the ums and uhs in this sequence and cut them on a copy called \"<sequence> V<next>\" in Claude bin/Remove Ums? It takes about 12 minutes for an hour of interview. Every track is cut at the same place so picture and sound stay in sync; links are kept, each cut gets a marker and the list goes in a CSV. The original is not changed, no footage is deleted and nothing is saved."
     },
     {
       "id": "cancel",
@@ -90,7 +90,7 @@
         "#24507a",
         "#0c1c2c"
       ],
-      "description": "Like Premiere's Synchronize, but for every clip on the sequence in one go. Camera A (the lowest video track with clips, e.g. V1) stays put. Every other clip (camera B on V2, external wavs or lav recordings on the audio tracks, any number per track) is matched to camera A by its sound waveform and moved so the sound lines up. A clip camera A doesn't cover is matched to a clip already synced. Timecode is only a fallback (camera clocks often disagree). It all happens on a copy called \"<sequence> Synced\"; clips it isn't sure about are left where they are and listed. Link: Cameras + audio links each camera A clip with the camera B clip and the audio clips synced to it; Cameras only links the cameras and leaves the external audio unlinked; Don't link just lines them up. RED clips need their proxy (that is where the sound is read from). It stays on the sequence you started it on: you can switch to another sequence and keep working while it runs; the result goes on that sequence's copy, and if you have moved on the copy isn't opened over your work, its name is reported at the end. Premiere pauses for a moment at the end while the copy is cut or linked, and the copy's tab may open behind your sequence.",
+      "description": "Like Premiere's Synchronize, but for every clip on the sequence in one go. Camera A (the lowest video track with clips, e.g. V1) stays put. Every other clip (camera B on V2, external wavs or lav recordings on the audio tracks, any number per track) is matched to camera A by its sound waveform and moved so the sound lines up. A clip camera A doesn't cover is matched to a clip already synced. Timecode is only a fallback (camera clocks often disagree). It all happens on a copy called \"<sequence> V<next>\" in Claude bin/Sync Interviews; clips it isn't sure about are left where they are and listed. Link: Cameras + audio links each camera A clip with the camera B clip and the audio clips synced to it; Cameras only links the cameras and leaves the external audio unlinked; Don't link just lines them up. RED clips need their proxy (that is where the sound is read from). It stays on the sequence you started it on: you can switch to another sequence and keep working while it runs; the result goes on that sequence's copy, and if you have moved on the copy isn't opened over your work, its name is reported at the end. Premiere pauses for a moment at the end while the copy is cut or linked, and the copy's tab may open behind your sequence.",
       "inputs": [
         "link"
       ],
@@ -107,7 +107,7 @@
         "#8a6416",
         "#2a1e06"
       ],
-      "description": "Transcribes the sound of the active interview sequence on this Mac (whisper): exactly what the timeline plays, so have the speaker's lav mic on the timeline. Premiere pauses for a few seconds at the start while that sound is read. works out line by line who is speaking with the local AI model (Ollama, no internet), and keeps everything the interviewee says, whether or not it answers a question: intros, statements, stories. It all goes on a copy called \"<sequence> Cut\": a Chapter marker per question, a Segmentation marker per broad theme, and the small topics as clip markers on the clip on the top video track (they belong to that footage, so they also show in other sequences that use it). Then, on that copy, each answer is cut and raised one track, with an adjustment layer named after each question and a row above with one per theme; nothing between the answers is removed (use Trim for that). Run it again on a Cut and it works on that Cut, no copy of a copy. The original is not changed. It stays on the sequence you started it on: you can switch to another sequence and keep working while it runs; the result goes on that sequence's copy, and if you have moved on the copy isn't opened over your work, its name is reported at the end.",
+      "description": "Transcribes the sound of the active interview sequence on this Mac (whisper): exactly what the timeline plays, so have the speaker's lav mic on the timeline. Premiere pauses for a few seconds at the start while that sound is read. works out line by line who is speaking with the local AI model (Ollama, no internet), and keeps everything the interviewee says, whether or not it answers a question: intros, statements, stories. It all goes on a copy called \"<sequence> V<next>\" in Claude bin/Find Answers: a Chapter marker per question, a Segmentation marker per broad theme, and the small topics as clip markers on the clip on the top video track (they belong to that footage, so they also show in other sequences that use it). Then, on that copy, each answer is cut and raised one track, with an adjustment layer named after each question and a row above with one per theme; nothing between the answers is removed (use Trim for that). Run it again on a Cut and it works on that Cut, no copy of a copy. The original is not changed. It stays on the sequence you started it on: you can switch to another sequence and keep working while it runs; the result goes on that sequence's copy, and if you have moved on the copy isn't opened over your work, its name is reported at the end.",
       "inputs": [
         "name",
         "track"
@@ -125,8 +125,8 @@
         "#1f6a50",
         "#08221a"
       ],
-      "description": "On a Cut made by Find answers: makes a copy called \"<sequence> Trimmed\" and removes the questions and dead bits between the answers so the answers run back to back. Markers move with their answers and links are kept. The Cut is not changed; no footage is deleted and nothing is saved. Premiere is held still while this runs (under a minute for a short interview), and if you have moved to another sequence you are put back on it.",
-      "needs": "Run Find answers, cut & raise first: this runs on the \"<sequence> Cut\" it makes.",
+      "description": "On a Cut made by Find answers: makes a copy called \"<sequence> V<next>\" in Claude bin/Trim and removes the questions and dead bits between the answers so the answers run back to back. Markers move with their answers and links are kept. The Cut is not changed; no footage is deleted and nothing is saved. Premiere is held still while this runs (under a minute for a short interview), and if you have moved to another sequence you are put back on it.",
+      "needs": "Run Find answers, cut & raise first: this runs on the \"<sequence> V<next>\" in Claude bin/Find Answers it makes.",
       "inputs": [],
       "actions": [
         "trim"
@@ -141,7 +141,7 @@
         "#5b3c8c",
         "#1a102c"
       ],
-      "description": "Finds the filler words (um, uh, er, erm, ah, hmm) with whisper on this Mac, checks each one twice and cuts it from every track of a copy called \"<sequence> No ums\" (picture and sound stay in sync, links kept), with a marker at each cut and a list of them all; fillers said straight into a word are left in. Works on any sequence. It stays on the sequence you started it on: you can switch to another sequence and keep working while it runs; the result goes on that sequence's copy, and if you have moved on the copy isn't opened over your work, its name is reported at the end. Premiere pauses for a moment at the end while the copy is cut or linked, and the copy's tab may open behind your sequence.",
+      "description": "Finds the filler words (um, uh, er, erm, ah, hmm) with whisper on this Mac, checks each one twice and cuts it from every track of a copy called \"<sequence> V<next>\" in Claude bin/Remove Ums (picture and sound stay in sync, links kept), with a marker at each cut and a list of them all; fillers said straight into a word are left in. Works on any sequence. It stays on the sequence you started it on: you can switch to another sequence and keep working while it runs; the result goes on that sequence's copy, and if you have moved on the copy isn't opened over your work, its name is reported at the end. Premiere pauses for a moment at the end while the copy is cut or linked, and the copy's tab may open behind your sequence.",
       "inputs": [
         "track",
         "fillers"

@@ -1,7 +1,7 @@
 {
   "id": "interview-sync",
   "name": "Sync Interviews",
-  "description": "Lines every clip of an interview sequence up with camera A by waveform, on a copy \"<sequence> Synced\", then links as chosen. Runs from the Interviews tile (Sync Interviews).",
+  "description": "Lines every clip of an interview sequence up with camera A by waveform, on a copy \"<sequence> V<next>\" in Claude bin/Sync Interviews, then links as chosen. Runs from the Interviews tile (Sync Interviews).",
   "hidden": true,
   "entry": "premiere.jsx",
   "panel": "panel.js",

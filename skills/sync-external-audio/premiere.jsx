@@ -201,8 +201,7 @@
     var seq = params.sequenceId ? T.findSequenceById(params.sequenceId) : was;
     if (!seq) return T.fail(params.sequenceId ? "The sequence Sync measured (\"" + params.sequenceName + "\") is not in the open project any more (another project open?). Open its project and run Sync again; nothing was placed." : "No active sequence.");
     if (!T.isToolkitCopy(seq)) {
-      return T.fail("Refused: the active sequence \"" + seq.name + "\" does not end in \"" + T.COPY_SUFFIX +
-        "\". Run Make safe copy first and run this on the copy.");
+      return T.fail("Refused: \"" + seq.name + "\" is not a Toolkit version (in the Claude bin). Run Step 1 first and run this on the copy.");
     }
     if (params.action === "scan") {
       var s = scan(seq);
