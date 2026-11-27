@@ -1,8 +1,8 @@
 {
   "id": "photo-zoom",
   "name": "Zoom",
-  "subtitle": "Netflix-style push, pull and drift on selected clips",
-  "description": "Adds a slow documentary zoom to every selected clip on the open sequence (video, PNG, JPEG or frame hold). Set the start and end size, an optional drift, and the speed curve (ease in, ease out, or your own); the zoom is keyframed on each clip's Motion Scale and Position, relative to the clip's own size, over its full length. With Live on, every change updates the selected clips straight away. Edge cover shrinks the drift so the frame edge never shows. Reset zoom puts Motion back to the clip's own size and position. Works on up to 12 clips at a time. Cmd+Z also undoes; nothing is saved.",
+  "subtitle": "Netflix-style push, pull and pan on selected clips",
+  "description": "Adds a slow documentary zoom to every selected clip on the open sequence (video, PNG, JPEG or frame hold). Set the start and end size, start and end position (a pan goes from one to the other), the anchor the zoom pushes into (grid, sliders or click the preview), rotation, a hold at the start or end, and the speed curve; the move is keyframed on each clip's Motion Scale, Position and Rotation, relative to the clip's own values, over its full length. With Live on, every change updates the selected clips straight away. Edge cover shrinks the movement so the frame edge never shows. Stretch with the clip re-keys a zoomed clip when you make it longer or shorter. Reset zoom takes every Motion Scale, Position and Rotation keyframe off and puts the clip back to its own size and position. Works on up to 12 clips at a time. Cmd+Z also undoes; nothing is saved.",
   "order": 9.5,
   "icon": "icon.svg",
   "tint": [
