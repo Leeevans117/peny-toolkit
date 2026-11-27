@@ -492,7 +492,7 @@ module.exports = function (api) {
       if (!res.ok) return res;
       var fr = null;
       function index() { if (!fr) { api.status("Looking for camera files in " + root + "…"); fr = indexFullRes(root); } return fr; }
-      var pairs = [], detachIds = [], fine = [], notFound = [], ambiguous = [], noFolder = [];
+      var pairs = [], detachIds = [], toDetach = [], fine = [], notFound = [], ambiguous = [], noFolder = [];
       res.details.items.forEach(function (it) {
         var rec = { name: it.name, bin: it.binPath, was: it.mediaPath };
         var mp = it.mediaPath, base = path.basename(mp);
@@ -506,7 +506,7 @@ module.exports = function (api) {
           return;
         }
         if (!it.offline && fs.existsSync(mp)) {
-          if (it.hasProxy) detachIds.push(it.nodeId); else fine.push(rec);
+          if (it.hasProxy) { detachIds.push(it.nodeId); toDetach.push({ nodeId: it.nodeId, name: it.name, bin: it.binPath, media: mp, proxy: it.proxyPath }); } else fine.push(rec);
           return;
         }
         var sp = serverPath(mp);
@@ -522,9 +522,10 @@ module.exports = function (api) {
         notFound.length + " not found, " + ambiguous.length + " ambiguous, " + noFolder.length + " need the full-res folder." +
         (fr ? " (" + fr.count + " files indexed under " + root + ")" : ""));
       ambiguous.forEach(function (r) { api.log("  ambiguous, left alone: " + r.bin + "/" + r.name + " - " + r.candidates.join(" | "), "warn"); });
+      toDetach.forEach(function (r) { api.log("  proxy to detach: " + r.bin + "/" + r.name + " (" + r.media + ", proxy " + r.proxy + ")"); });
       notFound.forEach(function (r) { api.log("  not found: " + r.bin + "/" + r.name + " (" + r.was + ")", "warn"); });
       if (params.dryRun) return { ok: true, summary: "Dry run: " + pairs.length + " would reconnect, " + detachIds.length + " would detach.", details: {
-        reconnect: pairs, detach: detachIds.length, alreadyFullRes: fine.length, notFound: notFound, ambiguous: ambiguous, needFolder: noFolder } };
+        reconnect: pairs, detach: toDetach, alreadyFullRes: fine.length, notFound: notFound, ambiguous: ambiguous, needFolder: noFolder } };
       var d = { relinked: [], failed: [] }, okAll = true;
       function piece(i) {
         if (i >= pairs.length) return Promise.resolve({ ok: okAll });
@@ -550,7 +551,11 @@ module.exports = function (api) {
           (dd.detached || []).length + " more had their proxy detached, " + fine.length + " already full res, " +
           (d.failed.length + (dd.failed || []).length) + " failed, " + notFound.length + " not found, " + ambiguous.length +
           " left alone (same name in several folders)" + (noFolder.length ? ", " + noFolder.length + " need the full-res folder chosen" : "") + "." +
-          (checks.length ? " Check: " + checks.join("; ") : "") + (r.error ? " Stopped: " + r.error : "");
+          (checks.length ? " Check: " + checks.join("; ") : "") +
+          (d.failed.length || (dd.failed || []).length ? " Failed: " + d.failed.concat(dd.failed || []).map(function (f) {
+            var t = f.name || f.nodeId; toDetach.forEach(function (x) { if (x.nodeId === f.nodeId) t = x.bin + "/" + x.name; });
+            return t + " (" + (f.reason || f.error || "no reason given") + ")"; }).join("; ") : "") +
+          (r.error ? " Stopped: " + r.error : "");
         return { ok: !!r.ok && !d.failed.length, summary: summary, error: summary, details: {
           relinked: d.relinked, failed: d.failed, detached: dd.detached || [], detachFailed: dd.failed || [],
           notFound: notFound, ambiguous: ambiguous, needFolder: noFolder, alreadyFullRes: fine.length } };
