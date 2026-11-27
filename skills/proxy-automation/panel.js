@@ -435,6 +435,9 @@ module.exports = function (api) {
   // several files share the name, the one whose parent folders match best wins; a tie is left
   // alone and reported, never guessed. A match must be as long as the clip (sameLength).
   var NOT_FOOTAGE = /\.(xml|wav|mp3|aac|aif|aiff|m4a|rtn|rmd|rsx|cpf|thm|lrv|xmp|txt|csv|bim|smi|ppn|pdf|jpg|jpeg|png|bin|dat|db|log)$/i;
+  // Only real camera video files can stand in for a _Proxy file (27 Nov 2026: a Premiere
+  // sidecar C001C0012327.prmi one folder above Clip/Clip/C001C0012327.MXF won the folder match).
+  var CAMERA_VIDEO = /\.(mxf|mov|mp4|m4v|r3d|braw|crm|mts|m2ts|avi|mkv|insv|360)$/i;
   function indexFullRes(root) {
     var byName = {}, byStem = {}, stack = [root], count = 0;
     while (stack.length) {
@@ -446,7 +449,7 @@ module.exports = function (api) {
         if (d.isDirectory()) { if (!/^proxies\b/.test(low.trim()) && !/proxies \(|^old .*proxies/.test(low)) stack.push(full); return; }
         if (low.indexOf(PROXY_INFIX.toLowerCase() + ".") !== -1 || low.indexOf(".redline-part.") !== -1) return;
         (byName[low] = byName[low] || []).push(full);
-        if (!NOT_FOOTAGE.test(low)) { var st = stripExt(low); (byStem[st] = byStem[st] || []).push(full); }
+        if (!NOT_FOOTAGE.test(low) && CAMERA_VIDEO.test(low)) { var st = stripExt(low); (byStem[st] = byStem[st] || []).push(full); }
         count++;
       });
     }
