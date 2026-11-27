@@ -145,3 +145,4 @@ section there before changing it.
 | Colour (colour-baseline) | Detects cameras, applies a LUT baseline grade on a GRADED copy; makes LUT presets | 3 Oct 2026, TEST project; picker not in real panel yet |
 | Selects Setup (selects-sequences) | Builds UNCUT and empty Selects sequences per group from a footage bin | 6 Nov 2026: by shoot date, Lee ran it on World Champs |
 | Zoom (photo-zoom) | Netflix-style push/pull/drift on selected clips: sizes, drift, speed curve, Live updates, per-clip settings | 27 Nov 2026, Lee using it on Episode 1 (frame holds, 4K archive) |
+| Magic Nest (magic-nest) | Nests the selected clips in a sequence at the biggest source clip's size (8K in a UHD edit gives an 8K nest), framing unchanged, in bin Nests | 27 Nov 2026, Mac Studio QA project by test hook; not clicked by hand |

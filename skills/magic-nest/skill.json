@@ -1,0 +1,14 @@
+{
+  "id": "magic-nest",
+  "name": "Magic Nest",
+  "subtitle": "Nest the selected clips at the footage's own size",
+  "description": "Nests the selected clips like Premiere's Nest, but the nest sequence takes the frame size and pixel aspect of the biggest selected source clip (an R3D's own size, never its proxy) instead of the sequence you are in. Frame rate stays the sequence's. Framing does not change: the clips are scaled up inside the nest and the nest clip is scaled down to match (8K at 50% in a UHD sequence gives an 8K nest with the clip at 100%, and the nest clip at 50%). The nest is named after the first selected clip and goes in the bin Nests (made if missing). Nothing is saved.",
+  "order": 9.6,
+  "icon": "icon.svg",
+  "tint": [
+    "#1c1c1e",
+    "#000000"
+  ],
+  "entry": "premiere.jsx",
+  "inputs": []
+}
