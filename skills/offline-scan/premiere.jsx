@@ -86,7 +86,8 @@ PenyToolkit.skills["offline-scan"] = function (params) {
     var op = comp(ti, "AE.ADBE Opacity"), o = prop(op, "Opacity"), bm = prop(op, "Blend Mode");
     if (varies(o)) return "opacity keyframed";
     if (num(o, 100) < 99.99) return "opacity " + num(o, 100);
-    if (bm && num(bm, 0) !== 0) return "blend mode " + num(bm, 0);
+    // Normal reads 18 on Premiere 27.0.0 (an untouched clip, QA 27 Nov 2026); any other is unsure.
+    if (bm && num(bm, 18) !== 18) return "blend mode " + num(bm, 18);
     var sz = frameSize(pi);
     if (!sz) return "frame size unknown";
     var b = screenBox(ti, sz);
