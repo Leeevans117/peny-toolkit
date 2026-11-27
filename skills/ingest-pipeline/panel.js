@@ -43,14 +43,17 @@ module.exports = function (api) {
       return api.skillAction("proxy-automation", "render", { mediaPaths: out.scope.mediaPaths, bootPrefixes: out.scope.bootPrefixes, dest: dest });
     }).then(function (ren) {
       out.render = { ok: ren.ok, summary: ren.ok ? ren.summary : ren.error, jobs: (ren.details && ren.details.jobs) || [],
-        skipped: (ren.details && ren.details.skipped) || [] };
+        skipped: (ren.details && ren.details.skipped) || [],
+        audioDiffers: (ren.details && ren.details.audioDiffers) || [], unchecked: (ren.details && ren.details.unchecked) || [] };
       if (!ren.ok) throw { stop: "Proxy render did not finish cleanly: " + (ren.error || ren.summary) };
       step(3, "attaching proxies");
       return api.skillAction("proxy-automation", "attach", { mediaPaths: out.scope.mediaPaths, bootPrefixes: out.scope.bootPrefixes, dest: dest });
     }).then(function (att) {
       var d = att.details || {};
       out.attach = { ok: att.ok, summary: att.ok ? att.summary : att.error, attached: (d.attached || []).map(function (a) { return a.name; }),
-        failed: d.failed || [], noProxyFile: d.noProxyFile || [] };
+        failed: d.failed || [], noProxyFile: d.noProxyFile || [], incomplete: d.incomplete || [], broken: d.broken || [],
+        // proxies whose audio is not the source's, or could not be compared: never attached
+        audioDiffers: d.audioDiffers || [], unchecked: d.unchecked || [] };
       var summary = "1) " + out.import.summary + "\n2) " + out.render.summary + "\n3) " + out.attach.summary;
       api.status("Done.");
       return { ok: att.ok, summary: summary, error: summary, project: out.import.project, details: out };

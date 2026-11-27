@@ -36,6 +36,7 @@
 
 var childProcess = require("child_process");
 var fs = require("fs");
+var path = require("path");
 
 var DEFAULTS = {
   maxConcurrent: 4,
@@ -82,29 +83,297 @@ function isCompleteMov(p) {
   }
 }
 
+// ---- One probe per file -------------------------------------------------------------
+// probeMedia(ffprobe, file): ONE ffprobe call (header read, no decoding) that gives
+//   { ok: true, frames, duration, audio }   frames/duration null when the container has none
+//   { ok: false, error }                    file missing, ffprobe missing/failed/timed out
+// audio = the file's audio signature: [[channels, sampleRate], ...], one entry per audio
+// stream in file order. Kept by path + size + mtime, in memory and in
+// ~/.peny-toolkit/probe-cache.json, so a file is only probed again when it changes (a
+// whole-project attach used to run two ffprobe calls per file on every click: 633 clips
+// took 21 minutes, 14 Nov 2026). Failures are never cached.
+// PENY_TOOLKIT_PROBE_CACHE: another file, for tests.
+var PROBE_CACHE_FILE = process.env.PENY_TOOLKIT_PROBE_CACHE || path.join(require("os").homedir(), ".peny-toolkit", "probe-cache.json");
+var probeCache = null, probeDirty = false, probeTimer = null;
+// Files the read-ahead (warmProbes) just tried and could not read: asked again in the same
+// run they fail at once instead of being read a second time with the panel frozen. In
+// memory only, cleared by every read-ahead.
+var warmFailed = {};
+var PROBE_CACHE_VERSION = 2;   // 2: frames from stream duration (MXF), R3D frame count
+// An entry from the file is only used if it has the shape this code writes (a damaged or
+// hand-edited cache file must not break a plan or an attach).
+function validEntry(key, e) {
+  if (!e || typeof e !== "object") return false;
+  if (key.charAt(0) === "r") return typeof e.channels === "number" && (e.frames === null || typeof e.frames === "number");
+  return e.ok === true && Array.isArray(e.audio) && e.audio.every(function (a) { return Array.isArray(a) && typeof a[0] === "number" && typeof a[1] === "number"; }) &&
+    (e.frames === null || typeof e.frames === "number") && (e.duration === null || typeof e.duration === "number");
+}
+// Entries of files that are gone or have changed are dropped when the cache is loaded, so
+// the file does not grow for ever. Only done for up to PRUNE_MAX entries (one stat each).
+var PRUNE_MAX = 20000;
+function loadProbeCache() {
+  if (probeCache) return probeCache;
+  probeCache = {};
+  try {
+    var j = JSON.parse(fs.readFileSync(PROBE_CACHE_FILE, "utf-8"));
+    if (j && j.v === PROBE_CACHE_VERSION && j.entries && typeof j.entries === "object") {
+      var keys = Object.keys(j.entries);
+      if (keys.length > PRUNE_MAX) probeDirty = true;   // too many to check: start again
+      else keys.forEach(function (k) { if (validEntry(k, j.entries[k])) probeCache[k] = j.entries[k]; else probeDirty = true; });
+    }
+  } catch (e) {}
+  return probeCache;
+}
+function saveProbeCache() {
+  if (!probeDirty) return;
+  probeDirty = false;
+  try {
+    fs.mkdirSync(path.dirname(PROBE_CACHE_FILE), { recursive: true });
+    var tmp = PROBE_CACHE_FILE + "." + process.pid + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify({ v: PROBE_CACHE_VERSION, entries: probeCache }));
+    fs.renameSync(tmp, PROBE_CACHE_FILE);
+  } catch (e) {}
+}
+function probeTouched() {
+  probeDirty = true;
+  if (probeTimer) return;
+  probeTimer = setTimeout(function () { probeTimer = null; saveProbeCache(); }, 2000);
+  if (probeTimer.unref) probeTimer.unref();
+}
+function cacheKey(kind, file) {
+  try { var st = fs.statSync(file); return kind + "|" + file + "|" + st.size + "|" + Math.round(st.mtimeMs); } catch (e) { return null; }
+}
+function probeMedia(ffprobe, file) {
+  if (!file) return { ok: false, error: "no file" };
+  var key = cacheKey("p", file);
+  if (!key) return { ok: false, error: "file not found" };
+  var cache = loadProbeCache();
+  if (cache[key]) return cache[key];
+  if (!ffprobe || !fs.existsSync(ffprobe)) return { ok: false, error: "ffprobe not found" };
+  if (warmFailed[key]) return { ok: false, error: "ffprobe could not read the file" };
+  var out;
+  try {
+    out = childProcess.execFileSync(ffprobe, probeArgs(file),
+      { encoding: "utf-8", timeout: 30000, maxBuffer: 8 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
+  } catch (e) { return { ok: false, error: "ffprobe could not read the file" }; }
+  var r = parseProbe(out);
+  if (r.ok) { cache[key] = r; probeTouched(); }
+  return r;
+}
+function probeArgs(file) {
+  return ["-v", "error", "-show_entries", "stream=codec_type,nb_frames,duration,r_frame_rate,channels,sample_rate:format=duration", "-of", "json", file];
+}
+function parseProbe(out) {
+  var j;
+  try { j = JSON.parse(out); } catch (e) { return { ok: false, error: "ffprobe could not read the file" }; }
+  var streams = (j && j.streams) || [], frames = null, audio = [], seenVideo = false, bad = false;
+  streams.forEach(function (s) {
+    if (s.codec_type === "video" && !seenVideo) {
+      seenVideo = true;
+      var n = parseInt(s.nb_frames, 10);
+      if (isFinite(n) && n > 0) frames = n;
+      else {
+        // MXF records no nb_frames; its video stream's duration is a whole number of
+        // frames at a constant rate (Canon, Sony FX6, Z200: measured 15 Nov 2026).
+        var fr = /^(\d+)\/(\d+)$/.exec(String(s.r_frame_rate || "")), sd = parseFloat(s.duration);
+        if (fr && +fr[1] > 0 && +fr[2] > 0 && isFinite(sd) && sd > 0) {
+          var f = sd * (+fr[1]) / (+fr[2]);
+          if (Math.abs(f - Math.round(f)) < 0.01) frames = Math.round(f);
+        }
+      }
+    } else if (s.codec_type === "audio") {
+      var ch = parseInt(s.channels, 10), rate = parseInt(s.sample_rate, 10);
+      if (!isFinite(ch) || ch < 1 || !isFinite(rate) || rate < 1) bad = true;
+      audio.push([ch, rate]);
+    }
+  });
+  if (!streams.length) return { ok: false, error: "ffprobe found no streams" };
+  if (bad) return { ok: false, error: "ffprobe could not read an audio stream's channels or sample rate" };
+  var d = j.format ? parseFloat(j.format.duration) : NaN;
+  return { ok: true, frames: frames, duration: isFinite(d) ? d : null, audio: audio };
+}
+
+// An R3D's camera audio channels and frame count (ffprobe cannot read R3D): REDline
+// --printMeta 1 prints "Camera Audio Channels:<tab>N" and "Total Frames:<tab>N". REDline
+// exits with code 1 even when it worked, so only the fields count.
+// { channels, frames (null if not printed) }, or null when REDline is missing or did not
+// print the audio field.
+function redMeta(redline, file) {
+  var key = cacheKey("r", file);
+  if (!key) return null;
+  var cache = loadProbeCache();
+  if (cache[key]) return cache[key];
+  if (!redline || !fs.existsSync(redline) || warmFailed[key]) return null;
+  var res = childProcess.spawnSync(redline, ["--i", file, "--printMeta", "1"],
+    { encoding: "utf-8", timeout: 60000, maxBuffer: 8 * 1024 * 1024 });
+  var m = parseRedMeta(res.stdout);
+  if (!m) return null;
+  cache[key] = m;
+  probeTouched();
+  return m;
+}
+function redAudioChannels(redline, file) { var m = redMeta(redline, file); return m ? m.channels : null; }
+function parseRedMeta(out) {
+  var c = /^Camera Audio Channels:\s*(\d+)\s*$/m.exec(String(out || ""));
+  if (!c) return null;
+  var f = /^Total Frames:\s*(\d+)\s*$/m.exec(String(out || ""));
+  return { channels: parseInt(c[1], 10), frames: f && parseInt(f[1], 10) > 0 ? parseInt(f[1], 10) : null };
+}
+
+// Reads many files ahead of time, a few at once, so the checks that follow find them in
+// the cache: probing one file after the other took 0.25 s per file and about 0.8 s per
+// R3D, with the panel frozen meanwhile (Loudenvielle, 1,266 files: over 5 minutes).
+// o = { ffprobe, redline, files, concurrency (6), onProgress(done, total) }. R3D files go
+// to REDline, the rest to ffprobe. Files already known are skipped; a file that cannot be
+// read is left out (the check that follows reports it). o.cancelled(): when it returns
+// true no further file is started. Resolves with the number read; never rejects.
+function warmProbes(o) {
+  var cache = loadProbeCache(), seen = {}, todo = [];
+  warmFailed = {};
+  (o.files || []).forEach(function (f) {
+    if (!f || seen[f]) return;
+    seen[f] = 1;
+    var red = /\.r3d$/i.test(f), key = cacheKey(red ? "r" : "p", f);
+    if (!key || cache[key]) return;
+    if (red ? !(o.redline && fs.existsSync(o.redline)) : !(o.ffprobe && fs.existsSync(o.ffprobe))) return;
+    todo.push({ file: f, red: red, key: key });
+  });
+  var total = todo.length, done = 0, read = 0, next = 0;
+  return new Promise(function (resolve) {
+    if (!total) return resolve(0);
+    var running = 0, finished = false;
+    function finish() { if (!finished) { finished = true; probeTouched(); resolve(read); } }
+    function settle(t, err, stdout) {
+      try {
+        // REDline exits with code 1 even when it worked: only what it printed counts.
+        var r = t.red ? parseRedMeta(stdout) : (err ? null : parseProbe(stdout));
+        if (r && (t.red || r.ok)) { cache[t.key] = r; read++; } else warmFailed[t.key] = 1;
+      } catch (e) { warmFailed[t.key] = 1; }
+      done++; running--;
+      if (o.onProgress) { try { o.onProgress(done, total); } catch (e) {} }
+      one();
+    }
+    function one() {
+      var stop = false;
+      try { stop = !!(o.cancelled && o.cancelled()); } catch (e) {}
+      if (stop || next >= total) { if (!running) finish(); return; }
+      var t = todo[next++];
+      running++;
+      try {
+        childProcess.execFile(t.red ? o.redline : o.ffprobe, t.red ? ["--i", t.file, "--printMeta", "1"] : probeArgs(t.file),
+          { encoding: "utf-8", timeout: t.red ? 60000 : 30000, maxBuffer: 8 * 1024 * 1024 },
+          function (err, stdout) { settle(t, err, stdout); });
+      } catch (e) { settle(t, e, ""); }
+    }
+    for (var i = 0; i < Math.min(o.concurrency || 6, total); i++) one();
+  });
+}
+
+// "4 audio tracks (1ch x4 48000)", "2 audio tracks (2ch+1ch 48000)", "no audio".
+function describeAudio(sig) {
+  if (!sig.length) return "no audio";
+  var rates = [], parts = [], i = 0;
+  sig.forEach(function (s) { if (rates.indexOf(s[1]) === -1) rates.push(s[1]); });
+  var same = sig.every(function (s) { return s[0] === sig[0][0]; });
+  if (same && sig.length > 1) parts.push(sig[0][0] + "ch x" + sig.length);
+  else for (; i < sig.length; i++) parts.push(sig[i][0] + "ch");
+  var body = same && sig.length > 1 ? parts[0] : parts.join("+");
+  return sig.length + " audio track" + (sig.length === 1 ? "" : "s") + " (" + body + " " +
+    (rates.length === 1 ? rates[0] : sig.map(function (s) { return s[1]; }).join("/")) + ")";
+}
+
+// Is the proxy's audio the source's audio? (Lee, 14 Nov 2026: a proxy whose audio differs
+// from the high-res file must never be attached - Premiere then refuses or mis-maps it on
+// re-link.) o = { ffprobe, redline, mediaPath, proxyPath, fresh }
+//   non-RED: the proxy's signature must equal the source's exactly (number of audio
+//            streams, channels of each, sample rate of each, in order).
+//   R3D:     the proxy must have one mono stream per "Camera Audio Channel" of the R3D,
+//            as red-proxy-finish.sh writes. Older RED proxies (before 19 Oct 2026) have
+//            one multichannel stream with the channels rotated by one (see
+//            red-proxy-finish.sh): refused, see ACCEPT_OLD_RED_PROXIES.
+// Returns { state: "ok" } | { state: "differs", reason } | { state: "unchecked", reason }.
+// "unchecked" = the source or the proxy could not be read: never treated as ok.
+//
+// ACCEPT_OLD_RED_PROXIES: the one switch for the older RED proxies (one multichannel
+// stream, right channel count, channels in the wrong order). false = refused and reported
+// as "old RED proxy, channels in the wrong order, re-render needed", never attached.
+// true = accepted when found on disk (a render that just finished must still be mono
+// streams). PENY_TOOLKIT_ACCEPT_OLD_RED_PROXIES=1 or =0 overrides it, for tests.
+var ACCEPT_OLD_RED_PROXIES = false;
+function acceptOldRed() {
+  var e = process.env.PENY_TOOLKIT_ACCEPT_OLD_RED_PROXIES;
+  return e === "1" ? true : e === "0" ? false : ACCEPT_OLD_RED_PROXIES;
+}
+function audioCheck(o) {
+  var px = probeMedia(o.ffprobe, o.proxyPath);
+  if (!px.ok) return { state: "unchecked", reason: "audio could not be checked: proxy unreadable (" + px.error + ")" };
+  if (!o.mediaPath) return { state: "unchecked", reason: "audio could not be checked: no source file" };
+  if (/\.r3d$/i.test(o.mediaPath)) {
+    var n = redAudioChannels(o.redline, o.mediaPath);
+    if (n === null) return { state: "unchecked", reason: "audio could not be checked: REDline could not read the R3D's audio channels" };
+    var total = 0;
+    px.audio.forEach(function (s) { total += s[0]; });
+    if (total !== n) return { state: "differs", reason: "audio check failed: proxy has " + total + " audio channel" + (total === 1 ? "" : "s") +
+      " [" + describeAudio(px.audio) + "], the R3D " + n };
+    if (px.audio.length !== n || px.audio.some(function (s) { return s[0] !== 1; })) {
+      var old = px.audio.length === 1;   // the layout REDline writes and the Toolkit used to keep
+      if (old && !o.fresh && acceptOldRed()) return { state: "ok", oldRed: true };
+      return { state: "differs", oldRed: old, reason: old && !o.fresh
+        ? "old RED proxy, channels in the wrong order, re-render needed (one " + n + "-channel track instead of " + n + " mono tracks)"
+        : "audio check failed: proxy has " + describeAudio(px.audio) + ", expected " + n + " mono tracks for the R3D's " + n + " channels" };
+    }
+    return { state: "ok" };
+  }
+  var src = probeMedia(o.ffprobe, o.mediaPath);
+  if (!src.ok) return { state: "unchecked", reason: "audio could not be checked: source unreadable (" + src.error + ")" };
+  var same = src.audio.length === px.audio.length && src.audio.every(function (s, i) { return s[0] === px.audio[i][0] && s[1] === px.audio[i][1]; });
+  if (!same) return { state: "differs", reason: "audio check failed: proxy has " + describeAudio(px.audio) + ", the source " + describeAudio(src.audio) };
+  return { state: "ok" };
+}
+
 // A finished .mov can still be wrong: the Orbea Canonball proxies (issue 1) had a whole
 // moov atom and every channel, but 9 fewer frames than their sources, and played with a
 // dropped frame in Premiere. A proxy whose video frame count differs from the source must
-// not be attached (these files go to remote editors). Compares the nb_frames each
-// container recorded (header read only, no decoding, ~instant).
-// null = cannot be checked (no ffprobe, or nb_frames missing, e.g. R3D/MXF);
-// string = a reason the output must not be used.
-function frameCountMismatch(job) {
-  if (!job.ffprobe || !job.mediaPath) return null;
-  function frames(p) {
-    try {
-      var out = childProcess.execFileSync(job.ffprobe,
-        ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=nb_frames", "-of", "csv=p=0", p],
-        { encoding: "utf-8", timeout: 30000 });
-      var n = parseInt(String(out).split("\n")[0], 10);
-      return isFinite(n) && n > 0 ? n : null;
-    } catch (e) { return null; }
+// not be attached (these files go to remote editors).
+// o = { ffprobe, redline, mediaPath, proxyPath }. The source's count is nb_frames, or for
+// MXF the video stream's length in frames (probeMedia), or for R3D REDline's "Total
+// Frames". Header reads only, no decoding.
+// { state: "ok" } | { state: "differs", proxy, source, reason } | { state: "unchecked", reason }.
+// "unchecked" = a count could not be read: never treated as ok (before 15 Nov 2026 R3D
+// and MXF sources were not checked at all, so a short proxy of one passed).
+function lengthCheck(o) {
+  var px = probeMedia(o.ffprobe, o.proxyPath);
+  if (!px.ok) return { state: "unchecked", reason: "length could not be checked: proxy unreadable (" + px.error + ")" };
+  if (px.frames == null) return { state: "unchecked", reason: "length could not be checked: the proxy has no video frame count" };
+  if (!o.mediaPath) return { state: "unchecked", reason: "length could not be checked: no source file" };
+  var b;
+  if (/\.r3d$/i.test(o.mediaPath)) {
+    var m = redMeta(o.redline, o.mediaPath);
+    if (!m || m.frames == null) return { state: "unchecked", reason: "length could not be checked: REDline could not read the R3D's frame count" };
+    b = m.frames;
+  } else {
+    var src = probeMedia(o.ffprobe, o.mediaPath);
+    if (!src.ok) return { state: "unchecked", reason: "length could not be checked: source unreadable (" + src.error + ")" };
+    if (src.frames == null) return { state: "unchecked", reason: "length could not be checked: the source has no readable video frame count" };
+    b = src.frames;
   }
-  var a = frames(job.outputPath), b = frames(job.mediaPath);
-  if (a === null || b === null) return null;
-  if (a === b) return null;
-  return "frame check failed: the proxy has " + a + " video frames, the source " + b +
-    " - the render lost or duplicated frames and this proxy is broken; delete the file and re-render";
+  if (px.frames === b) return { state: "ok" };
+  return { state: "differs", proxy: px.frames, source: b, reason: "frame check failed: the proxy has " + px.frames + " video frames, the source " + b +
+    " - the render lost or duplicated frames and this proxy is broken; delete the file and re-render" };
+}
+// After a render, as a failure reason (or null). Only for jobs that name their source
+// (mediaPath); a proxy whose length cannot be checked is a failed job too.
+function frameCountMismatch(job) {
+  if (!job.mediaPath) return null;
+  var r = lengthCheck({ ffprobe: job.ffprobe, redline: job.redline, mediaPath: job.mediaPath, proxyPath: job.outputPath });
+  return r.state === "ok" ? null : r.reason;
+}
+// After a render: the audio check above, as a failure reason (or null). Only for jobs that
+// name their source (mediaPath); a proxy that cannot be checked is a failed job too.
+function audioMismatch(job) {
+  if (!job.mediaPath) return null;
+  var r = audioCheck({ ffprobe: job.ffprobe, redline: job.redline, mediaPath: job.mediaPath, proxyPath: job.outputPath, fresh: true });
+  return r.state === "ok" ? null : r.reason + (r.state === "differs" ? " - this proxy must not be used; the file is left in place, delete it by hand and re-render" : "");
 }
 
 /* new JobPool({ maxConcurrent, log, onChange })
@@ -434,7 +703,7 @@ JobPool.prototype._launch = function (job) {
       job.state = "failed";
       job.reason = "process exited cleanly but the output has no moov atom (incomplete)";
     } else if (job.outputPath) {
-      var mismatch = frameCountMismatch(job);
+      var mismatch = frameCountMismatch(job) || audioMismatch(job);
       if (mismatch) { job.state = "failed"; job.reason = mismatch; }
       else job.state = "ok";
     } else {
@@ -517,4 +786,6 @@ JobPool.prototype._maybeFinish = function () {
   waiters.forEach(function (w) { w(s); });
 };
 
-module.exports = { JobPool: JobPool, isCompleteMov: isCompleteMov, fileSize: fileSize, parseProgress: parseProgress };
+module.exports = { JobPool: JobPool, isCompleteMov: isCompleteMov, fileSize: fileSize, parseProgress: parseProgress,
+  probeMedia: probeMedia, warmProbes: warmProbes, redAudioChannels: redAudioChannels, redMeta: redMeta, audioCheck: audioCheck, lengthCheck: lengthCheck, describeAudio: describeAudio,
+  saveProbeCache: saveProbeCache, PROBE_CACHE_FILE: PROBE_CACHE_FILE };
