@@ -291,6 +291,49 @@
     return bad;
   }
 
+  // Audio channel groups of an item (AudioChannelMapping.audioClipsNumber), or null.
+  function audioGroups(item) {
+    try { var m = item.getAudioChannelMapping(); var n = Number(m.audioClipsNumber); if (isFinite(n) && n >= 0) return n; } catch (e) {}
+    return null;
+  }
+  // How many audio channel groups Premiere gives the camera file. Premiere decides this from
+  // the file and its own audio preferences (a 4-mono FX6 MXF came in as 2 stereo groups on the
+  // Mac Studio while its 4-mono proxy had 4, 27 Nov 2026), so it is read from Premiere, never
+  // worked out: from an item already using that file, else by importing the file once into the
+  // root bin "Connect Full Res check" (left there; nothing is ever deleted).
+  function itemUsingFile(file) {
+    var want = new File(file).fsName, st = [T.proj().rootItem];
+    while (st.length) {
+      var b = st.pop();
+      for (var c = 0; c < b.children.numItems; c++) {
+        var ch = b.children[c];
+        if (ch.type == ProjectItemType.BIN) { st.push(ch); continue; }
+        var mp = ""; try { mp = String(ch.getMediaPath() || ""); } catch (e) {}
+        if (mp && new File(mp).fsName === want) return ch;
+      }
+    }
+    return null;
+  }
+  function checkBin() {
+    var root = T.proj().rootItem;
+    for (var c = 0; c < root.children.numItems; c++) if (root.children[c].type == ProjectItemType.BIN && root.children[c].name === "Connect Full Res check") return root.children[c];
+    try { root.createBin("Connect Full Res check"); } catch (e) {}
+    for (var d = 0; d < root.children.numItems; d++) if (root.children[d].type == ProjectItemType.BIN && root.children[d].name === "Connect Full Res check") return root.children[d];
+    return null;
+  }
+  function cameraGroups(file) {
+    var it = itemUsingFile(file);
+    if (!it) {
+      var bin = checkBin();
+      if (!bin) return { error: "could not make the bin \"Connect Full Res check\"" };
+      try { T.proj().importFiles([file], true, bin, false); } catch (e) { return { error: "import for the audio check failed: " + e }; }
+      it = itemUsingFile(file);
+      if (!it) return { error: "import for the audio check did not show up in the project" };
+    }
+    var n = audioGroups(it);
+    return n === null ? { error: "could not read the camera file's audio channels" } : { groups: n };
+  }
+
   function relink(params) {
     var pairs = params.pairs || [], ok = [], failed = [];
     for (var i = 0; i < pairs.length; i++) {
@@ -315,6 +358,15 @@
           uses.push({ where: us[u].where, ti: us[u].ti, sc: snap(prop(mo, "Scale")), sw: snap(prop(mo, "Scale Width")),
             uniform: uni ? !!uni.getValue() : true });
         }
+      }
+      // Audio: Premiere asks "Fewer Audio Channels ... Track items using the missing channels will
+      // be deleted" when the new file has fewer channel groups than the clip, and the script waits on
+      // that box (QA 27 Nov 2026). Such clips are left on their proxy and reported instead.
+      if (p.rescale) {
+        var g0 = audioGroups(it), cg = cameraGroups(p.path);
+        if (g0 === null || cg.error) { failed.push({ nodeId: p.nodeId, name: nm, was: was, path: p.path, reason: "left on the proxy: audio check not possible (" + (cg.error || "could not read the clip's audio channels") + ")" }); continue; }
+        if (cg.groups < g0) { failed.push({ nodeId: p.nodeId, name: nm, was: was, path: p.path, audio: { clip: g0, camera: cg.groups },
+          reason: "left on the proxy: the proxy has " + g0 + " audio channel groups, the camera file " + cg.groups + " in Premiere, so swapping would delete audio pieces" }); continue; }
       }
       var same = false, now = "", off = true, ret = null;
       if (was && new File(was).fsName === new File(p.path).fsName && !it.isOffline()) same = true; // already there
