@@ -21,6 +21,9 @@
 set -u
 ffmpeg="$1"; in="$2"; out="$3"
 ffprobe="$(dirname "$ffmpeg")/ffprobe"
+# ffmpeg 6.1 exits 0 when -n refuses to overwrite, which made this delete the render and
+# report success (QA 20 Nov 2026), so an existing proxy is checked here first.
+if [ -e "$out" ]; then echo "red-proxy-finish: $out already exists; left it alone and kept $in" >&2; exit 1; fi
 expand="format=yuv422p10le,lutyuv=y='clip((val-64)*1023/876,0,1023)':u='clip((val-512)*1023/896+512,0,1023)':v='clip((val-512)*1023/896+512,0,1023)'"
 video=(-c:v prores_ks -profile:v 2 -vendor apl0)
 info="$("$ffprobe" -v error -select_streams a:0 -show_entries stream=channels,channel_layout -of csv=p=0 "$in" | head -1)"

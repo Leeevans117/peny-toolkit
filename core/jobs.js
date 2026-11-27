@@ -108,7 +108,8 @@ function frameCountMismatch(job) {
 }
 
 /* new JobPool({ maxConcurrent, log, onChange })
- * pool.add({ key, cmd, outputPath, label })   key must be unique (outputPath is fine)
+ * pool.add({ key, cmd, outputPath, label, finalPath? })   key must be unique (outputPath is fine);
+ *   with finalPath, outputPath is a temporary name, renamed to finalPath once complete and checked
  * pool.start() / pause() / resume() / cancel()
  * pool.wait() -> Promise resolving with pool.summary() when nothing is left to run */
 function JobPool(opts) {
@@ -130,7 +131,11 @@ function JobPool(opts) {
   this.eta = null; // { finishAt, firstAt, firstSec } once estimated
 }
 
+// Keys must be unique: running jobs are kept by key, so a second job with the same key
+// would overwrite the first and one of them would be lost from the summary (QA 20 Nov 2026).
 JobPool.prototype.add = function (job) {
+  var key = job.key, clash = this.running[key] || this.queue.concat(this.done).some(function (j) { return j.key === key; });
+  if (clash) throw new Error("Two jobs have the same key (" + key + "); each job needs its own key, e.g. its output path.");
   job.state = "queued";
   this.queue.push(job);
 };
@@ -396,9 +401,13 @@ JobPool.prototype.wait = function () {
 // opts.limits(): { total, perKind: { r3d: n } }, read each time a job could start (the
 // Full / Half speed switch can change mid-run); without it, maxConcurrent of any kind.
 JobPool.prototype._fill = function () {
-  var lim = this.opts.limits ? this.opts.limits() : { total: this.opts.maxConcurrent }, self = this;
+  var lim = (this.opts.limits && this.opts.limits()) || { total: this.opts.maxConcurrent }, self = this;
+  // A limit below 1 (or missing) would leave the queue waiting for ever, so at least 1 runs
+  // (QA 20 Nov 2026).
+  lim = { total: Math.max(1, Math.floor(lim.total) || 1), perKind: lim.perKind || {} };
   this.opts.maxConcurrent = lim.total; // ETA plays the rest forward with this many at once
-  var per = lim.perKind || {};
+  var per = {};
+  Object.keys(lim.perKind).forEach(function (k) { per[k] = Math.max(1, Math.floor(lim.perKind[k]) || 1); });
   function runningOf(kind) { return Object.keys(self.running).filter(function (k) { return (self.running[k].kind || "job") === kind; }).length; }
   for (var i = 0; !this.paused && !this.cancelled && i < this.queue.length && this.runningCount() < lim.total; ) {
     var kind = this.queue[i].kind || "job";
@@ -436,6 +445,15 @@ JobPool.prototype._launch = function (job) {
     } else if (job.outputPath) {
       var mismatch = frameCountMismatch(job);
       if (mismatch) { job.state = "failed"; job.reason = mismatch; }
+      else if (job.finalPath) {
+        // Rendered under a temporary name; it gets its real name only now it is checked
+        // (Lee, 23 Nov 2026), and never over a file that already has that name.
+        if (fs.existsSync(job.finalPath)) { job.state = "failed"; job.reason = job.finalPath + " already exists; the finished render was kept as " + job.outputPath; }
+        else {
+          try { fs.renameSync(job.outputPath, job.finalPath); job.outputPath = job.finalPath; job.state = "ok"; }
+          catch (eR) { job.state = "failed"; job.reason = "could not rename " + job.outputPath + " to " + job.finalPath + ": " + eR.message; }
+        }
+      }
       else job.state = "ok";
     } else {
       job.state = "ok";

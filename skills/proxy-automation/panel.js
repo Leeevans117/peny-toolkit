@@ -25,6 +25,8 @@ var path = require("path");
 function BUNDLED(name) { return path.join(process.env.HOME || "", "Library", "Application Support", "PenyToolkit", "bin", name); }
 
 var PROXY_INFIX = "_Proxy";
+// "<name>_Proxy-rendering.mov" while rendering; never matches the "<name>_Proxy." lookups.
+var TMP_SUFFIX = "-rendering";
 var LOOKUP_LEVELS_UP = 4;
 var ATTACH_PIECE = 10; // proxies per Premiere call (842 in one call froze Premiere for over a minute)
 var SCALE_W = 1280, SCALE_H = 720;
@@ -86,24 +88,26 @@ module.exports = function (api) {
       if (!redline || !ffmpeg) return null;
       var dir = path.dirname(entry.outputPath), part = entry.nameNoExt + ".redline-part";
       var partFile = path.join(dir, part + ".mov");
-      return "rm -f " + q(partFile) + " && " +
+      return "rm -f " + q(partFile) + " " + q(entry.tmpPath) + " && " +
         q(redline) + " --i " + q(entry.mediaPath) + " --o " + q(part) +
         " --outDir " + q(dir) + " --format 201 --res 4 --resizeX " + SCALE_W +
         " --resizeY " + SCALE_H + " --fit 3 --useMeta --metaIgnoreFrameGuide" +
         " && /bin/bash " + q(path.join(__dirname, "red-proxy-finish.sh")) + " " + q(ffmpeg) + " " +
-        q(partFile) + " " + q(entry.outputPath);
+        q(partFile) + " " + q(entry.tmpPath);
     }
     if (!ffmpeg) return null;
-    // -n: never overwrite (the original used -y).
+    // Writes the temporary name (entry.tmpPath, this clip's own half-written file from an
+    // earlier cancelled run may be replaced: -y); the pool renames it to the real proxy name
+    // only once it is complete and checked, never over an existing file (Lee, 23 Nov 2026).
     // No -hwaccel videotoolbox: the videotoolbox h264 decoder drops the first ~9 frames of
     // Sony FX30 clips (issue 1, Orbea Canonball: C4472.MP4 = 588 frames, proxy = 579,
     // "hardware accelerator failed to decode picture", every such proxy stuttered with a
     // dropped frame in Premiere and mis-matched the source when full-res was re-linked).
     // Tested 9 Nov 2026: software decode + prores_videotoolbox is frame-exact (588 = 588),
     // so the ProRes encoder stays hardware.
-    return q(ffmpeg) + " -n -i " + q(entry.mediaPath) +
+    return q(ffmpeg) + " -y -i " + q(entry.mediaPath) +
       ' -map 0:v:0 -map "0:a?" -vf scale=' + SCALE_W + ":" + SCALE_H +
-      " -c:v prores_videotoolbox -profile:v 0 -pix_fmt yuv422p10le -c:a pcm_s24le " + q(entry.outputPath);
+      " -c:v prores_videotoolbox -profile:v 0 -pix_fmt yuv422p10le -c:a pcm_s24le " + q(entry.tmpPath);
   }
 
   // Whole-tree index of existing proxy files under root: lower-case base name -> [{file, dir}].
@@ -235,10 +239,10 @@ module.exports = function (api) {
       var nameNoExt = stripExt(it.name);
       var found = resolveProxy(root, it.binPath, nameNoExt, index, it.mediaPath);
       if (found) {
-        if (!jobs.isCompleteMov(found)) { rec.reason = "incomplete proxy on disk, left alone (delete it by hand to re-render): " + found; p.skipped.push(rec); }
+        if (!jobs.isCompleteMov(found)) { rec.stuckFile = found; rec.reason = "incomplete proxy on disk, left alone (delete it by hand to re-render): " + found; p.skipped.push(rec); }
         else {
           var bad = brokenFrames(found, it.mediaPath);
-          if (bad) { rec.reason = "broken proxy on disk: " + found + " has " + bad.proxy +
+          if (bad) { rec.stuckFile = found; rec.reason = "broken proxy on disk: " + found + " has " + bad.proxy +
             " video frames, the source " + bad.source + " (frames lost in an earlier render) - delete it by hand to re-render"; p.skipped.push(rec); }
           else { rec.reason = "proxy on disk: " + found; p.done.push(rec); }
         }
@@ -296,7 +300,13 @@ module.exports = function (api) {
       if (!p.render.length) {
         api.progress({ event: "none", total: 0, finished: 0, ok: 0, failed: 0, running: 0, queued: 0, fraction: 1, percent: 100,
           already: p.done.length });
-        return { ok: true, summary: "Nothing to render.", details: { done: brief(p.done), shared: brief(p.shared), skipped: brief(p.skipped, 500) } };
+        // Half-written or frame-short proxies are left alone (never deleted), so say which.
+        var stuck = p.skipped.filter(function (r) { return r.stuckFile; });
+        var summary = !stuck.length ? "Nothing to render." :
+          "Nothing rendered: " + stuck.length + " clip" + (stuck.length === 1 ? " has" : "s have") + " a half-written or broken proxy on disk, so " +
+          (stuck.length === 1 ? "it was" : "they were") + " not rendered. Delete " + (stuck.length === 1 ? "it" : "them") + " by hand, then render again: " +
+          stuck.slice(0, 5).map(function (r) { return r.stuckFile; }).join(", ") + (stuck.length > 5 ? " and " + (stuck.length - 5) + " more (see the log)" : "") + ".";
+        return { ok: true, summary: summary, details: { done: brief(p.done), shared: brief(p.shared), skipped: brief(p.skipped, 500) } };
       }
 
       pool = new jobs.JobPool({
@@ -333,11 +343,13 @@ module.exports = function (api) {
       });
       p.render.forEach(function (r) {
         try { fs.mkdirSync(path.dirname(r.outputPath), { recursive: true }); } catch (e) {}
+        r.tmpPath = path.join(path.dirname(r.outputPath), r.nameNoExt + PROXY_INFIX + TMP_SUFFIX + ".mov");
+        if (fs.existsSync(r.tmpPath)) api.log("  restarting " + r.binPath + "/" + r.name + ": its half-written " + path.basename(r.tmpPath) + " from an earlier run is replaced");
         var cmd = encodeCommand(r);
         if (!cmd) { r.reason = "no " + (extOf(r.mediaPath) === "r3d" ? "REDline or ffmpeg" : "ffmpeg") + " found"; noCmd.push(r); return; }
         var isR3d = extOf(r.mediaPath) === "r3d";
         var ff = firstExisting(FFMPEG);
-        pool.add({ key: r.outputPath, cmd: cmd, outputPath: r.outputPath, label: r.binPath + "/" + r.name,
+        pool.add({ key: r.outputPath, cmd: cmd, outputPath: r.tmpPath, finalPath: r.outputPath, label: r.binPath + "/" + r.name,
           partPath: isR3d ? path.join(path.dirname(r.outputPath), r.nameNoExt + ".redline-part.mov") : null,
           weight: sourceBytes(r.mediaPath), kind: isR3d ? "r3d" : "ffmpeg",
           group: r.camera,
@@ -361,6 +373,9 @@ module.exports = function (api) {
         var summary = s.ok + " of " + s.total + " rendered and checked complete" +
           (s.failed + s.killed ? ", " + (s.failed + s.killed) + " failed or killed" : "") +
           (s.cancelled ? " (cancelled)" : "") + ". " + p.done.length + " already had proxies, " + p.skipped.length + " skipped.";
+        var left = p.render.filter(function (r) { return r.tmpPath && fs.existsSync(r.tmpPath); }).map(function (r) { return r.tmpPath; });
+        if (left.length) summary += " Unfinished renders kept under their temporary names (no proxy was made; the next render starts them again, or bin them): " +
+          left.slice(0, 5).join(", ") + (left.length > 5 ? " and " + (left.length - 5) + " more" : "") + ".";
         return { ok: s.failed + s.killed === 0 && !s.cancelled && !noCmd.length, summary: summary, error: summary, details: {
           scope: res.details.scope, jobs: s.jobs, done: brief(p.done), shared: brief(p.shared),
           skipped: brief(p.skipped, 500), noCommand: brief(noCmd), eta: etaCheck } };

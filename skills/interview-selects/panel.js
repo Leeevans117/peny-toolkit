@@ -47,6 +47,16 @@ function fmt(s) {
   return h + ":" + (m < 10 ? "0" : "") + m + ":" + (x < 10 ? "0" : "") + x;
 }
 
+// The line Interviews shows when Find answers ends (o = {copy, mark, cut?}).
+// A failed Premiere step can come back with only an error (or nothing): show what there is.
+function stepText(r) { return String((r && (r.summary || r.error)) || "no reason given").replace(/\.$/, ""); }
+function findSummary(o, times, dir) {
+  return (o.mark.ok ? "" : "Not all markers went on, so nothing was cut. ") + stepText(o.mark) +
+    (o.copy.details.made ? " (a new copy; the original is untouched)" : "") +
+    (o.cut ? ". Cut & raise: " + stepText(o.cut) : "") + ". Took " + fmt(times.total) +
+    " (audio " + times.audio + " s, transcript " + (times.transcribe - times.audio) + " s, answers " + (times.answers - times.transcribe) + " s). List: " + path.join(dir, "answers.csv");
+}
+
 module.exports = function (api) {
   var children = [], cancelled = false;
 
@@ -92,8 +102,9 @@ module.exports = function (api) {
     // Media Encoder renders it, so Premiere stays usable (6 Nov 2026).
     return api.evalSkill({ action: "queueaudio", sequenceId: scan.sequenceId, sequenceName: scan.sequence, path: raw, preset: path.join(api.skillDir, "wav-float.epr") }).then(function (q) {
       if (!q.ok) throw { stop: q.error };
-      return ame.wait(q.details.jobId, raw);
+      return ame.wait(q.details.jobId, raw, { cancelled: function () { return cancelled; } });
     }).then(function (r) {
+      if (r.cancelled) throw { stop: "Cancelled." };
       if (!r.ok) throw { stop: "Could not render the sequence's sound: " + r.error };
       if (!fs.existsSync(raw) || !fs.statSync(raw).size) throw { stop: "Premiere didn't write the sequence's sound (" + raw + ")." };
       return run(ffmpeg, ["-hide_banner", "-loglevel", "error", "-y", "-i", raw, "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", final]);
@@ -357,10 +368,7 @@ module.exports = function (api) {
     }).then(function (o) {
       lap("total");
       var d = o.mark.details || {}, cd = o.cut ? o.cut.details || {} : {};
-      var summary = (o.mark.ok ? "" : "Not all markers went on, so nothing was cut. ") + o.mark.summary.replace(/\.$/, "") + "" +
-        (o.copy.details.made ? " (a new copy; the original is untouched)" : "") +
-        (o.cut ? ". Cut & raise: " + (o.cut.summary || o.cut.error).replace(/\.$/, "") : "") + ". Took " + fmt(times.total) +
-        " (audio " + times.audio + " s, transcript " + (times.transcribe - times.audio) + " s, answers " + (times.answers - times.transcribe) + " s). List: " + path.join(dir, "answers.csv");
+      var summary = findSummary(o, times, dir);
       api.status(summary);
       return { ok: !!(o.mark.ok && o.cut && o.cut.ok), summary: summary, error: summary, details: {
         sequence: d.sequence, markers: d.checked, cut: cd, skipped: cd.skipped, unmatched: cd.unmatched, questions: questions.length, themes: themes.length, topics: d.topics, wrong: d.wrong, failed: d.failed, workFolder: dir, stats: stats, times: times } };
@@ -504,5 +512,5 @@ module.exports = function (api) {
     return api.evalSkill({ action: "trim" }).then(function (r) { api.status(r.ok ? r.summary : r.error); return r; });
   }
 
-  return { actions: { find: find, cutraise: cutraise, trim: trim, unum: unum, cancel: cancel }, busy: function () { return children.length ? children.length + " child process(es)" : null; } };
+  return { findSummary: findSummary, actions: { find: find, cutraise: cutraise, trim: trim, unum: unum, cancel: cancel }, busy: function () { return children.length ? children.length + " child process(es)" : null; } };
 };

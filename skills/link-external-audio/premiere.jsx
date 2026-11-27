@@ -55,7 +55,7 @@ PenyToolkit.skills["link-external-audio"] = function (params) {
     cams = rest;
   }
 
-  var linked = [], already = [], failed = [], skipped = [];
+  var linked = [], already = [], failed = [], skipped = [], linkBroken = null;
   T.deselectAll(seq);
 
   for (var i = 0; i < cams.length; i++) {
@@ -137,9 +137,29 @@ PenyToolkit.skills["link-external-audio"] = function (params) {
     } else {
       rec.reason = "after linkSelection, getLinkedItems shows " + after.length + " items (" + missing + " of the group missing)";
       failed.push(rec);
+      if (rec.unlinkedFirst) {
+        // Premiere 27.0.0 (20 Nov 2026): linkSelection() does nothing, and this clip was
+        // unlinked from its own sound first. Try to put that link back, then stop, so no
+        // other camera clip loses its link the same way.
+        for (k = 0; k < group.length; k++) if (have[group[k].nodeId]) group[k].item.setSelected(true, true);
+        seq.linkSelection();
+        var back = T.linkedNodeIds(cam), backOk = true;
+        for (id in have) if (have.hasOwnProperty(id) && id !== camId) { var f = false; for (var b = 0; b < back.length; b++) if (back[b] === id) f = true; if (!f) backOk = false; }
+        T.deselectAll(seq);
+        rec.restored = backOk;
+        linkBroken = rec;
+        break;
+      }
     }
   }
   T.deselectAll(seq);
+  if (linkBroken) {
+    return T.fail("Premiere's link did nothing on " + linkBroken.name + " (" + linkBroken.track + ", " + linkBroken.time + "), so Link stopped there and left every other clip as it was. " +
+      (linkBroken.restored ? linkBroken.name + "'s picture and sound are linked again." :
+        "On this copy " + linkBroken.name + "'s picture and camera sound are now unlinked: select them and use Clip > Link.") +
+      " Linking from scripts does not work in this Premiere version; link by hand for now.",
+      { sequence: String(seq.name), linked: linked, alreadyLinked: already, failed: failed, skipped: skipped, stoppedAt: linkBroken });
+  }
 
   var details = {
     sequence: String(seq.name),

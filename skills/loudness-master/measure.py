@@ -48,7 +48,8 @@ def measure(job):
     dur = None
     m = re.search(r"time=(\d+):(\d+):([\d.]+)", err)
     d = re.search(r"Duration:\s*(\d+):(\d+):([\d.]+)", err)
-    for mm in (m, d):
+    # The header's Duration first: the last time= is where the last frame starts (0.1 s short).
+    for mm in (d, m):
         if mm:
             dur = int(mm.group(1)) * 3600 + int(mm.group(2)) * 60 + float(mm.group(3))
             break

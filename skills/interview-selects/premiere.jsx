@@ -191,7 +191,7 @@
     }
     if (!created) return T.fail("Sequence.clone() did not create a new sequence (checked for 5 s).");
     var wanted = originalName + " " + suffix;
-    for (var n = 2; T.sequenceNameExists(wanted) && n < 100; n++) wanted = originalName + " " + suffix + " " + n;
+    for (var n = 2; T.sequenceNameExists(wanted) && n < 10000; n++) wanted = originalName + " " + suffix + " " + n;
     created.name = wanted;
     if (String(created.name) !== wanted && created.projectItem) created.projectItem.name = wanted;
     if (String(created.name) !== wanted) return T.fail("The copy was made as \"" + created.name + "\" but could not be named \"" + wanted + "\".");

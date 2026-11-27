@@ -132,7 +132,9 @@ function isSkippedFolderName(name) {
   const norm = String(name).trim().toLowerCase();
   const tokens = norm.split(/[\s_\-.]+/).filter(Boolean);
   return SKIP_FOLDER_NAME_TERMS.some((term) => {
-    if (term.indexOf(" ") !== -1) {
+    if (term.indexOf(" ") !== -1 || term.indexOf("-") !== -1) {
+      // ("auto-save" is split into "auto" + "save" by the tokenizer, so it is matched
+      // as a substring too: QA 20 Nov 2026.)
       // Multi-word terms (e.g. "media cache") match as a plain substring -
       // tokenizing both sides isn't worth the complexity for the handful
       // of these that exist.

@@ -1,0 +1,5 @@
+# Test suite and QA files are not part of the installed panel (git archive in tools/build-installer.sh).
+/tests export-ignore
+/QA_CHECKLIST.md export-ignore
+/QA_REPORT.md export-ignore
+/verify_fresh_install.sh export-ignore

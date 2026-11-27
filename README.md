@@ -123,6 +123,45 @@ Write `/tmp/peny-toolkit/inbox/run.json`:
 `"folder"` in params since the folder window only opens for button presses). The panel runs it through the same
 code as the button and writes `/tmp/peny-toolkit/result.json` and `result-<id>.json`.
 
+## Installing
+
+- **Editors' Macs (no GitHub):** the one-click installer, `docs/new-machine.md`, "One-click install".
+- **Developer Macs:** `docs/new-machine.md`, "By hand": Premiere, Homebrew, `gh auth login`,
+  clone to `~/PenyToolkit/com.peny.toolkit`, run `setup.sh` (safe to repeat; `setup.sh --check`
+  lists what is missing). After a code change: `./install.sh`.
+
+What the Toolkit assumes about a Mac (read from the code; setup.sh / the installer report
+what is missing):
+
+| Needs | Why | What the user sees if it is missing (from the code) |
+|---|---|---|
+| macOS on Apple Silicon (arm64) | the installer's bundled programs are arm64 builds | installer: "This Mac is not Apple Silicon" |
+| Premiere Pro (manifest: PPRO 14.0+, CSXS 9+) with PlayerDebugMode 1 (setup.sh: CSXS 11, 12; installer: 11, 12, 13) | the panel is unsigned | panel not listed under Window > Extensions |
+| ffmpeg + ffprobe: bundle, then `/opt/homebrew/bin`, then `/usr/local/bin` (no other paths) | Proxies, Sync, Sound Pass, Master, Interviews | "ffmpeg not found (looked in ...)"; Proxies: each clip "no ffmpeg found"; Interviews: "Missing on this Mac: ffmpeg" |
+| python3 with numpy: bundle, then Homebrew python 3.14 | the measure scripts | Master: "python3 not found (...)" |
+| whisper-cli + models in `~/PenyToolkit-scratch/whisper-models` | Interviews | "Missing on this Mac: whisper-cli (brew install whisper-cpp)" |
+| Ollama (127.0.0.1:11434) with a qwen2.5 model | Interviews answers and notes | the panel starts `ollama serve` itself |
+| REDline (REDCINE-X PRO, installed by hand) | RED proxies, RED camera names | Proxies: each R3D "no REDline or ffmpeg found"; camera name left blank |
+| `rsync`, `plutil`, BSD `stat -f` (all part of macOS) | `install.sh` | developer installs only |
+| Write access to `/tmp/peny-toolkit` and the home folder | test hook, log, settings, scratch | - |
+
+## Running the tests
+
+Offline, no Premiere, never touches projects or footage (Node 22+, python3 with numpy;
+ffmpeg for the media tests; Playwright for the UI smoke, skipped if missing):
+
+```bash
+tests/run-all.sh               # Node, Python, pool limits, panel UI smoke: prints ALL TESTS PASS
+tests/run-all.sh --coverage    # also Node line coverage
+node tests/stress/stress.js    # load runs (3,200 jobs, 40,000 clips, races), about 1 min
+python3 tests/stress/stress_sync.py   # 1 h recorder wav, 20 clips
+./verify_fresh_install.sh      # fresh clone + install into a throw-away home + full suite
+./verify_fresh_install.sh --installer "/Volumes/ampdata/Peny/Claude/PenyToolkit/Peny Toolkit Installer"
+```
+
+`QA_CHECKLIST.md` lists every function and whether the tests run it; rebuild it with the
+commands at the top of `tests/qa/inventory.js`. `QA_REPORT.md` has the last full QA pass.
+
 ## Skills
 
 How each skill works, and its full test notes: `docs/skills.md`. Read the skill's

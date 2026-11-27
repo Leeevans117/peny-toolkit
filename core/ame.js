@@ -1,7 +1,7 @@
 /* Peny Toolkit: wait for a Media Encoder render queued by T.queueRender (core.jsx).
  * Media Encoder calls back into Premiere's ExtendScript when the job ends, which writes
  * /tmp/peny-toolkit/ame/<jobId>.json; this polls for that file (Premiere is never asked).
- * Resolves { ok, path, ms } or { ok: false, error }. */
+ * Resolves { ok, path, ms } or { ok: false, error }. opts: timeoutMs, onTick(ms), cancelled() -> true stops the wait. */
 var fs = require("fs");
 var path = require("path");
 var DIR = "/tmp/peny-toolkit/ame";
@@ -20,6 +20,8 @@ function wait(jobId, outPath, opts) {
         if (r.ok && !fs.existsSync(outPath)) { r.ok = false; r.error = "Media Encoder said done but " + outPath + " is not there"; }
         return resolve(r);
       }
+      // Cancel must not wait for Media Encoder: it may never pick the job up (20 Nov 2026).
+      if (opts.cancelled && opts.cancelled()) return resolve({ ok: false, cancelled: true, error: "Cancelled while waiting for Media Encoder (the job may still be in its queue).", ms: Date.now() - started });
       if (Date.now() - started > timeoutMs) return resolve({ ok: false, error: "Media Encoder did not finish in " + Math.round(timeoutMs / 60000) + " min", ms: Date.now() - started });
       if (opts.onTick) try { opts.onTick(Date.now() - started); } catch (e3) {}
       setTimeout(poll, 1000);
