@@ -7,7 +7,16 @@ DEST="$HOME/Library/Application Support/Adobe/CEP/extensions/com.peny.toolkit/"
 HOOK="${PENY_HOOK:-/tmp/peny-toolkit}"
 WAIT=60
 
-rsync -a --delete --exclude .git --exclude .gitignore --exclude __pycache__ --exclude /setup.sh --exclude /auto-update.sh --exclude /CLAUDE.md --exclude /docs --exclude /presets --exclude /installer --exclude /tools "$SRC/" "$DEST" || { echo "ERROR rsync failed"; exit 1; }
+# Skill folders that are installed but not in this checkout (a branch being tested on this Mac,
+# e.g. magic-nest or offline-scan) are kept, never deleted: a main install at 15:21 on 27 Nov 2026
+# wiped two branch-only skills mid-QA. Skills that exist here are still mirrored exactly.
+KEEP=()
+if [ -d "$DEST/skills" ]; then
+  for d in "$DEST"skills/*/; do
+    n="$(basename "$d")"; [ -d "$SRC/skills/$n" ] || KEEP+=(--filter "P /skills/$n/")
+  done
+fi
+rsync -a --delete "${KEEP[@]+"${KEEP[@]}"}" --exclude .git --exclude .gitignore --exclude __pycache__ --exclude /setup.sh --exclude /auto-update.sh --exclude /CLAUDE.md --exclude /docs --exclude /presets --exclude /installer --exclude /tools "$SRC/" "$DEST" || { echo "ERROR rsync failed"; exit 1; }
 
 # Which build this is, shown at the top of the panel (core/version.js). A release
 # (one-click installer / office-server update) brings its own VERSION.json; from a git
