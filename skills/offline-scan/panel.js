@@ -83,6 +83,7 @@ module.exports = function (api) {
       if (!r.ok) throw r;
       plan = r.details;
       api.log("Offline Check plan: " + r.summary + " " + plan.totalSamples + " still(s) to render.");
+      plan.candidates.forEach(function (c) { if (c.notCover) api.log("Offline Check: " + c.track + " " + c.name + " @" + c.start + " s, clips above that are not sure covers: " + c.notCover.join("; ")); });
       // time -> candidates to look for there
       var byTime = {}, times = [];
       plan.candidates.forEach(function (c, ci) {

@@ -66,25 +66,33 @@ PenyToolkit.skills["offline-scan"] = function (params) {
   }
   // Is this clip a solid picture that surely covers the whole frame (so nothing below shows)?
   // Strict on purpose: anything unsure is not a cover, and the panel renders a still instead.
-  function solidCover(ti) {
-    try { if (ti.disabled) return false; } catch (e) {}
-    try { if (ti.isAdjustmentLayer()) return false; } catch (e2) {}
+  function solidCover(ti) { return coverWhy(ti) === ""; }
+  // "" when the clip is a sure cover, else why not (reported in the plan, for checking).
+  function coverWhy(ti) {
+    try { if (ti.disabled) return "disabled"; } catch (e) {}
+    try { if (ti.isAdjustmentLayer()) return "adjustment layer"; } catch (e2) {}
     var pi = null; try { pi = ti.projectItem; } catch (e3) {}
-    if (!pi || isSeqItem(pi) || isOffline(pi)) return false;
+    if (!pi) return "no project item";
+    if (isSeqItem(pi)) return "nested sequence";
+    if (isOffline(pi)) return "offline";
     var mp = mediaPath(pi), ext = mp.substring(mp.lastIndexOf(".") + 1).toLowerCase();
-    if (!CAMERA_EXT[ext]) return false; // stills and graphics may be transparent
-    try { var fi = pi.getFootageInterpretation(); var au = Number(fi.alphaUsage); if (au !== 0 && au !== 3) return false; } catch (e4) { return false; }
+    if (!CAMERA_EXT[ext]) return "not camera video (" + ext + ")"; // stills and graphics may be transparent
+    try { var fi = pi.getFootageInterpretation(); var au = Number(fi.alphaUsage); if (au !== 0 && au !== 3) return "alpha " + au; } catch (e4) { return "alpha unreadable"; }
     var cs = ti.components;
     for (var j = 0; j < cs.numItems; j++) {
       var mn = String(cs[j].matchName);
-      if (mn !== "AE.ADBE Opacity" && mn !== "AE.ADBE Motion" && mn !== "AE.ADBE Lumetri") return false;
+      if (mn !== "AE.ADBE Opacity" && mn !== "AE.ADBE Motion" && mn !== "AE.ADBE Lumetri") return "effect " + mn;
     }
     var op = comp(ti, "AE.ADBE Opacity"), o = prop(op, "Opacity"), bm = prop(op, "Blend Mode");
-    if (varies(o) || num(o, 100) < 99.99) return false;
-    if (bm && num(bm, 0) !== 0) return false; // 0 = Normal (unverified for every build)
-    var b = screenBox(ti, frameSize(pi));
-    if (!b) return false;
-    return b.x <= 0.0005 && b.y <= 0.0005 && b.x + b.w >= 0.9995 && b.y + b.h >= 0.9995;
+    if (varies(o)) return "opacity keyframed";
+    if (num(o, 100) < 99.99) return "opacity " + num(o, 100);
+    if (bm && num(bm, 0) !== 0) return "blend mode " + num(bm, 0);
+    var sz = frameSize(pi);
+    if (!sz) return "frame size unknown";
+    var b = screenBox(ti, sz);
+    if (!b) return "motion keyframed or rotated";
+    if (b.x <= 0.0005 && b.y <= 0.0005 && b.x + b.w >= 0.9995 && b.y + b.h >= 0.9995) return "";
+    return "does not fill frame " + b.x + "," + b.y + " " + b.w + "x" + b.h;
   }
   // Does this sequence (or one nested in it) hold an offline video clip on a visible track?
   var nestMemo = {};
@@ -161,14 +169,15 @@ PenyToolkit.skills["offline-scan"] = function (params) {
         var dis = false; try { dis = !!rec.ti.disabled; } catch (e6) {}
         if (dis) { counts.disabled++; continue; }
         // Spans hidden by a solid cover on a visible track above (minus its transitions).
-        var covers = [], edges = [rec.a, rec.b];
+        var covers = [], edges = [rec.a, rec.b], notCover = [];
         for (var u = t + 1; u < nTracks; u++) {
           if (muted[u]) continue;
           for (var k = 0; k < clips[u].list.length; k++) {
             var up = clips[u].list[k];
             if (up.b <= rec.a || up.a >= rec.b) continue;
             edges.push(up.a, up.b);
-            if (solidCover(up.ti)) covers.push([up.a, up.b]);
+            var why = coverWhy(up.ti);
+            if (!why) covers.push([up.a, up.b]); else notCover.push("V" + (u + 1) + " " + String(up.ti.name) + ": " + why);
           }
           for (k = 0; k < clips[u].transitions.length; k++) edges.push(clips[u].transitions[k][0], clips[u].transitions[k][1]);
         }
@@ -206,6 +215,7 @@ PenyToolkit.skills["offline-scan"] = function (params) {
         sampleList.sort(function (m, n) { return m - n; });
         where.seen = []; for (s = 0; s < seen.length; s++) where.seen.push([r3(seen[s][0]), r3(seen[s][1])]);
         where.samples = sampleList;
+        if (notCover.length) where.notCover = notCover;
         where.box = nested ? { x: 0, y: 0, w: 1, h: 1 } : screenBox(rec.ti, frameSize(pi));
         where.boxNested = nested ? screenBox(rec.ti, (function () { var nsq = seqOfItem(pi); if (!nsq) return null; var ss = nsq.getSettings(); return { w: Number(ss.videoFrameWidth), h: Number(ss.videoFrameHeight) }; })()) : null;
         totalSamples += sampleList.length;
