@@ -1158,11 +1158,17 @@ function drawStates() {
 // Remembered per Mac (localStorage). Premiere docks the whole panel; these arrange inside it.
 function pref(k, v) { try { if (v === undefined) return localStorage.getItem("penytoolkit.ui." + k); localStorage.setItem("penytoolkit.ui." + k, v); } catch (e) { return null; } }
 var LAYOUTS = ["bottom", "side", "hidden"];
+// Fits any panel size (Lee, 26 Nov 2026): the side pane drops to the bottom when the panel is
+// narrower than SIDE_MIN_W, and the log never takes more than 30% of the height (40% of the
+// width on the side), so the app area always shows. Re-run on every resize.
+var SIDE_MIN_W = 620;
 function applyLayout() {
-  var work = document.getElementById("work"), lay = pref("layout") || "bottom", aux = document.getElementById("aux");
+  var work = document.getElementById("work"), want = pref("layout") || "bottom", aux = document.getElementById("aux");
+  var lay = want === "side" && window.innerWidth < SIDE_MIN_W ? "bottom" : want;
   work.className = lay === "side" ? "side" : lay === "hidden" ? "nolog" : "";
-  aux.style.height = lay === "bottom" ? (parseInt(pref("auxH"), 10) || Math.min(150, Math.round(window.innerHeight * 0.28))) + "px" : "";
-  aux.style.width = lay === "side" ? (parseInt(pref("auxW"), 10) || 300) + "px" : "";
+  var h = parseInt(pref("auxH"), 10) || 150, w = parseInt(pref("auxW"), 10) || 300;
+  aux.style.height = lay === "bottom" ? Math.max(60, Math.min(h, Math.round(window.innerHeight * 0.3))) + "px" : "";
+  aux.style.width = lay === "side" ? Math.max(180, Math.min(w, Math.round(window.innerWidth * 0.4))) + "px" : "";
   document.getElementById("btn-layout").title = "Log and History: " + lay + " (L to change)";
   // Dashboard of tiles by default (Lee, 30 Oct 2026); G switches to list rows.
   var list = pref("tiles") === "list";
@@ -1241,7 +1247,7 @@ function initLayout() {
   var split = document.getElementById("split");
   split.addEventListener("mousedown", function (e) {
     e.preventDefault();
-    var side = pref("layout") === "side", aux = document.getElementById("aux"), start = side ? e.clientX : e.clientY, size = side ? aux.offsetWidth : aux.offsetHeight;
+    var side = document.getElementById("work").classList.contains("side"), aux = document.getElementById("aux"), start = side ? e.clientX : e.clientY, size = side ? aux.offsetWidth : aux.offsetHeight;
     split.classList.add("drag");
     function move(ev) {
       var work = document.getElementById("work"), max = (side ? work.offsetWidth : work.offsetHeight) - 80;
@@ -1254,7 +1260,20 @@ function initLayout() {
     }
     document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
   });
+  if (window.PenyLayoutResize) window.removeEventListener("resize", window.PenyLayoutResize);
+  window.PenyLayoutResize = function () { cancelAnimationFrame(window.PenyLayoutRaf); window.PenyLayoutRaf = requestAnimationFrame(applyLayout); };
+  window.addEventListener("resize", window.PenyLayoutResize);
+  ensurePanelSize();
   applyLayout();
+}
+// Opens big enough (Lee, 26 Nov 2026): manifest Size/MinSize set the first size; if Premiere
+// restores a smaller saved size, ask CEP for at least MIN_PANEL. Premiere honours this for a
+// floating panel; a docked panel keeps its dock's size (the layout above then fits into it).
+var MIN_PANEL = { w: 420, h: 640 };
+function ensurePanelSize() {
+  var w = window.innerWidth, h = window.innerHeight;
+  if (w >= MIN_PANEL.w && h >= MIN_PANEL.h) return;
+  try { window.__adobe_cep__.resizeContent(Math.max(w, MIN_PANEL.w), Math.max(h, MIN_PANEL.h)); } catch (e) {}
 }
 
 // ---- Keys (when the panel has focus; never while typing in a box) ----

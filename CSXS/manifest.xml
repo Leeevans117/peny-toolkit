@@ -35,12 +35,12 @@
           <Menu>Peny Toolkit</Menu>
           <Geometry>
             <Size>
-              <Height>480</Height>
-              <Width>360</Width>
+              <Height>780</Height>
+              <Width>460</Width>
             </Size>
             <MinSize>
-              <Height>240</Height>
-              <Width>280</Width>
+              <Height>560</Height>
+              <Width>360</Width>
             </MinSize>
           </Geometry>
           <Icons/>

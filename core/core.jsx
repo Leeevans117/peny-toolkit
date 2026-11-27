@@ -272,12 +272,13 @@ var PenyToolkit = $.global.PenyToolkit;
       var fn = T.skills[skillId];
       if (!fn) return T.json(T.fail("Unknown skill: " + skillId));
       T.targetPath = params && params.projectPath ? String(params.projectPath) : null;
-      T.log("run " + skillId + " params=" + T.json(params || {}));
+      var quiet = params && params.quiet; // frequent read-only polls (Zoom's preview) stay out of the log
+      if (!quiet) T.log("run " + skillId + " params=" + T.json(params || {}));
       var r = fn(params || {});
       r.skill = skillId;
       try { var rp = T.proj(); r.project = rp ? String(rp.name) : null; } catch (eP) {}
       r.ms = new Date().getTime() - started;
-      T.log("done " + skillId + " ok=" + r.ok + " " + (r.ok ? r.summary : r.error) + " (" + r.ms + " ms)");
+      if (!quiet) T.log("done " + skillId + " ok=" + r.ok + " " + (r.ok ? r.summary : r.error) + " (" + r.ms + " ms)");
       return T.json(r);
     } catch (e) {
       var msg = String(e) + (e && e.line ? " (line " + e.line + ")" : "");
