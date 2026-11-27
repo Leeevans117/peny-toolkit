@@ -816,8 +816,13 @@ function goHome() {
 // and opacity change. Speed: Slow / Normal / Fast in the Style sheet (like a phone's animation
 // scale). Motion off (M, Compact style, macOS reduced motion): instant. A tap during an
 // animation finishes it first.
-var FLIP_MS = { open: 480, close: 420 };
-var FLIP_EASE = "cubic-bezier(0.2, 0, 0, 1)";
+// 10 Nov 2026 (Lee: "smooth the ease ins and outs a bit more", "more dynamic"): softer in
+// and out (peak speed 2.9x the average, was 4x at the very start), a little longer, the app's
+// content springs just past full size and back, and the icon gives a small bounce on landing.
+var FLIP_MS = { open: 540, close: 480 };
+var FLIP_EASE = "cubic-bezier(0.35, 0.05, 0.15, 1)";
+// Keyframes of the content's scale on opening: a 1.2% overshoot, settled by the end.
+function springIn(from) { return [{ transform: "scale(" + from + ")" }, { transform: "scale(1.012)", offset: 0.72 }, { transform: "scale(1)" }]; }
 var SPEEDS = [{ id: "slow", name: "Slow", f: 1.5 }, { id: "normal", name: "Normal", f: 1 }, { id: "fast", name: "Fast", f: 0.6 }];
 function speedId() { var v = pref("speed"); return SPEEDS.some(function (x) { return x.id === v; }) ? v : "normal"; }
 function flipMs(kind) { var f = SPEEDS.filter(function (x) { return x.id === speedId(); })[0].f; return Math.round(FLIP_MS[kind] * f); }
@@ -873,12 +878,12 @@ function makeFace(look, I, M) {
   return { el: f, glyph: g, glyphEnd: glyphEnd };
 }
 // Scales a view's children around one screen point (the icon's centre), so they move as one.
-function settle(view, I, from, to, opt) {
+function settle(view, I, from, to, opt, frames) {
   var cx = I.left + I.width / 2, cy = I.top + I.height / 2, out = [];
   [].forEach.call(view.children, function (ch) {
     var r = ch.getBoundingClientRect(); if (!r.width && !r.height) return;
     ch.style.transformOrigin = (cx - r.left) + "px " + (cy - r.top) + "px";
-    out.push(ch.animate([{ transform: "scale(" + from + ")" }, { transform: "scale(" + to + ")" }], opt));
+    out.push(ch.animate(frames || [{ transform: "scale(" + from + ")" }, { transform: "scale(" + to + ")" }], opt));
     out.push({ cancel: function () { ch.style.transformOrigin = ""; }, finished: Promise.resolve() });
   });
   return out;
@@ -904,7 +909,7 @@ function flipOpen(tileEl, change) {
     face.el.animate([{ opacity: 1, easing: "ease-out" }, { opacity: 0, offset: 0.28 }, { opacity: 0 }], lin),
     behind.animate([{ transform: "scale(1)", opacity: 1 }, { transform: "scale(0.94)", opacity: 0.45 }], geo),
     win.animate([{ opacity: 0.6 }, { opacity: 1, offset: 0.25 }, { opacity: 1 }], lin)
-  ].concat(settle(win, I, 0.86, 1, geo));
+  ].concat(settle(win, I, 0.86, 1, geo, springIn(0.86)));
   if (face.glyph) anims.push(face.glyph.animate([{ transform: "none" }, { transform: face.glyphEnd }], geo),
     face.glyph.animate([{ opacity: 1, easing: "ease-out" }, { opacity: 0, offset: 0.14 }, { opacity: 0 }], lin));
   runFlip(anims, ms, function () {
@@ -944,6 +949,8 @@ function flipClose(change, findIcon) {
   runFlip(anims, ms, function () {
     if (face.el.parentNode) face.el.parentNode.removeChild(face.el);
     if (snap.parentNode) snap.parentNode.removeChild(snap);
+    // The icon gives under the landing window and springs back.
+    try { iconEl.animate([{ transform: "scale(1)" }, { transform: "scale(0.93)", offset: 0.35 }, { transform: "scale(1.02)", offset: 0.7 }, { transform: "scale(1)" }], { duration: Math.round(ms * 0.55), easing: "ease-out" }); } catch (e) {}
   });
 }
 // Plays the animations; when they end (or flipEnd() is called) cleans up.
