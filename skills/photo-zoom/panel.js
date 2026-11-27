@@ -22,7 +22,14 @@
  * size, it plays the move at the clip's real length with a time bar; the dimmed area is the part
  * of the picture the zoom pushes out of frame. Read every 0.6 s while Zoom is open (not logged);
  * with nothing selected it shows the top clip under the playhead. A clip whose frame rate differs
- * from the sequence gets a warning: that judder is in the footage, not the zoom. */
+ * from the sequence gets a warning: that judder is in the footage, not the zoom.
+ * More controls (Lee, 27 Nov 2026): Anchor (the point the zoom pushes into and turns around:
+ * 3x3 grid, sliders, or click the preview), Start and End position (a pan goes from one to the
+ * other), Rotation start/end, Hold at start/end (seconds still before / after the move), and
+ * "All defaults". The maths is zoommath.js, shared with premiere.jsx.
+ * Stretch with the clip: Premiere scripting has no trim or drag event, so every 1.5 s (only
+ * while a clip zoomed here is on record) the panel asks premiere.jsx to re-key any zoomed clip
+ * on the active sequence whose length or In point changed. */
 var fs = require("fs");
 var os = require("os");
 var path = require("path");
@@ -32,16 +39,23 @@ var FFMPEG = [path.join(os.homedir(), "Library", "Application Support", "PenyToo
 var STILLS = { png: 1, jpg: 1, jpeg: 1, gif: 1, webp: 1, bmp: 1 }; // what the panel can show directly
 var FRAMES = path.join(os.tmpdir(), "peny-zoom-frames");
 var STORE = "peny.photo-zoom";
-var DEFAULTS = { s0: 100, s1: 115, dx: 0, dy: 0, keep: true, live: true, curve: [0.42, 0, 0.58, 1] };
+var BASES = path.join(os.homedir(), ".peny-toolkit", "photo-zoom-bases.json");
+// Move settings (the ones that go to premiere.jsx) and their defaults; live / autofit are panel-only.
+var MOVE = ["s0", "s1", "sx", "sy", "dx", "dy", "ax", "ay", "r0", "r1", "hold0", "hold1"];
+var DEFAULTS = { s0: 100, s1: 115, sx: 0, sy: 0, dx: 0, dy: 0, ax: 0, ay: 0, r0: 0, r1: 0, hold0: 0, hold1: 0, keep: true, live: true, autofit: true, curve: [0.42, 0, 0.58, 1] };
 var LOOKS = [
-  { label: "Slow push", s0: 100, s1: 108, dx: 0, dy: 0 },
-  { label: "Push", s0: 100, s1: 115, dx: 0, dy: 0 },
-  { label: "Pull", s0: 115, s1: 100, dx: 0, dy: 0 },
-  { label: "Pan →", s0: 115, s1: 115, dx: 8, dy: 0 },
-  { label: "Pan ←", s0: 115, s1: 115, dx: -8, dy: 0 },
-  { label: "Tilt ↑", s0: 115, s1: 115, dx: 0, dy: -8 },
-  { label: "Push + drift", s0: 105, s1: 118, dx: 5, dy: -2 }
+  { label: "Slow push", s0: 100, s1: 108, sx: 0, sy: 0, dx: 0, dy: 0 },
+  { label: "Push", s0: 100, s1: 115, sx: 0, sy: 0, dx: 0, dy: 0 },
+  { label: "Pull", s0: 115, s1: 100, sx: 0, sy: 0, dx: 0, dy: 0 },
+  { label: "Pan →", s0: 115, s1: 115, sx: 0, sy: 0, dx: 8, dy: 0 },
+  { label: "Pan ←", s0: 115, s1: 115, sx: 0, sy: 0, dx: -8, dy: 0 },
+  { label: "Pan across →", s0: 120, s1: 120, sx: -9, sy: 0, dx: 9, dy: 0 },
+  { label: "Pan across ←", s0: 120, s1: 120, sx: 9, sy: 0, dx: -9, dy: 0 },
+  { label: "Tilt ↑", s0: 115, s1: 115, sx: 0, sy: 0, dx: 0, dy: -8 },
+  { label: "Push + drift", s0: 105, s1: 118, sx: 0, sy: 0, dx: 5, dy: -2 }
 ];
+// Anchor grid: corners, edges and centre (% of frame from the centre).
+var ANCHORS = [[-50, -50], [0, -50], [50, -50], [-50, 0], [0, 0], [50, 0], [-50, 50], [0, 50], [50, 50]];
 var EASES = [
   { label: "Linear", c: [0, 0, 1, 1] },
   { label: "Ease in-out", c: [0.42, 0, 0.58, 1] },
@@ -50,27 +64,46 @@ var EASES = [
   { label: "Glide", c: [0.25, 0.1, 0.25, 1] },
   { label: "Doc slow", c: [0.33, 0, 0.67, 1] }
 ];
-var SLIDERS = [
-  { key: "s0", label: "Start size", unit: "%", min: 80, max: 200, step: 1 },
-  { key: "s1", label: "End size", unit: "%", min: 80, max: 200, step: 1 },
-  { key: "dx", label: "Drift across", unit: "%", min: -20, max: 20, step: 0.5 },
-  { key: "dy", label: "Drift up/down", unit: "%", min: -20, max: 20, step: 0.5 }
+var GROUPS = [
+  { cap: "Size", hint: "% of the clip's own size", sliders: [
+    { key: "s0", label: "Start size", unit: "%", min: 50, max: 300, step: 1 },
+    { key: "s1", label: "End size", unit: "%", min: 50, max: 300, step: 1 }] },
+  { cap: "Position", hint: "a pan goes from start to end · % of frame", sliders: [
+    { key: "sx", label: "Start across", unit: "%", min: -30, max: 30, step: 0.5 },
+    { key: "sy", label: "Start up/down", unit: "%", min: -30, max: 30, step: 0.5 },
+    { key: "dx", label: "End across", unit: "%", min: -30, max: 30, step: 0.5 },
+    { key: "dy", label: "End up/down", unit: "%", min: -30, max: 30, step: 0.5 }] },
+  { cap: "Anchor", hint: "where the zoom pushes into · or click the preview", anchor: true, sliders: [
+    { key: "ax", label: "Anchor across", unit: "%", min: -50, max: 50, step: 1 },
+    { key: "ay", label: "Anchor up/down", unit: "%", min: -50, max: 50, step: 1 }] },
+  { cap: "Rotation", hint: "turns around the anchor · + = clockwise", sliders: [
+    { key: "r0", label: "Start rotation", unit: "°", min: -45, max: 45, step: 0.1 },
+    { key: "r1", label: "End rotation", unit: "°", min: -45, max: 45, step: 0.1 }] },
+  { cap: "Timing", hint: "seconds held still before / after the move", sliders: [
+    { key: "hold0", label: "Hold at start", unit: "s", min: 0, max: 10, step: 0.1 },
+    { key: "hold1", label: "Hold at end", unit: "s", min: 0, max: 10, step: 0.1 }] }
 ];
 var GLIDE_MS = 320;
 
 module.exports = function (api) {
+  var Z = require(path.join(api.skillDir || __dirname, "zoommath.js"));
+  var MATH = path.join(api.skillDir || __dirname, "zoommath.js");
   var st = load();
   var root = null, ui = null, raf = 0, tween = 0;
 
   function load() {
-    try { var v = JSON.parse(localStorage.getItem(STORE)); if (v && v.curve) { if (v.live === undefined) v.live = true; return v; } } catch (e) {}
+    try {
+      var v = JSON.parse(localStorage.getItem(STORE));
+      if (v && v.curve) { Object.keys(DEFAULTS).forEach(function (k) { if (v[k] === undefined) v[k] = clone(DEFAULTS[k]); }); return v; }
+    } catch (e) {}
     return clone(DEFAULTS);
   }
-  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+  function clone(o) { return o === undefined ? o : JSON.parse(JSON.stringify(o)); }
   // Every user change ends in save(), so Live hangs off it.
   function save() { try { localStorage.setItem(STORE, JSON.stringify(st)); } catch (e) {} scheduleLive(); }
   function settings(extra) {
-    var p = { s0: st.s0, s1: st.s1, dx: st.dx, dy: st.dy, keep: st.keep !== false, curve: st.curve };
+    var p = { keep: st.keep !== false, curve: st.curve, mathPath: MATH };
+    MOVE.forEach(function (k) { p[k] = st[k]; });
     if (extra) Object.keys(extra).forEach(function (k) { if (extra[k] !== undefined) p[k] = extra[k]; });
     return p;
   }
@@ -182,6 +215,10 @@ module.exports = function (api) {
       ".pz canvas.pv { width: 100%; height: auto; aspect-ratio: 16 / 10; border-radius: 8px; display: block; }" +
       ".pz .bez { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }" +
       ".pz .bez label { display: flex; flex-direction: column; gap: 2px; font-size: 10px; color: var(--faint); }" +
+      ".pz .agrid { display: grid; grid-template-columns: repeat(3, 22px); grid-template-rows: repeat(3, 14px); gap: 4px; }" +
+      ".pz .agrid button { padding: 0; border-radius: 3px; border: 1px solid var(--line); background: transparent; cursor: pointer; }" +
+      ".pz .agrid button.on { background: var(--accent); border-color: var(--accent); }" +
+      ".pz canvas.pv { cursor: crosshair; }" +
       ".pz .keep { display: flex; align-items: center; gap: 8px; font-size: var(--fs-xs, 11px); color: var(--dim); cursor: pointer; }";
     document.head.appendChild(s);
   }
@@ -190,20 +227,36 @@ module.exports = function (api) {
     if (!root) return;
     css();
     root.innerHTML = "";
-    ui = { sliders: {}, bez: [], lookBtns: [], easeBtns: [] };
+    ui = { sliders: {}, bez: [], lookBtns: [], easeBtns: [], anchorBtns: [] };
     var w = el("div", "pz");
 
     w.appendChild(capRow("Looks", "tap to start from one"));
     var looks = el("div", "chips");
     LOOKS.forEach(function (lk) {
       var b = el("button", null, lk.label);
-      b.addEventListener("click", function () { glideTo({ s0: lk.s0, s1: lk.s1, dx: lk.dx, dy: lk.dy }); });
+      b.addEventListener("click", function () { glideTo({ s0: lk.s0, s1: lk.s1, sx: lk.sx, sy: lk.sy, dx: lk.dx, dy: lk.dy }); });
       looks.appendChild(b); ui.lookBtns.push({ b: b, lk: lk });
     });
     w.appendChild(looks);
 
-    w.appendChild(capRow("Move", "double-click a slider to reset it"));
-    SLIDERS.forEach(function (d) { w.appendChild(slider(d)); });
+    var allDef = el("div", "chips"), dfb = el("button", null, "All defaults");
+    dfb.title = "Put every move control back to its default (sizes, position, anchor, rotation, timing, curve)";
+    dfb.addEventListener("click", function () { var t = {}; MOVE.forEach(function (k) { t[k] = DEFAULTS[k]; }); t.curve = DEFAULTS.curve; glideTo(t); });
+    allDef.appendChild(dfb);
+    w.appendChild(allDef);
+    GROUPS.forEach(function (gr) {
+      w.appendChild(capRow(gr.cap, gr.hint));
+      if (gr.anchor) {
+        var grid = el("div", "agrid");
+        ANCHORS.forEach(function (a) {
+          var b = el("button"); b.title = "Anchor " + (a[1] < 0 ? "top" : a[1] > 0 ? "bottom" : "middle") + " " + (a[0] < 0 ? "left" : a[0] > 0 ? "right" : "centre");
+          b.addEventListener("click", function () { glideTo({ ax: a[0], ay: a[1] }); });
+          grid.appendChild(b); ui.anchorBtns.push({ b: b, a: a });
+        });
+        w.appendChild(grid);
+      }
+      gr.sliders.forEach(function (d) { w.appendChild(slider(d)); });
+    });
     var kp = el("label", "keep"); var kc = el("input"); kc.type = "checkbox"; kc.checked = st.keep !== false; ui.keepBox = kc;
     kc.addEventListener("change", function () { st.keep = kc.checked; save(); });
     kp.appendChild(kc); kp.appendChild(el("span", null, "Edge cover (limit drift so the frame edge never shows)"));
@@ -212,6 +265,10 @@ module.exports = function (api) {
     lc.addEventListener("change", function () { st.live = lc.checked; liveNote(st.live ? "Live · on" : "Live off: press Apply to update the clips"); save(); });
     lv.appendChild(lc); lv.appendChild(el("span", null, "Live: update the selected clips as you adjust"));
     w.appendChild(lv);
+    var af = el("label", "keep"); var ac = el("input"); ac.type = "checkbox"; ac.checked = st.autofit !== false;
+    ac.addEventListener("change", function () { st.autofit = ac.checked; try { localStorage.setItem(STORE, JSON.stringify(st)); } catch (e) {} });
+    af.appendChild(ac); af.appendChild(el("span", null, "Stretch with the clip: re-key a zoomed clip when you make it longer or shorter"));
+    w.appendChild(af);
     ui.liveNote = el("div", "cap"); ui.liveNote.style.minHeight = "1.2em";
     ui.liveNote.textContent = st.live ? "Live · on" : "Live off: press Apply to update the clips";
     w.appendChild(ui.liveNote);
@@ -249,6 +306,15 @@ module.exports = function (api) {
     root.appendChild(w);
 
     wireCurve();
+    ui.pv.title = "Click to put the anchor (the point the zoom pushes into) there";
+    ui.pv.addEventListener("click", function (ev) {
+      var r = ui.pv.getBoundingClientRect(), b = media.frameBox; if (!b || !r.width) return;
+      var u = ((ev.clientX - r.left) / r.width - b.x) / b.w, v = ((ev.clientY - r.top) / r.height - b.y) / b.h;
+      cancelAnimationFrame(tween); clearTimeout(glideTimer);
+      st.ax = Math.round(Math.max(-50, Math.min(50, (u - 0.5) * 100)));
+      st.ay = Math.round(Math.max(-50, Math.min(50, (v - 0.5) * 100)));
+      save(); refresh();
+    });
     // Canvases follow the card's width at any panel size, including when the view first opens
     // (it is hidden, so 0 wide, when mounted).
     if (window.PenyZoomRO) window.PenyZoomRO.disconnect();
@@ -292,7 +358,8 @@ module.exports = function (api) {
       if (document.activeElement !== s.n) s.n.value = +(Math.round(v / s.d.step) * s.d.step).toFixed(2);
     });
     ui.bez.forEach(function (n, i) { if (document.activeElement !== n) n.value = (+st.curve[i]).toFixed(2); });
-    ui.lookBtns.forEach(function (o) { o.b.classList.toggle("on", near(o.lk.s0, st.s0) && near(o.lk.s1, st.s1) && near(o.lk.dx, st.dx) && near(o.lk.dy, st.dy)); });
+    ui.lookBtns.forEach(function (o) { o.b.classList.toggle("on", ["s0", "s1", "sx", "sy", "dx", "dy"].every(function (k) { return near(o.lk[k], st[k]); })); });
+    ui.anchorBtns.forEach(function (o) { o.b.classList.toggle("on", near(o.a[0], st.ax, 0.5) && near(o.a[1], st.ay, 0.5)); });
     ui.easeBtns.forEach(function (o) { o.b.classList.toggle("on", o.c.every(function (v, i) { return near(v, st.curve[i], 0.005); })); });
     drawCurve();
   }
@@ -379,14 +446,7 @@ module.exports = function (api) {
   }
 
   // ---- Preview: the frame (blue outline) and the picture zooming / drifting inside it ----
-  function ease(c, u) {
-    if (u <= 0) return 0;
-    if (u >= 1) return 1;
-    var lo = 0, hi = 1, t = u;
-    for (var j = 0; j < 24; j++) { t = (lo + hi) / 2; if (bz(c[0], c[2], t) < u) lo = t; else hi = t; }
-    return bz(c[1], c[3], t);
-  }
-  function bz(a, b, t) { var m = 1 - t; return 3 * m * m * t * a + 3 * m * t * t * b + t * t * t; }
+  function ease(c, u) { return Z.ease(c, u); }
   // ---- The selected clip, for the preview ----
   var media = { clipId: null, key: "", img: null, name: "", dur: 2.6, w: 1920, h: 1080, note: "", fpsNote: "" };
   function viewOpen() { return root && root.offsetParent !== null && !document.hidden; }
@@ -394,7 +454,7 @@ module.exports = function (api) {
     if (!force && (!viewOpen() || live.busy)) return;
     if (pollInfo.busy) return;
     pollInfo.busy = true;
-    api.evalSkill({ info: true, quiet: true }).then(function (r) {
+    api.evalSkill({ info: true, quiet: true, mathPath: MATH }).then(function (r) {
       pollInfo.busy = false;
       if (!r || !r.ok) return;
       var d = r.details || {};
@@ -417,12 +477,14 @@ module.exports = function (api) {
         if (!sv && d.clip.measured) { var ms = d.clip.measured; sv = { s0: ms.s0, s1: ms.s1, dx: ms.dx, dy: ms.dy, keep: st.keep, curve: fitCurve(ms.samples) }; }
         if (sv && sv.curve) {
           clearTimeout(live.settle); live.pending = false;
-          glideTo({ s0: sv.s0, s1: sv.s1, dx: sv.dx, dy: sv.dy, curve: sv.curve }, true);
+          var tg = { curve: sv.curve };
+          MOVE.forEach(function (k) { tg[k] = typeof sv[k] === "number" ? sv[k] : DEFAULTS[k]; });
+          glideTo(tg, true);
           if (st.keep !== (sv.keep !== false)) { st.keep = sv.keep !== false; if (ui && ui.keepBox) ui.keepBox.checked = st.keep; }
           liveNote("Loaded this clip's zoom settings");
         }
       }
-      media.dur = d.clip.dur; media.name = d.clip.name + (d.count > 1 ? " +" + (d.count - 1) : "") + (d.clip.under ? " (under playhead)" : "");
+      media.dur = d.clip.dur; media.fps = d.fps || 25; media.name = d.clip.name + (d.count > 1 ? " +" + (d.count - 1) : "") + (d.clip.under ? " (under playhead)" : "");
       if (key === media.key) return;
       media.key = key; if (!media.img) media.note = "Loading frame…";
       frameFor(d.clip, function (file) {
@@ -457,6 +519,31 @@ module.exports = function (api) {
       finish();
     });
   }
+  // ---- Stretch with the clip ----
+  // Every 1.5 s, only when a clip zoomed here is on record (read straight from the file, so with
+  // nothing zoomed Premiere is never asked) and nothing else from Zoom is running.
+  var refit = { busy: false };
+  function anyRecord() {
+    try { var o = JSON.parse(fs.readFileSync(BASES, "utf-8")); return Object.keys(o).some(function (k) { return o[k] && o[k].applied && o[k].set; }); } catch (e) { return false; }
+  }
+  function pollRefit() {
+    if (st.autofit === false || refit.busy || live.busy || pollInfo.busy || !anyRecord()) return;
+    refit.busy = true;
+    api.evalSkill({ refit: true, quiet: true, mathPath: MATH }).then(function (r) {
+      refit.busy = false;
+      var d = r && r.details;
+      if (d && d.refit && d.refit.length) {
+        var names = d.refit.map(function (x) { return x.clip + " " + x.from + " s → " + x.to + " s"; }).join(", ");
+        liveNote("Stretched the zoom to the new length: " + names);
+        api.log("Zoom: stretched to the new length: " + names);
+        media.clipId = null; pollInfo(true);
+      }
+      if (d && d.failed && d.failed.length) api.log("Zoom: could not stretch " + d.failed.join("; "), "err");
+    }, function () { refit.busy = false; });
+  }
+  if (window.PenyZoomRefit) clearInterval(window.PenyZoomRefit);
+  window.PenyZoomRefit = setInterval(pollRefit, 1500);
+
   // Every 0.6 s while Zoom is open (quiet: these reads are not logged).
   if (window.PenyZoomPoll) clearInterval(window.PenyZoomPoll);
   window.PenyZoomPoll = setInterval(function () { pollInfo(false); }, 600);
@@ -485,16 +572,6 @@ module.exports = function (api) {
     }
     return best.map(function (v) { return Math.round(v * 1000) / 1000; });
   }
-  // Same as premiere.jsx: how much of the drift fits inside the zoom at every moment (0..1).
-  function driftFit() {
-    var m0 = Math.max(Math.abs(st.dx), Math.abs(st.dy)) / 100, f = 1;
-    if (!m0) return 1;
-    for (var g2 = 1; g2 <= 100; g2++) {
-      var e2 = ease(st.curve, g2 / 100), s2 = (st.s0 + (st.s1 - st.s0) * e2) / 100, r2 = Math.max(0, (s2 - 1) / 2), need = m0 * Math.abs(e2);
-      if (need > 1e-9) f = Math.min(f, r2 / need);
-    }
-    return Math.max(0, f);
-  }
   function animate() {
     cancelAnimationFrame(raf);
     var t0 = performance.now(), HOLD = 700;
@@ -504,15 +581,21 @@ module.exports = function (api) {
       if (!pv || !document.body.contains(pv)) return;
       if (pv.width) {
         var LEN = Math.max(1200, Math.min(10000, media.dur * 1000));
-        var tt = (now - t0) % (LEN + HOLD), u = Math.min(1, tt / LEN), e = ease(st.curve, u);
+        var tt = (now - t0) % (LEN + HOLD), tc = Math.min(1, tt / LEN) * media.dur;
+        var u = tc / Math.max(0.001, media.dur), pz = Z.norm(st), e = ease(pz.curve, Z.progress(pz, tc, media.dur, media.fps || 25));
         var g = pv.getContext("2d"), W = pv.width, H = pv.height, acc = color("--accent", "#0a84ff");
         var ar = media.w / media.h, fw = W * 0.62, fh = fw / ar;
         if (fh > H * 0.62) { fh = H * 0.62; fw = fh * ar; }
         var fx = (W - fw) / 2, fy = (H - fh) / 2 - H * 0.04;
-        var s = (st.s0 + (st.s1 - st.s0) * e) / 100, x = (st.dx / 100) * e, y = (st.dy / 100) * e;
-        var f2 = st.keep !== false ? driftFit() : 1; x *= f2; y *= f2;
+        // Same maths as the keyframes (zoommath.js), in the frame's own pixels, then fitted here.
+        if (!media.fitKey || media.fitKey !== JSON.stringify(pz) + media.w + "x" + media.h) { media.fitKey = JSON.stringify(pz) + media.w + "x" + media.h; media.fit = Z.fit(pz, media.w, media.h); }
+        var zs = Z.state(pz, e, media.fit.fit, media.w, media.h), sc = fw / media.w;
         g.clearRect(0, 0, W, H);
-        var pw = fw * s, ph = fh * s, px = fx + fw / 2 - pw / 2 - x * fw, py = fy + fh / 2 - ph / 2 - y * fh;
+        var s = zs.k, pw = fw * s, ph = fh * s;
+        g.save();
+        g.translate(fx + fw / 2 + zs.cx * sc, fy + fh / 2 + zs.cy * sc);
+        g.rotate(zs.rot * Math.PI / 180);
+        var px = -pw / 2, py = -ph / 2;
         if (media.img) {
           // Cover-fit the picture to the frame's shape (as Premiere's Set to Frame Size + fill).
           var iw = media.img.naturalWidth, ih = media.img.naturalHeight, sw = iw, sh = ih, sx = 0, sy = 0;
@@ -525,9 +608,16 @@ module.exports = function (api) {
           g.strokeStyle = "rgba(255,255,255,0.3)"; g.lineWidth = Math.max(1, W / 220);
           for (var i = 1; i < 3; i++) { g.beginPath(); g.moveTo(px + pw * i / 3, py); g.lineTo(px + pw * i / 3, py + ph); g.moveTo(px, py + ph * i / 3); g.lineTo(px + pw, py + ph * i / 3); g.stroke(); }
         }
+        g.restore();
         g.fillStyle = "rgba(0,0,0,0.6)";
         g.fillRect(0, 0, W, fy); g.fillRect(0, fy + fh, W, H - fy - fh); g.fillRect(0, fy, fx, fh); g.fillRect(fx + fw, fy, W - fx - fw, fh);
         g.strokeStyle = acc; g.lineWidth = Math.max(1.5, W / 160); g.strokeRect(fx, fy, fw, fh);
+        // The anchor: a small cross where the zoom pushes into (click the preview to move it).
+        var axp = fx + fw / 2 + st.ax / 100 * fw, ayp = fy + fh / 2 + st.ay / 100 * fh, ar2 = Math.max(4, W / 40);
+        g.strokeStyle = "#fff"; g.lineWidth = Math.max(1, W / 260);
+        g.beginPath(); g.moveTo(axp - ar2, ayp); g.lineTo(axp + ar2, ayp); g.moveTo(axp, ayp - ar2); g.lineTo(axp, ayp + ar2); g.stroke();
+        g.beginPath(); g.arc(axp, ayp, ar2 * 0.55, 0, Math.PI * 2); g.stroke();
+        media.frameBox = { x: fx / W, y: fy / H, w: fw / W, h: fh / H };
         // Time bar: where the move is in the clip, with the speed curve's shape faintly behind it.
         var bh = Math.max(3, H / 70), by = fy + fh + H * 0.06;
         g.fillStyle = "rgba(255,255,255,0.14)"; g.fillRect(fx, by, fw, bh);
@@ -552,7 +642,7 @@ module.exports = function (api) {
   return {
     actions: {
       apply: apply,
-      reset: function () { api.status("Zoom: resetting…"); return api.evalSkill({ reset: true }); }
+      reset: function () { api.status("Zoom: resetting…"); return api.evalSkill({ reset: true, mathPath: MATH }).then(function (r) { media.clipId = null; pollInfo(true); return r; }); }
     },
     mount: function (element) { root = element; render(); }
   };
