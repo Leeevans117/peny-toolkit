@@ -1,0 +1,19 @@
+{
+  "id": "offline-scan",
+  "name": "Offline Check",
+  "subtitle": "Find every spot where Media offline actually shows",
+  "description": "Checks the open sequence for frames that show Premiere's red Media offline slate. Offline clips you cannot see are fine and are not flagged: clips on a hidden track (eye off), disabled clips, and clips fully covered by a solid full-frame clip above. Everywhere else it renders stills and looks for the slate in them, so a slate showing through a faded layer or around a picture-in-picture is caught. Each place gets a red marker called Media offline (earlier ones from this check are replaced; your own markers are never touched) and a row in the list below; click a row to jump there. Clear markers removes only this check's markers. Media Pending is not checked. Nothing is saved.",
+  "order": 9.7,
+  "icon": "icon.svg",
+  "tint": ["#1c1c1e", "#000000"],
+  "entry": "premiere.jsx",
+  "panel": "panel.js",
+  "progress": true,
+  "inputs": [
+    { "id": "markers", "label": "Add red markers", "type": "checkbox", "default": true }
+  ],
+  "actions": [
+    { "id": "scan", "label": "Check sequence", "style": "primary" },
+    { "id": "clear", "label": "Clear markers", "style": "secondary" }
+  ]
+}
