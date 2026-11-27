@@ -4,9 +4,9 @@
  * the parent frame, every nested clip's Motion Scale/Position is multiplied up by k about the
  * centre, and the nest clip in the parent gets Scale 100/k (8K clip at 50% in a UHD sequence:
  * k = 2, the nest is 8K, the clip is at 100% inside it and the nest clip is at 50%).
- * How: the parent is cloned (keeps every effect), everything not selected is removed from the
- * clone, the rest is moved to start at 0, the clone is resized and named after the first selected
- * clip, filed in the root bin "Nests" (made if missing), then the selected clips in the parent
+ * How: Make Subsequence (createSubsequence) over the selection's time range (keeps every effect,
+ * starts at 0; the parent's In/Out are put back), the unselected clips in that range are removed
+ * from it, it is resized and named after the first selected clip, filed in the root bin "Nests" (made if missing), then the selected clips in the parent
  * are replaced by the nest at the same place. Sizes come from the source file (an R3D's own size,
  * never its proxy). Lee, 27 Nov 2026.
  * params.probe = true: only report what would happen, change nothing. */
@@ -71,20 +71,36 @@ PenyToolkit.skills["magic-nest"] = function (params) {
   };
   if (params.probe) return T.ok("Would nest " + picked.length + " clips as \"" + nestName + "\" at " + plan.nestSize + ".", plan);
 
-  // ---- Build the nest from a clone of the parent ----
+  // ---- Build the nest: a subsequence of just the selection's time range ----
+  // Lee's first real run (27 Nov, 1,241 clips) cloned the whole parent and stripped it clip by clip:
+  // 48 s, and the copy being emptied was the sequence on screen, so it looked like his edit being
+  // deleted. Now Premiere's own Make Subsequence copies only the range (effects kept, starting at 0),
+  // the parent's In/Out are put back straight after, and only the unselected clips inside the
+  // range are taken out of the new sequence. The parent is never touched until the final swap.
   var keep = {};
-  for (i = 0; i < picked.length; i++) keep[picked[i].kind + "|" + picked[i].track + "|" + picked[i].start + "|" + picked[i].end] = true;
+  for (i = 0; i < picked.length; i++) keep[picked[i].kind + "|" + picked[i].track + "|" + (picked[i].start - a) + "|" + (picked[i].end - a)] = true;
   var before = {}, list = T.sequenceList();
   for (i = 0; i < list.length; i++) before[String(list[i].sequenceID)] = true;
-  seq.clone();
+  var oldIn = String(seq.getInPointAsTime().ticks), oldOut = String(seq.getOutPointAsTime().ticks);
+  var made = null, subErr = "";
+  try {
+    seq.setInPoint(String(a)); seq.setOutPoint(String(b));
+    var gotIn = parseFloat(seq.getInPointAsTime().ticks), gotOut = parseFloat(seq.getOutPointAsTime().ticks);
+    if (Math.abs(gotIn - a) > 2 || Math.abs(gotOut - b) > 2) subErr = "Premiere did not take the In/Out for the selection (" + T.sec(gotIn) + "-" + T.sec(gotOut) + " s).";
+    else made = seq.createSubsequence(true);
+  } catch (eSub) { subErr = String(eSub); }
+  seq.setInPoint(oldIn); seq.setOutPoint(oldOut);
+  var inBack = String(seq.getInPointAsTime().ticks) === oldIn && String(seq.getOutPointAsTime().ticks) === oldOut;
   var nest = null;
   for (var tries = 0; tries < 20 && !nest; tries++) {
     list = T.sequenceList();
     for (i = 0; i < list.length; i++) if (!before[String(list[i].sequenceID)]) { nest = list[i]; break; }
     if (!nest) $.sleep(250);
   }
-  if (!nest) return T.fail("Premiere did not make the copy for the nest (checked for 5 s). Nothing changed.");
+  backToParent();
+  if (!nest) return T.fail("Premiere did not make the nest sequence. Nothing in your sequence changed." + (subErr ? " (" + subErr + ")" : ""), { inOutRestored: inBack });
   nest.name = nestName;
+  plan.inOutRestored = inBack;
 
   var removed = 0, kept = [];
   function strip(tracks, kind) {
@@ -100,19 +116,7 @@ PenyToolkit.skills["magic-nest"] = function (params) {
   strip(nest.videoTracks, "video");
   strip(nest.audioTracks, "audio");
   try { var mk = nest.markers, m = mk.getFirstMarker(); while (m) { var nx = mk.getNextMarker(m); mk.deleteMarker(m); m = nx; } } catch (eM) {}
-  if (kept.length !== picked.length) return failNest("The nest copy has " + kept.length + " of the " + picked.length + " selected clips.");
-  // Move to start at 0 (clips are moved by an offset, earliest first so nothing collides).
-  if (a > 0) {
-    var off = new Time(); off.ticks = String(-a);
-    kept.sort(function (x, y) { return parseFloat(x.start.ticks) - parseFloat(y.start.ticks); });
-    for (i = 0; i < kept.length; i++) kept[i].move(off);
-    for (i = 0; i < kept.length; i++) {
-      var want = 0, src = null;
-      for (var q = 0; q < picked.length; q++) if (sameClip(picked[q], kept[i])) src = picked[q];
-      if (src) want = src.start - a;
-      if (Math.abs(parseFloat(kept[i].start.ticks) - want) > 2) return failNest("Moving the clips to the start of the nest did not work (" + kept[i].name + ").");
-    }
-  }
+  if (kept.length !== picked.length) return failNest("The nest has " + kept.length + " of the " + picked.length + " selected clips.");
 
   // Resize: frame size and pixel aspect from the source, frame rate stays the parent's.
   var ns = nest.getSettings();
@@ -156,10 +160,7 @@ PenyToolkit.skills["magic-nest"] = function (params) {
     for (var c3 = 0; c3 < ac.numItems; c3++) if (ac[c3].projectItem && String(ac[c3].projectItem.nodeId) === String(nestItem.nodeId)) aPlaced.push("A" + (at2 + 1));
   }
 
-  // Premiere makes the copy the open sequence; put the parent back in front.
-  try { app.project.openSequence(String(seq.sequenceID)); } catch (eO) {}
-  var act = T.activeSequence();
-  plan.parentActive = !!(act && String(act.sequenceID) === String(seq.sequenceID));
+  plan.parentActive = backToParent();
   var bin = nestsBin();
   if (bin) nestItem.moveBin(bin);
   plan.removedFromNest = removed; plan.rescaled = rescaled; plan.skipped = skipped;
@@ -170,6 +171,16 @@ PenyToolkit.skills["magic-nest"] = function (params) {
     " (nest clip at " + gotScale + "%), in bin Nests." + (skipped.length ? " Check: " + skipped.join("; ") + "." : ""), plan);
 
   // ---- helpers ----
+  // Premiere can bring a new sequence to the front; put the parent back and wait until it is.
+  function backToParent() {
+    for (var r = 0; r < 12; r++) {
+      var act = T.activeSequence();
+      if (act && String(act.sequenceID) === String(seq.sequenceID)) return true;
+      try { app.project.openSequence(String(seq.sequenceID)); } catch (eO) {}
+      $.sleep(250);
+    }
+    return false;
+  }
   function failNest(msg) {
     // Only the new nest sequence exists so far; the parent is untouched. Leave it so Lee can look.
     return T.fail(msg + " The parent sequence was not changed. The half-made nest is \"" + String(nest.name) + "\".", plan);
@@ -182,7 +193,6 @@ PenyToolkit.skills["magic-nest"] = function (params) {
     }
     return -1;
   }
-  function sameClip(rec, ti) { return String(ti.name) === rec.name && Math.abs(parseFloat(ti.end.ticks) - parseFloat(ti.start.ticks) - (rec.end - rec.start)) <= 2; }
   function unselectedIn(track, s, e) {
     var tc = track.clips;
     for (var c = 0; c < tc.numItems; c++) {
