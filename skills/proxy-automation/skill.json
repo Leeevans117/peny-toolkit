@@ -1,7 +1,7 @@
 {
   "id": "proxy-automation",
   "name": "Proxies",
-  "description": "Renders 1280x720 ProRes Proxy files for a bin (ffmpeg, REDline for R3D) into a folder tree that mirrors the bins, then attaches them. Never deletes or overwrites a proxy. Clips: the bins selected in the Project panel, one named bin, or the whole project.",
+  "description": "Renders 1280x720 ProRes Proxy files for a bin (ffmpeg, REDline for R3D) into a folder tree that mirrors the bins, then attaches them. Never deletes or overwrites a proxy. Connect Full Res reconnects clips whose camera file is offline to the same file found in a chosen folder. Clips: the bins selected in the Project panel, one named bin, or the whole project.",
   "order": 3,
   "icon": "icon.svg",
   "tint": [
@@ -39,6 +39,12 @@
       "placeholder": "choose the proxy root folder"
     },
     {
+      "id": "fullres",
+      "label": "Full-res folder",
+      "type": "folder",
+      "placeholder": "Connect Full Res: the camera footage folder (e.g. How We Roll/Footage)"
+    },
+    {
       "id": "speed",
       "label": "Speed",
       "type": "segment",
@@ -64,6 +70,11 @@
     {
       "id": "attach",
       "label": "Attach proxies",
+      "style": "secondary"
+    },
+    {
+      "id": "fullres",
+      "label": "Connect Full Res",
       "style": "secondary"
     },
     {
