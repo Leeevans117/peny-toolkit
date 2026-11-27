@@ -423,6 +423,138 @@ module.exports = function (api) {
     });
   };
 
+  // Connect Full Res (Lee, 27 Nov 2026): every clip in the scope ends up on its full-res camera
+  // file with no proxy attached, framing and keyframes unchanged:
+  //  - media is a _Proxy file (imported as the clip itself): reconnected to the camera file with
+  //    the same name (any video extension), and Motion Scale rescaled so the framing stays (jsx);
+  //  - camera file offline / not at its stored path: the same path on the office server when the
+  //    stored path is a drive mirror ("/Volumes/G-SPEED.../:Volumes/:ampdata/..."), else the file
+  //    with the same name under the chosen full-res folder;
+  //  - then any attached proxy is detached (read back).
+  // Proxy files (_Proxy., .redline-part.) and Proxies folders are never taken as full res. When
+  // several files share the name, the one whose parent folders match best wins; a tie is left
+  // alone and reported, never guessed. A match must be as long as the clip (sameLength).
+  var NOT_FOOTAGE = /\.(xml|wav|mp3|aac|aif|aiff|m4a|rtn|rmd|rsx|cpf|thm|lrv|xmp|txt|csv|bim|smi|ppn|pdf|jpg|jpeg|png|bin|dat|db|log)$/i;
+  function indexFullRes(root) {
+    var byName = {}, byStem = {}, stack = [root], count = 0;
+    while (stack.length) {
+      var dir = stack.pop(), entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { continue; }
+      entries.forEach(function (d) {
+        if (d.name.charAt(0) === ".") return;
+        var full = path.join(dir, d.name), low = d.name.toLowerCase();
+        if (d.isDirectory()) { if (!/^proxies\b/.test(low.trim()) && !/proxies \(|^old .*proxies/.test(low)) stack.push(full); return; }
+        if (low.indexOf(PROXY_INFIX.toLowerCase() + ".") !== -1 || low.indexOf(".redline-part.") !== -1) return;
+        (byName[low] = byName[low] || []).push(full);
+        if (!NOT_FOOTAGE.test(low)) { var st = stripExt(low); (byStem[st] = byStem[st] || []).push(full); }
+        count++;
+      });
+    }
+    return { byName: byName, byStem: byStem, count: count };
+  }
+  // Parent folder names, ignoring RED clip folders (.RDC/.RDM) so a proxy folder
+  // "RAPTOR_101126" matches the camera's "RAPTOR_101126/A007_A004_1110I5.RDC".
+  function parents(p) {
+    return path.dirname(p).toLowerCase().split("/").filter(function (x) { return x && !/\.(rdc|rdm)$/.test(x); });
+  }
+  function tailMatch(a, b) {
+    var x = parents(a), y = parents(b), n = 0;
+    while (n < x.length && n < y.length && x[x.length - 1 - n].trim() === y[y.length - 1 - n].trim()) n++;
+    return n;
+  }
+  function pick(from, cands, mediaPath, checkLen) {
+    cands = (cands || []).filter(function (f) { return !checkLen || sameLength(f, checkLen); });
+    if (!cands.length) return { none: true };
+    if (cands.length === 1) return { file: cands[0] };
+    var scored = cands.map(function (f) { return { file: f, score: tailMatch(from, f) }; })
+      .sort(function (p, q) { return q.score - p.score; });
+    if (scored[0].score > scored[1].score) return { file: scored[0].file };
+    return { tie: scored.filter(function (s) { return s.score === scored[0].score; }).map(function (s) { return s.file; }) };
+  }
+  // A drive copy of the office server keeps its path as a folder named "/Volumes/"
+  // ("/Volumes/G-SPEED Shuttle Thunderbolt 3/:Volumes/:ampdata/..."): the same file is at /Volumes/ampdata/... .
+  function serverPath(p) {
+    var m = /^.*\/:Volumes\/:(.*)$/.exec(String(p));
+    return m ? "/Volumes/" + m[1] : null;
+  }
+  var PROXY_FILE = new RegExp(PROXY_INFIX + "\\.[^./]+$", "i");
+
+  actions.fullres = function (params) {
+    var root = params.fullres ? String(params.fullres).replace(/(.)\/+$/, "$1") : "";
+    if (root) {
+      try { if (!fs.statSync(root).isDirectory()) return Promise.resolve({ ok: false, error: "Not a folder: " + root }); }
+      catch (e) { return Promise.resolve({ ok: false, error: "Full-res folder does not exist: " + root }); }
+    }
+    return listScope(params).then(function (res) {
+      if (!res.ok) return res;
+      var fr = null;
+      function index() { if (!fr) { api.status("Looking for camera files in " + root + "…"); fr = indexFullRes(root); } return fr; }
+      var pairs = [], detachIds = [], fine = [], notFound = [], ambiguous = [], noFolder = [];
+      res.details.items.forEach(function (it) {
+        var rec = { name: it.name, bin: it.binPath, was: it.mediaPath };
+        var mp = it.mediaPath, base = path.basename(mp);
+        if (PROXY_FILE.test(base)) {
+          if (!root) { noFolder.push(rec); return; }
+          var stem = base.replace(PROXY_FILE, "").toLowerCase();
+          var pk = pick(mp, index().byStem[stem], mp, fs.existsSync(mp) ? mp : null);
+          if (pk.none) { notFound.push(rec); return; }
+          if (pk.tie) { rec.candidates = pk.tie; ambiguous.push(rec); return; }
+          pairs.push({ nodeId: it.nodeId, path: pk.file, rescale: true, name: it.name, bin: it.binPath, was: mp, how: "proxy file -> camera file" });
+          return;
+        }
+        if (!it.offline && fs.existsSync(mp)) {
+          if (it.hasProxy) detachIds.push(it.nodeId); else fine.push(rec);
+          return;
+        }
+        var sp = serverPath(mp);
+        if (sp && fs.existsSync(sp)) { pairs.push({ nodeId: it.nodeId, path: sp, rescale: false, name: it.name, bin: it.binPath, was: mp, how: "same path on the office server" }); return; }
+        if (!root) { noFolder.push(rec); return; }
+        var pk2 = pick(mp, index().byName[base.toLowerCase()], mp, null);
+        if (pk2.none) { notFound.push(rec); return; }
+        if (pk2.tie) { rec.candidates = pk2.tie; ambiguous.push(rec); return; }
+        pairs.push({ nodeId: it.nodeId, path: pk2.file, rescale: false, name: it.name, bin: it.binPath, was: mp, how: "same name in the full-res folder" });
+      });
+      api.log("Connect Full Res: " + pairs.length + " to reconnect (" + pairs.filter(function (p) { return p.rescale; }).length +
+        " from proxy files), " + detachIds.length + " online with a proxy to detach, " + fine.length + " already full res, " +
+        notFound.length + " not found, " + ambiguous.length + " ambiguous, " + noFolder.length + " need the full-res folder." +
+        (fr ? " (" + fr.count + " files indexed under " + root + ")" : ""));
+      ambiguous.forEach(function (r) { api.log("  ambiguous, left alone: " + r.bin + "/" + r.name + " - " + r.candidates.join(" | "), "warn"); });
+      notFound.forEach(function (r) { api.log("  not found: " + r.bin + "/" + r.name + " (" + r.was + ")", "warn"); });
+      if (params.dryRun) return { ok: true, summary: "Dry run: " + pairs.length + " would reconnect, " + detachIds.length + " would detach.", details: {
+        reconnect: pairs, detach: detachIds.length, alreadyFullRes: fine.length, notFound: notFound, ambiguous: ambiguous, needFolder: noFolder } };
+      var d = { relinked: [], failed: [] }, okAll = true;
+      function piece(i) {
+        if (i >= pairs.length) return Promise.resolve({ ok: okAll });
+        return api.evalSkill({ action: "relink", pairs: pairs.slice(i, i + ATTACH_PIECE).map(function (p) { return { nodeId: p.nodeId, path: p.path, rescale: p.rescale }; }) })
+          .then(function (r) {
+            var rd = r.details || {};
+            if (!rd.relinked && !rd.failed) return { ok: false, error: r.error };
+            d.relinked = d.relinked.concat(rd.relinked || []); d.failed = d.failed.concat(rd.failed || []);
+            if (!r.ok) okAll = false;
+            api.status("Connecting full res: " + Math.min(i + ATTACH_PIECE, pairs.length) + " of " + pairs.length + "…");
+            return new Promise(function (ok) { setTimeout(ok, 300); }).then(function () { return piece(i + ATTACH_PIECE); });
+          });
+      }
+      return piece(0).then(function (r) {
+        if (r.error) return r;
+        if (!detachIds.length) return { ok: r.ok, detach: null };
+        return api.evalSkill({ action: "detach", nodeIds: detachIds }).then(function (dr) { return { ok: r.ok && dr.ok, detach: dr }; });
+      }).then(function (r) {
+        var dd = (r.detach && r.detach.details) || {};
+        var checks = []; d.relinked.forEach(function (x) { (x.notes || []).forEach(function (n) { checks.push(x.name + ": " + n); }); });
+        var summary = d.relinked.length + " connected to full res and verified" +
+          (d.relinked.some(function (x) { return x.uses; }) ? " (framing kept)" : "") + ", " +
+          (dd.detached || []).length + " more had their proxy detached, " + fine.length + " already full res, " +
+          (d.failed.length + (dd.failed || []).length) + " failed, " + notFound.length + " not found, " + ambiguous.length +
+          " left alone (same name in several folders)" + (noFolder.length ? ", " + noFolder.length + " need the full-res folder chosen" : "") + "." +
+          (checks.length ? " Check: " + checks.join("; ") : "") + (r.error ? " Stopped: " + r.error : "");
+        return { ok: !!r.ok && !d.failed.length, summary: summary, error: summary, details: {
+          relinked: d.relinked, failed: d.failed, detached: dd.detached || [], detachFailed: dd.failed || [],
+          notFound: notFound, ambiguous: ambiguous, needFolder: noFolder, alreadyFullRes: fine.length } };
+      });
+    });
+  };
+
   actions.detach = function (params) {
     return listScope(params).then(function (res) {
       if (!res.ok) return res;

@@ -228,11 +228,158 @@
     return failed.length ? { ok: false, error: s, summary: s, details: d } : T.ok(s, d);
   }
 
+  // Connect Full Res (Lee, 27 Nov 2026): params.pairs [{nodeId, path, rescale}] = the clip and
+  // its full-res camera file. changeMediaPath, then read back: the item must point at that file
+  // and be online. Then any proxy is detached (read back). The project item's name is kept.
+  // rescale (the clip's media was a _Proxy file): changeMediaPath keeps every Motion value, so a
+  // 1280x720 proxy at 300% would show the 3840x2160 file 3x too big (seen in QA 27 Nov). Scale
+  // (and Scale Width) on every use of the item in every sequence, keyframes included, are
+  // multiplied by oldWidth/newWidth (oldHeight/newHeight for height when the shapes differ), so
+  // the picture fills exactly the same box. Position and Anchor Point are 0..1 values relative
+  // to the frame and stay as they are (read back unchanged in QA).
+  function frameSize(item) {
+    var md = "";
+    try { md = String(item.getProjectMetadata()); } catch (e) { return null; }
+    var mm = /Intrinsic\.VideoInfo>([^<]*)</.exec(md);
+    var m2 = mm ? /(\d+)\s*x\s*(\d+)/.exec(mm[1]) : null;
+    return m2 ? { w: parseInt(m2[1], 10), h: parseInt(m2[2], 10) } : null;
+  }
+  function motionOf(ti) {
+    try { var cs = ti.components; for (var j = 0; j < cs.numItems; j++) if (String(cs[j].matchName) === "AE.ADBE Motion") return cs[j]; } catch (e) {}
+    return null;
+  }
+  function prop(cm, name) {
+    for (var p = 0; p < cm.properties.numItems; p++) if (String(cm.properties[p].displayName) === name) return cm.properties[p];
+    return null;
+  }
+  // Every video track item using this project item, in every sequence of the project.
+  function usesOf(item) {
+    var out = [], seqs = T.proj().sequences, id = String(item.nodeId);
+    for (var s = 0; s < seqs.numSequences; s++) {
+      var vt = seqs[s].videoTracks;
+      for (var t = 0; t < vt.numTracks; t++) {
+        var cl = vt[t].clips;
+        for (var c = 0; c < cl.numItems; c++) {
+          var pi = null; try { pi = cl[c].projectItem; } catch (e) {}
+          if (pi && String(pi.nodeId) === id) out.push({ ti: cl[c], where: String(seqs[s].name) + " V" + (t + 1) + " @" + Math.round(cl[c].start.seconds * 100) / 100 + "s" });
+        }
+      }
+    }
+    return out;
+  }
+  // Snapshot of a property: static value or every keyframe (time + value).
+  function snap(pr) {
+    if (!pr) return null;
+    if (pr.isTimeVarying()) {
+      var ks = pr.getKeys(), keys = [];
+      for (var x = 0; ks && x < ks.length; x++) keys.push({ t: ks[x], v: Number(pr.getValueAtKey(ks[x])) });
+      return { keys: keys };
+    }
+    return { v: Number(pr.getValue()) };
+  }
+  function writeScaled(pr, sn, k) {
+    if (sn.keys) { for (var x = 0; x < sn.keys.length; x++) pr.setValueAtKey(sn.keys[x].t, sn.keys[x].v * k, x === sn.keys.length - 1); }
+    else pr.setValue(sn.v * k, true);
+  }
+  function checkScaled(pr, sn, k) {
+    var bad = [];
+    if (sn.keys) {
+      var ks = pr.getKeys();
+      if (!ks || ks.length !== sn.keys.length) return ["keyframe count " + (ks ? ks.length : 0) + " (was " + sn.keys.length + ")"];
+      for (var x = 0; x < sn.keys.length; x++) { var got = Number(pr.getValueAtKey(ks[x])); if (Math.abs(got - sn.keys[x].v * k) > 0.01) bad.push("key " + (x + 1) + " = " + got + ", want " + sn.keys[x].v * k); }
+    } else { var g = Number(pr.getValue()); if (Math.abs(g - sn.v * k) > 0.01) bad.push(g + ", want " + sn.v * k); }
+    return bad;
+  }
+
+  function relink(params) {
+    var pairs = params.pairs || [], ok = [], failed = [];
+    for (var i = 0; i < pairs.length; i++) {
+      var p = pairs[i], it = itemById(p.nodeId);
+      if (!it) { failed.push({ nodeId: p.nodeId, reason: "item not found in the project" }); continue; }
+      var nm = String(it.name);
+      if (!new File(p.path).exists) { failed.push({ nodeId: p.nodeId, name: nm, reason: "file not found: " + p.path }); continue; }
+      var can = true;
+      try { if (typeof it.canChangeMediaPath === "function") can = !!it.canChangeMediaPath(); } catch (e0) {}
+      if (!can) { failed.push({ nodeId: p.nodeId, name: nm, reason: "Premiere says this item's media cannot be changed" }); continue; }
+      var was = "";
+      try { was = String(it.getMediaPath() || ""); } catch (e1) {}
+      // Before: the frame size and every use's Scale values (only needed when rescaling).
+      var size0 = p.rescale ? frameSize(it) : null, uses = [];
+      if (p.rescale) {
+        if (!size0) { failed.push({ nodeId: p.nodeId, name: nm, reason: "could not read the proxy's frame size; nothing changed" }); continue; }
+        var us = usesOf(it);
+        for (var u = 0; u < us.length; u++) {
+          var mo = motionOf(us[u].ti);
+          if (!mo) { uses.push({ where: us[u].where, ti: us[u].ti, none: true }); continue; }
+          var uni = prop(mo, "Uniform Scale");
+          uses.push({ where: us[u].where, ti: us[u].ti, sc: snap(prop(mo, "Scale")), sw: snap(prop(mo, "Scale Width")),
+            uniform: uni ? !!uni.getValue() : true });
+        }
+      }
+      var same = false, now = "", off = true, ret = null;
+      if (was && new File(was).fsName === new File(p.path).fsName && !it.isOffline()) same = true; // already there
+      else {
+        try { ret = it.changeMediaPath(p.path, true); } catch (e2) { ret = "error: " + e2; }
+      }
+      try { now = String(it.getMediaPath() || ""); } catch (e3) {}
+      try { off = !!it.isOffline(); } catch (e4) {}
+      same = !!(now && new File(now).fsName === new File(p.path).fsName);
+      var rec = { nodeId: p.nodeId, name: nm, was: was, path: p.path, returned: String(ret) };
+      if (!same || off) { rec.reason = "after changeMediaPath: mediaPath=" + now + " offline=" + off; failed.push(rec); continue; }
+      // Framing.
+      var notes = [];
+      if (p.rescale) {
+        var size1 = frameSize(it);
+        if (!size1) notes.push("FRAMING NOT CHECKED: could not read the full-res frame size");
+        else if (size1.w !== size0.w || size1.h !== size0.h) {
+          var kw = size0.w / size1.w, kh = size0.h / size1.h, sameShape = Math.abs(kw - kh) <= kw * 0.005;
+          rec.frame = size0.w + "x" + size0.h + " -> " + size1.w + "x" + size1.h;
+          for (var v = 0; v < uses.length; v++) {
+            var U = uses[v];
+            if (U.none || !U.sc) { notes.push("FRAMING NOT SET at " + U.where + ": no Motion"); continue; }
+            var mo2 = motionOf(U.ti), psc = prop(mo2, "Scale"), psw = prop(mo2, "Scale Width"), pun = prop(mo2, "Uniform Scale");
+            var bad = [];
+            if (sameShape || !psw || !pun) {
+              // Uniform: Scale x kw. Non-uniform: Scale is the height, Scale Width the width.
+              writeScaled(psc, U.sc, U.uniform ? kw : kh);
+              bad = bad.concat(checkScaled(psc, U.sc, U.uniform ? kw : kh));
+              if (!U.uniform && psw && U.sw) { writeScaled(psw, U.sw, kw); bad = bad.concat(checkScaled(psw, U.sw, kw)); }
+              if (!sameShape) notes.push("CHECK FRAMING at " + U.where + ": proxy " + size0.w + "x" + size0.h + " and full res " + size1.w + "x" + size1.h + " differ in shape");
+            } else {
+              // Different shape (e.g. 17:9 camera file, 16:9 proxy): width and height scaled apart
+              // so the picture fills the same box the proxy filled.
+              var scW = U.uniform ? U.sc : U.sw;
+              if (U.uniform) pun.setValue(false, true);
+              writeScaled(psw, scW, kw); bad = bad.concat(checkScaled(psw, scW, kw));
+              writeScaled(psc, U.sc, kh); bad = bad.concat(checkScaled(psc, U.sc, kh));
+              notes.push("shape differs (" + size0.w + "x" + size0.h + " proxy, " + size1.w + "x" + size1.h + " full res): Uniform Scale off at " + U.where + ", same box as the proxy");
+            }
+            if (bad.length) notes.push("FRAMING FAILED at " + U.where + ": Scale " + bad.join("; "));
+          }
+          rec.uses = uses.length;
+        } else rec.frame = "same size " + size1.w + "x" + size1.h;
+      }
+      // Detach the proxy (Lee: full res, no proxies).
+      if (hasProxy(it)) {
+        var pp = proxyPath(it);
+        try { it.detachProxy(); } catch (e5) {}
+        if (hasProxy(it)) notes.push("PROXY STILL ATTACHED: " + proxyPath(it)); else rec.detached = pp;
+      }
+      if (notes.length) rec.notes = notes;
+      var hard = false;
+      for (var n = 0; n < notes.length; n++) if (/FAILED|NOT SET|NOT CHECKED|STILL ATTACHED/.test(notes[n])) hard = true;
+      if (hard) { rec.reason = notes.join(" | "); failed.push(rec); } else ok.push(rec);
+    }
+    var s = ok.length + " connected to full res and verified, " + failed.length + " failed.";
+    return failed.length ? { ok: false, error: s, summary: s, details: { relinked: ok, failed: failed } } : T.ok(s, { relinked: ok, failed: failed });
+  }
+
   T.skills["proxy-automation"] = function (params) {
     if (!T.proj()) return T.fail(T.targetPath ? "Project not open: " + T.targetPath : "No project open.");
     if (params.action === "list") return list(params);
     if (params.action === "attach") return attach(params);
     if (params.action === "detach") return detach(params);
+    if (params.action === "relink") return relink(params);
     return T.fail("Unknown proxy action: " + params.action);
   };
 }(PenyToolkit));
