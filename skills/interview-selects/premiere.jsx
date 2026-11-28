@@ -147,12 +147,15 @@
         if (!p) { notes.push("\"" + it.name + "\" at " + T.fmt(s + offset) + " has no media file; left out."); continue; }
         // ffmpeg can't read .R3D sound: RED clips are read from their attached proxy (as
         // interview-sync does); without one the clip is left out (Arly Kemp, 29 Oct 2026).
-        if (/\.r3d$/i.test(p)) {
+        // Same when the original is offline (Orbea HQ on the Mac mini, 17 Nov 2026: Media
+        // Encoder rendered pure silence and whisper heard "Thank you." for 17 minutes).
+        var offline = !new File(p).exists;
+        if (/\.r3d$/i.test(p) || offline) {
           var px = "";
           try { if (it.projectItem.hasProxy && it.projectItem.hasProxy()) px = String(it.projectItem.getProxyPath() || ""); } catch (eX) {}
           if (px) p = px;
         }
-        out.push({ path: p, inPoint: inPt, start: cs + offset, end: ce + offset, name: String(it.name), track: tracks[k] + 1, depth: depth });
+        out.push({ path: p, inPoint: inPt, start: cs + offset, end: ce + offset, name: String(it.name), track: tracks[k] + 1, depth: depth, offline: offline });
       }
     }
   }
@@ -543,7 +546,7 @@
       pieces = allPieces(seq);
       for (j = 0; j < pieces.length; j++) {
         var pc = pieces[j];
-        if (Math.abs(pc.a - sp.a) < half && Math.abs(pc.b - sp.b) < half && !isAdjClip(pc.item)) {
+        if (within(pc, sp, half) && !isAdjClip(pc.item)) {
           var og = origAt(pc.track, (pc.a + pc.b) / 2);
           if (og && og.name === pc.name) mine.push(pc); // still on its original track = not raised yet
         }
@@ -555,6 +558,7 @@
       for (j = 0; j < mine.length && !problem; j++) {
         var tk = mine[j].kind, ti = mine[j].index + 1, tracks = tk === "V" ? seq.videoTracks : seq.audioTracks;
         if (ti >= tracks.numTracks && tk === "V") { var vErr = ensureVideoTrack(seq, ti); if (vErr) { problem = vErr; break; } tracks = seq.videoTracks; }
+        if (ti >= tracks.numTracks && tk === "A") { var aErr = ensureAudioTrack(seq, ti); if (aErr) { problem = aErr; break; } tracks = seq.audioTracks; }
         if (ti >= tracks.numTracks) { problem = "there is no track above " + mine[j].track + " (add one and run again)"; break; }
         if (isLocked(seq, tk, ti)) { problem = tk + (ti + 1) + " is locked"; break; }
         var cl = tracks[ti].clips;
@@ -589,7 +593,7 @@
     }
     for (i = 0; i < pieces.length; i++) {
       var pc2 = pieces[i], inSpan = null;
-      for (j = 0; j < spans.length; j++) if (Math.abs(pc2.a - spans[j].a) < half && Math.abs(pc2.b - spans[j].b) < half) inSpan = spans[j];
+      for (j = 0; j < spans.length; j++) if (within(pc2, spans[j], half)) inSpan = spans[j];
       var src = origAt(pc2.track, (pc2.a + pc2.b) / 2);
       if (src && src.name !== pc2.name) src = null;
       if (!src && inSpan && pc2.index > 0) {
@@ -601,7 +605,7 @@
     }
     for (i = 0; i < spans.length; i++) {
       var inside = [];
-      for (j = 0; j < pieces.length; j++) if (Math.abs(pieces[j].a - spans[i].a) < half && Math.abs(pieces[j].b - spans[i].b) < half && !isAdjClip(pieces[j].item) && pieces[j].linkedBefore) inside.push(pieces[j]);
+      for (j = 0; j < pieces.length; j++) if (within(pieces[j], spans[i], half) && !isAdjClip(pieces[j].item) && pieces[j].linkedBefore) inside.push(pieces[j]);
       for (j = 0; j < inside.length; j++) {
         var n2 = T.linkedNodeIds(inside[j].item).length;
         if (inside.length > 1 && n2 < inside.length) linkBad.push(T.fmt(spans[i].a) + " " + inside[j].track + " linked to " + n2 + " of " + inside.length);
@@ -845,7 +849,17 @@
   // ExtendScript cannot make one). First item that says it is an adjustment layer, else by name.
   // Prefers an adjustment layer item named exactly "Adjustment Layer" (Lee's own renamed
   // per-question layers are left alone), else the first adjustment layer item.
-  function findAdjustmentItem() {
+  // ExtendScript can't make one (qe.project.newAdjustmentLayer and QE addAdjustmentLayer are
+  // gone in 26.5.2), so with make set a missing one is imported from the one-item project
+  // shipped next to this file (bin "Adjustment Layer"; the project is not saved).
+  var ADJ_PROJECT = (function () { try { return File($.fileName).parent.fsName + "/Adjustment Layer.prproj"; } catch (e) { return ""; } })();
+  function findAdjustmentItem(make) {
+    var found = findAdjustmentIn();
+    if (found || !make || !ADJ_PROJECT || !new File(ADJ_PROJECT).exists) return found;
+    try { app.project.importFiles([ADJ_PROJECT], true, app.project.rootItem, false); } catch (e) {}
+    return findAdjustmentIn();
+  }
+  function findAdjustmentIn() {
     var plain = null, any = null, byName = null;
     function walk(bin) {
       for (var i = 0; i < bin.children.numItems; i++) {
@@ -861,6 +875,11 @@
     walk(app.project.rootItem);
     return plain || byName || any;
   }
+
+  // A piece belongs to an answer when it lies inside the answer's span, not only when it
+  // fills it: a camera that stops early (Orbea HQ, 17 Nov 2026: V2 ended 0.6 s before V1 in
+  // the last answer) left a short piece that blocked the raise of every track under it.
+  function within(p, sp, half) { return p.a > sp.a - half && p.b < sp.b + half && p.b - p.a > half; }
 
   function isAdjClip(c) { try { return !!c.isAdjustmentLayer(); } catch (e) { return false; } }
   function trackHasLayers(tr) {
@@ -894,6 +913,25 @@
     for (i = 0; i < before.length; i++) {
       var now = vt[i].clips.numItems + "|" + (vt[i].clips.numItems ? String(vt[i].clips[0].nodeId) : "");
       if (now !== before[i]) return "adding tracks moved the existing video tracks (V" + (i + 1) + " changed); stopped";
+    }
+    return null;
+  }
+
+  // Same for audio tracks (Orbea HQ, 17 Nov 2026: the camera sound was on the top track A6).
+  // shortcut: audio type 1 = the old "Stereo", now "Standard" (takes mono and stereo clips);
+  // not checked against Premiere's own list: if raised audio is refused, check this first.
+  function ensureAudioTrack(seq, idx) {
+    var at = seq.audioTracks, need = idx + 1 - at.numTracks;
+    if (need <= 0) return null;
+    var before = [], i;
+    for (i = 0; i < at.numTracks; i++) before.push(at[i].clips.numItems + "|" + (at[i].clips.numItems ? String(at[i].clips[0].nodeId) : ""));
+    app.enableQE();
+    qe.project.getActiveSequence().addTracks(0, seq.videoTracks.numTracks, need, 1, at.numTracks, 0, 0, 0);
+    at = seq.audioTracks;
+    if (at.numTracks < idx + 1) return "could not add " + need + " audio track(s) (now " + at.numTracks + ")";
+    for (i = 0; i < before.length; i++) {
+      var now = at[i].clips.numItems + "|" + (at[i].clips.numItems ? String(at[i].clips[0].nodeId) : "");
+      if (now !== before[i]) return "adding tracks moved the existing audio tracks (A" + (i + 1) + " changed); stopped";
     }
     return null;
   }
@@ -1040,7 +1078,7 @@
   // A row of adjustment layers, one per span, named after it, on video track index target
   // (layers already there with the same start are reused). base: see placeLayer.
   function addLayers(seq, spans, frame, target, base) {
-    var item = findAdjustmentItem(), placed = 0, problems = [], names = [];
+    var item = findAdjustmentItem(true), placed = 0, problems = [], names = [];
     if (!item) return { error: "no Adjustment Layer in the project (make one: File > New > Adjustment Layer, then run again)" };
     if (target < 0 || target >= seq.videoTracks.numTracks) return { error: "no empty unlocked video track for the layers (add one and run again)" };
     for (var i = 0; i < spans.length; i++) {
@@ -1115,7 +1153,7 @@
     // Topics
     var topicRes = { mode: TOPICS, put: 0 };
     if (TOPICS === "layer") {
-      var item = findAdjustmentItem();
+      var item = findAdjustmentItem(true);
       if (!item) return T.fail("No Adjustment Layer in the project (make one: File > New > Adjustment Layer, then run again).");
       var qt = questionLayerTrack(seq), base = null;
       if (qt < 0) {
