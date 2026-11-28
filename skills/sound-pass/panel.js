@@ -152,9 +152,13 @@ module.exports = function (api) {
       return measure(python, { mode: "stats", files: files, maskFrom: maskFrom, gate: 20, clips: clipList() }).then(function (m) { return m.files; });
     }
 
-    return jsx({ action: "copy" }).then(function (c) {
+    // Selected clips mode: the selection is read before the copy is made, then matched on the copy.
+    var selected = null;
+    return (params.selectedOnly ? jsx({ action: "selection" }).then(function (s) { selected = s.details.keys; }) : Promise.resolve()).then(function () {
+      return jsx({ action: "copy" });
+    }).then(function (c) {
       copyInfo = c.details;
-      return jsx({ action: "scan", tracks: params.tracks || "" });
+      return jsx({ action: "scan", tracks: params.tracks || "", selected: selected });
     }).then(function (s) {
       scan = s.details;
       if (!scan.isCopy) throw { stop: "The active sequence is not a TOOLKIT COPY after the copy step." };
@@ -261,7 +265,7 @@ module.exports = function (api) {
       if (!keepBed || !bedList.length) return null;
       step("bed");
       api.status("Sound Pass: moving " + bedList.length + " music/camera clip(s) with the voice…");
-      return measure(python, { mode: "bed", before: npz.before, file: npz.final, mask: npz.dry, cap: LIFT_MAX + CUT_MAX,
+      return measure(python, { mode: "bed", outside: selected ? 0 : null, before: npz.before, file: npz.final, mask: npz.dry, cap: LIFT_MAX + CUT_MAX,
         clips: clips.map(function (c) { return { id: c.nodeId, start: c.start, end: c.end, group: c.group }; }),
         // an effect found before any Sound Pass marker is Lee's own: ours goes after it
         bed: bedList.map(function (b) { return { id: b.nodeId, start: b.start, end: b.end, prev: scan.hasMarkers ? b.keys : [] }; }) }).then(function (bd) {
@@ -284,7 +288,7 @@ module.exports = function (api) {
         report.check = { total: ck.total, capped: ck.capped, kinds: ck.kinds, middle: ck.middle };
         report.balance = ck.balance;
         report.spots = ck.spots;
-        return jsx({ action: "markers", spots: ck.spots.map(function (s) { return { t: s.t, end: s.end, text: s.text }; }) });
+        return jsx({ action: "markers", ranges: selected ? clips.map(function (c) { return [c.start, c.end]; }) : null, spots: ck.spots.map(function (s) { return { t: s.t, end: s.end, text: s.text }; }) });
       }).then(function (mk) { report.markers = mk.details; return m; });
     }).then(function (m) {
       step("report");
@@ -323,7 +327,7 @@ module.exports = function (api) {
       }).join("\n") + "\n");
       var a = m.final.all || {}, ab = m.before.all || {};
       var flagged = clips.filter(function (c) { return c.note; }).length;
-      var summary = "Evened out " + clips.length + " voice clip(s) on \"" + scan.sequence + "\"" + (copyInfo.made ? " (new safe copy; the original is untouched)" : "") +
+      var summary = "Evened out " + clips.length + (selected ? " selected" : "") + " voice clip(s) on \"" + scan.sequence + "\"" + (copyInfo.made ? " (new safe copy; the original is untouched)" : "") +
         ". Speech loudness now " + a.lu10 + " to " + a.lu90 + " LUFS (middle " + a.lu50 + ")" +
         (report.spread ? ", clip to clip " + report.spread.min + " to " + report.spread.max : "") +
         "; peaks: middle " + a.pk50 + " dB, top " + a.max + " dB" +
@@ -346,5 +350,5 @@ module.exports = function (api) {
     }).then(function (r) { if (task) task.done(!!r.ok); busy = null; return r; });
   }
 
-  return { actions: { run: run }, busy: function () { return busy; } };
+  return { actions: { run: run, runSelected: function (p) { p = p || {}; p.selectedOnly = true; return run(p); } }, busy: function () { return busy; } };
 };
